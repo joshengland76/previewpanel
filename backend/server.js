@@ -555,6 +555,18 @@ try {
   server.headersTimeout = 600_000;
   server.requestTimeout = 0;
   server.keepAliveTimeout = 30000;
+
+  // Keep-warm ping — Render free tier spins down after 15min of inactivity.
+  // Only runs when RENDER_EXTERNAL_URL is set (i.e. on Render, not locally).
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const pingUrl = process.env.RENDER_EXTERNAL_URL + "/health";
+    setInterval(() => {
+      fetch(pingUrl)
+        .then(() => console.log("[keep-warm] ping ok"))
+        .catch((err) => console.warn("[keep-warm] ping failed:", err.message));
+    }, 14 * 60 * 1000);
+    console.log(`[keep-warm] self-ping enabled → ${pingUrl} every 14 min`);
+  }
 } catch (err) {
   console.error("[startup] Fatal error during server initialization:", err);
   process.exit(1);
