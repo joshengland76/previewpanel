@@ -37,11 +37,26 @@ const FFPROBE = fs.existsSync("/opt/homebrew/bin/ffprobe")
   ? "/usr/local/bin/ffprobe"
   : "ffprobe";
 
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException] Unhandled exception — server will exit:", err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection] Unhandled promise rejection:", reason);
+});
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 // Ensure uploads directory exists before multer tries to write to it
-fs.mkdirSync(path.join(__dirname, "uploads"), { recursive: true });
+try {
+  fs.mkdirSync(path.join(__dirname, "uploads"), { recursive: true });
+  console.log(`[startup] uploads dir ready: ${path.join(__dirname, "uploads")}`);
+} catch (err) {
+  console.error("[startup] Failed to create uploads dir:", err);
+  process.exit(1);
+}
 
 const upload = multer({
   dest: path.join(__dirname, "uploads"),
@@ -520,16 +535,27 @@ app.get("/api/status/:jobId", (req, res) => {
 app.get("/health", (_, res) => res.json({ ok: true }));
 
 // ── Start ─────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3001;
-const server = app.listen(PORT, () => {
-  console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
-  console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
-  console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
-});
+let server;
+try {
+  const PORT = process.env.PORT || 3001;
+  server = app.listen(PORT, () => {
+    console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
+    console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
+    console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
+  });
 
-// Disable all HTTP-level timeouts — uploads can be large and slow,
-// and the /api/analyze route returns a jobId immediately anyway.
-server.timeout = 0;
-server.headersTimeout = 600_000;
-server.requestTimeout = 0;
-server.keepAliveTimeout = 30000;
+  server.on("error", (err) => {
+    console.error("[server] Listen error:", err);
+    process.exit(1);
+  });
+
+  // Disable all HTTP-level timeouts — uploads can be large and slow,
+  // and the /api/analyze route returns a jobId immediately anyway.
+  server.timeout = 0;
+  server.headersTimeout = 600_000;
+  server.requestTimeout = 0;
+  server.keepAliveTimeout = 30000;
+} catch (err) {
+  console.error("[startup] Fatal error during server initialization:", err);
+  process.exit(1);
+}
