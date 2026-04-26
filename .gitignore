@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+.claude/
+.env
+.env.local
+dist/
+backend/uploads/*.mp4
+backend/uploads/*.mov
+backend/uploads/*.avi
+backend/uploads/*.webm
+backend/server.log
