@@ -28,10 +28,14 @@ import "dotenv/config";
 const execFileAsync = promisify(execFile);
 const FFMPEG = fs.existsSync("/opt/homebrew/bin/ffmpeg")
   ? "/opt/homebrew/bin/ffmpeg"
-  : "/usr/local/bin/ffmpeg";
+  : fs.existsSync("/usr/local/bin/ffmpeg")
+  ? "/usr/local/bin/ffmpeg"
+  : "ffmpeg";
 const FFPROBE = fs.existsSync("/opt/homebrew/bin/ffprobe")
   ? "/opt/homebrew/bin/ffprobe"
-  : "/usr/local/bin/ffprobe";
+  : fs.existsSync("/usr/local/bin/ffprobe")
+  ? "/usr/local/bin/ffprobe"
+  : "ffprobe";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
