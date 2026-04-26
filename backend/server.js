@@ -538,7 +538,7 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 let server;
 try {
   const PORT = process.env.PORT || 3001;
-  server = app.listen(PORT, () => {
+  server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
     console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
     console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
