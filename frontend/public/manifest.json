@@ -1,0 +1,13 @@
+{
+  "name": "PreviewPanel",
+  "short_name": "PreviewPanel",
+  "description": "AI video analysis — know how your video lands before you post it.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAFAFA",
+  "theme_color": "#795548",
+  "icons": [
+    { "src": "/owl-logo.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/owl-logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

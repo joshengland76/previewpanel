@@ -90,7 +90,9 @@ const jobs = {};
 const GUARDRAILS = `
 STRICT EXCLUSIONS — you must NEVER suggest changes related to physical appearance, attractiveness, body type, clothing that reveals skin, or any factor outside the creator's direct control over their content. Focus exclusively on: script structure, hook strength, pacing, editing choices, audio quality, lighting choices, on-screen text, thumbnails, titles, and delivery style.
 
-CONTENT GUARDRAILS — you must NEVER provide suggestions that would encourage, normalize, or improve the effectiveness of offensive speech, hate speech, discriminatory language, violence, or the display or promotion of weapons including guns. If the video contains any of these elements, note it as a significant negative factor in the score and suggest removing or replacing that content rather than optimizing it.`;
+CONTENT GUARDRAILS — you must NEVER provide suggestions that would encourage, normalize, or improve the effectiveness of offensive speech, hate speech, discriminatory language, violence, or the display or promotion of weapons including guns. If the video contains any of these elements, note it as a significant negative factor in the score and suggest removing or replacing that content rather than optimizing it.
+
+SCORING — Your scores must reflect genuine quality differences. Most decent videos score 6–8. Strong videos score 8–9. Exceptional videos score 9–10. Poor videos score 4–5. Avoid clustering scores around 7 — if the video deserves a 6 or a 9, give it that score. Score independently; do not anchor to what other judges might give.`;
 
 // ── Judge definitions ─────────────────────────────────────────
 const JUDGES = [
@@ -212,7 +214,6 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
   "delivery": "<2-3 sentences on HOW the video is delivered>",
   "content": "<2-3 sentences on WHAT is said>",
   "platformFit": "<2 sentences on fit for ${platform} specifically, referencing ${pf.metrics}>",
-  "relativeInsight": "<1-2 sentences on what specifically would make this video outperform this creator's own average content — framed as a realistic, achievable improvement>",
   "moments": [
     { "timestamp": "<exact timestamp you observed>", "type": "peak|drop|note", "note": "<your observation>" }
   ],
@@ -334,6 +335,18 @@ async function analyzeWithTwelveLabs(videoContext, judge, platform, targetAudien
   try {
     const parsed = JSON.parse(clean);
     console.log(`[TwelveLabs][${judge.id}] JSON parsed OK — keys:`, Object.keys(parsed));
+
+    // Validate and sort moments
+    if (parsed.moments?.length) {
+      const tsToSecs = ts => { const p = String(ts).split(":").map(Number); return p.length === 2 ? p[0]*60+p[1] : p[0]; };
+      if (videoDuration?.secs) {
+        const before = parsed.moments.length;
+        parsed.moments = parsed.moments.filter(m => tsToSecs(m.timestamp) <= videoDuration.secs + 2);
+        if (parsed.moments.length < before) console.log(`[TwelveLabs][${judge.id}] Dropped ${before - parsed.moments.length} out-of-range moments`);
+      }
+      parsed.moments.sort((a, b) => tsToSecs(a.timestamp) - tsToSecs(b.timestamp));
+    }
+
     const momentTypes = (parsed.moments || []).map(m => `${m.timestamp}:${m.type}`).join(", ");
     console.log(`[TwelveLabs][${judge.id}] moment types:`, momentTypes || "(none)");
     return parsed;

@@ -101,11 +101,7 @@ function TimelineDots({ points, color }) {
             {hovered === i && (
               <div style={{
                 position: "absolute", bottom: "22px",
-                ...(p.position < 30
-                  ? { left: 0 }
-                  : p.position > 70
-                  ? { right: 0 }
-                  : { left: "50%", transform: "translateX(-50%)" }),
+                ...(p.position < 30 ? { left: 0 } : p.position > 70 ? { right: 0 } : { left: "50%", transform: "translateX(-50%)" }),
                 background: "#212121", color: "#fff", borderRadius: "6px",
                 padding: "5px 10px", fontSize: "11px", lineHeight: "1.4",
                 whiteSpace: "nowrap", pointerEvents: "none", zIndex: 20,
@@ -151,7 +147,11 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
         cursor: has ? "pointer" : "default",
         borderBottom: `1px solid ${judge.color}18`, userSelect: "none",
       }} onClick={() => has && setOpen(o => !o)}>
-        <img src={judge.avatar} alt={judge.name} style={{ width: "52px", height: "52px", objectFit: "contain", flexShrink: 0 }} />
+        {/* Owl wrapped in softBg container so PNG white box blends in */}
+        <div style={{ background: judge.softBg, borderRadius: "8px", flexShrink: 0 }}>
+          <img src={judge.avatar} alt={judge.name}
+            style={{ width: "52px", height: "52px", objectFit: "contain", display: "block", background: judge.softBg }} />
+        </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: "800", fontSize: "14px", color: has ? judge.color : "#bbb" }}>{judge.name}</div>
           <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px" }}>{judge.scoreLabel}</div>
@@ -167,7 +167,11 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
           </div>
         )}
         {has && <ScoreRing score={result.overall} color={judge.color} size={52}/>}
-        {has && <span style={{ fontSize: "11px", color: "#ccc" }}>{open ? "▲" : "▼"}</span>}
+        {has && (
+          <span style={{ fontSize: "18px", color: "#555", lineHeight: 1, userSelect: "none" }}>
+            {open ? "▲" : "▼"}
+          </span>
+        )}
       </div>
 
       {has && (
@@ -209,15 +213,6 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
             <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
               <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px", fontWeight: "700" }}>Platform Fit</div>
               <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.platformFit}</div>
-            </div>
-          )}
-          {result.relativeInsight && (
-            <div style={{ background: judge.color + "0c", border: `1px solid ${judge.color}25`, borderRadius: "8px", padding: "12px 14px", marginBottom: "16px", display: "flex", gap: "10px", alignItems: "flex-start" }}>
-              <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px" }}>📊</span>
-              <div>
-                <div style={{ fontSize: "10px", color: judge.color, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "5px", fontWeight: "700" }}>Compared to Creators Like You</div>
-                <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.relativeInsight}</div>
-              </div>
             </div>
           )}
           {result.moments?.length > 0 && (
@@ -263,7 +258,6 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
 export default function PreviewPanel() {
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
-  const [videoUrl, setVideoUrl] = useState("");
   const [targetAudience, setTargetAudience] = useState("");
   const [selectedJudges, setSelectedJudges] = useState(["critic","cool","dreamer"]);
   const [step, setStep] = useState(1);
@@ -272,9 +266,18 @@ export default function PreviewPanel() {
   const [judgeResults, setJudgeResults] = useState({});
   const [statusMessage, setStatusMessage] = useState("");
   const [videoDurationSecs, setVideoDurationSecs] = useState(null);
+  const [deferredPrompt, setDeferredPrompt] = useState(null);
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
+  const notifiedRef = useRef(false);
   const plat = PLATFORMS.find(p => p.id === platform);
+
+  // Capture Add-to-Home-Screen prompt (Android Chrome)
+  useEffect(() => {
+    const handler = e => { e.preventDefault(); setDeferredPrompt(e); };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
 
   const toggleJudge = id => setSelectedJudges(p => p.includes(id) ? p.filter(j => j !== id) : [...p, id]);
 
@@ -287,18 +290,28 @@ export default function PreviewPanel() {
         setJobStatus(data.status);
         setJudgeResults(data.results || {});
         if (data.duration) setVideoDurationSecs(data.duration);
-        if (data.status === "uploading") setStatusMessage("Uploading to TwelveLabs…");
-        else if (data.status === "analyzing") {
+        if (data.status === "uploading") {
+          setStatusMessage("Converting and uploading your video to TwelveLabs…");
+        } else if (data.status === "analyzing") {
           const done = Object.values(data.results||{}).filter(r=>r.status==="done").length;
-          setStatusMessage(`Judges watching your video… ${done}/${selectedJudges.length} complete`);
+          const total = Object.keys(data.results||{}).length;
+          setStatusMessage(`Judges watching your video — ${done} of ${total} reviews complete…`);
         } else if (data.status === "done" || data.status === "partial" || data.status === "error") {
           clearInterval(pollRef.current);
           if (data.status === "done") {
             setStatusMessage("Analysis complete.");
+            if (!notifiedRef.current && Notification?.permission === "granted") {
+              notifiedRef.current = true;
+              new Notification("PreviewPanel 🦉", { body: "Your results are ready!" });
+            }
           } else if (data.status === "partial") {
-            const succeeded = Object.values(data.results || {}).filter(r => r.status === "done").length;
-            const total = Object.keys(data.results || {}).length;
-            setStatusMessage(`${succeeded} of ${total} judges completed — some analyses failed.`);
+            const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
+            const total = Object.keys(data.results||{}).length;
+            setStatusMessage(`${succeeded} of ${total} judges completed.`);
+            if (!notifiedRef.current && Notification?.permission === "granted") {
+              notifiedRef.current = true;
+              new Notification("PreviewPanel 🦉", { body: "Your PreviewPanel results are ready!" });
+            }
           } else {
             setStatusMessage(`Error: ${data.error}`);
           }
@@ -311,28 +324,28 @@ export default function PreviewPanel() {
   }, [jobId]);
 
   const handleSubmit = async () => {
-    if ((!videoFile && !videoUrl.trim()) || selectedJudges.length === 0) return;
+    if (!videoFile || selectedJudges.length === 0) return;
+
+    // Request notification permission so we can alert when analysis finishes
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+
+    notifiedRef.current = false;
     setStep(2);
     setJudgeResults({});
     setJobStatus("uploading");
-    setStatusMessage("Uploading video…");
+    setStatusMessage("Your video is being analyzed — this typically takes 2–4 minutes. We're converting your video, uploading it to TwelveLabs, and running three independent AI reviews.");
     const pending = {};
-    selectedJudges.forEach(id => pending[id] = { status: "pending" });
+    selectedJudges.forEach(id => { pending[id] = { status: "pending" }; });
     setJudgeResults(pending);
     try {
       const formData = new FormData();
       formData.append("platform", platform);
       formData.append("targetAudience", targetAudience);
       formData.append("judges", JSON.stringify(selectedJudges));
-      if (videoFile) formData.append("video", videoFile);
-      else formData.append("videoUrl", videoUrl);
-      const res = await fetch(`${API_BASE}/api/analyze`, {
-        method: "POST",
-        headers: { "Accept": "application/json" },
-        body: formData,
-        // Note: Content-Type is intentionally omitted — browser must set it with
-        // the multipart boundary automatically; setting it manually breaks the upload
-      });
+      formData.append("video", videoFile);
+      const res = await fetch(`${API_BASE}/api/analyze`, { method: "POST", body: formData });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setJobId(data.jobId);
@@ -345,12 +358,14 @@ export default function PreviewPanel() {
   const reset = () => {
     clearInterval(pollRef.current);
     setStep(1); setJobId(null); setJobStatus(null);
-    setJudgeResults({}); setVideoFile(null); setVideoUrl(""); setStatusMessage(""); setVideoDurationSecs(null);
+    setJudgeResults({}); setVideoFile(null); setStatusMessage(""); setVideoDurationSecs(null);
+    notifiedRef.current = false;
   };
 
   const doneResults = Object.values(judgeResults).filter(r => r.status === "done" && r.data?.overall);
   const avgScore = doneResults.length > 0
     ? Math.round(doneResults.reduce((s,r) => s + r.data.overall, 0) / doneResults.length) : null;
+  const isFinished = jobStatus === "done" || jobStatus === "partial";
 
   return (
     <div style={{ minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
@@ -368,13 +383,9 @@ export default function PreviewPanel() {
         ::-webkit-scrollbar-thumb { background: ${B.beige}; border-radius: 99px; }
         .pp-sticky-wrap { margin-top: 4px; }
         @media (max-width: 480px) {
-          .pp-header { height: 46px !important; padding: 0 14px !important; }
-          .pp-logo { height: 42px !important; }
-          .pp-main { padding: 14px 14px 0 !important; }
-          .pp-hero { margin-bottom: 18px !important; }
-          .pp-hero-sub { display: none; }
-          .pp-section-gap { margin-bottom: 12px !important; }
-          .pp-judge-list { gap: 5px !important; }
+          .pp-main { padding: 0 14px 0 !important; }
+          .pp-section-gap { margin-bottom: 8px !important; }
+          .pp-judge-list { gap: 4px !important; }
           .pp-content-pad { padding-bottom: 80px; }
           .pp-sticky-wrap {
             position: fixed; bottom: 0; left: 0; right: 0;
@@ -386,86 +397,58 @@ export default function PreviewPanel() {
         }
       `}</style>
 
-      <header className="pp-header" style={{
-        background: "#fff", borderBottom: `1px solid ${B.border}`,
-        padding: "0 24px", height: "56px",
-        display: "flex", alignItems: "center", gap: "10px",
-        position: "sticky", top: 0, zIndex: 100,
-        boxShadow: "0 1px 10px rgba(0,0,0,0.05)",
-      }}>
-        <img className="pp-logo" src="/owl-logo.png" alt="PreviewPanel" style={{ height: "52px", width: "auto", flexShrink: 0 }} />
-        <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
-        {step === 2 && (
-          <button onClick={reset} style={{
-            marginLeft: "auto", background: "transparent",
-            border: `1.5px solid ${B.border}`, borderRadius: "8px",
-            padding: "6px 12px", fontSize: "12px", fontWeight: "700",
-            color: B.brown, cursor: "pointer", fontFamily: "Montserrat, sans-serif",
-          }}>← New Video</button>
-        )}
-      </header>
-
       <main className="pp-main" style={{ maxWidth: "740px", margin: "0 auto", padding: "32px 20px 60px" }}>
 
+        {/* ── INPUT SCREEN ── */}
         {step === 1 && (
           <div className="pp-content-pad" style={{ animation: "pp-slide 0.35s ease" }}>
 
-            {/* Hero */}
-            <div className="pp-hero" style={{ textAlign: "center", marginBottom: "28px" }}>
-              <h1 style={{ fontWeight: "800", fontSize: "clamp(20px,5.5vw,38px)", color: B.black, letterSpacing: "-0.03em", lineHeight: 1.15, marginBottom: "8px" }}>
-                Know how your video lands<br/><span style={{ color: B.brown }}>before you post it.</span>
-              </h1>
-              <p className="pp-hero-sub" style={{ color: "#aaa", fontSize: "13px", lineHeight: "1.55" }}>
-                Three AI judges actually watch your video — analyzing delivery, energy, editing, and pacing.
-              </p>
+            {/* Logo + BETA — centered, no sticky header */}
+            <div style={{ textAlign: "center", paddingTop: "20px", paddingBottom: "16px" }}>
+              <img src="/owl-logo.png" alt="PreviewPanel"
+                style={{ height: "78px", width: "auto", display: "block", margin: "0 auto 8px" }} />
+              <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
             </div>
 
             {/* 1 — Video upload */}
-            <div className="pp-section-gap" style={{ marginBottom: "16px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "8px" }}>Your Video</div>
+            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
+              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
               <div className="drop-zone" onClick={() => fileInputRef.current.click()}
                 onDragOver={e => e.preventDefault()}
-                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if(f){setVideoFile(f);setVideoUrl("");} }}
+                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setVideoFile(f); }}
                 style={{
                   border: `2px dashed ${videoFile ? B.brown : B.border}`,
                   borderRadius: "12px", textAlign: "center",
                   cursor: "pointer", background: videoFile ? B.lightBrown : "#fff",
-                  transition: "all 0.2s ease", marginBottom: "10px",
-                  minHeight: "118px", display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "all 0.2s ease",
+                  minHeight: "100px", display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
                 {videoFile ? (
-                  <div style={{ padding: "14px 20px" }}>
+                  <div style={{ padding: "12px 20px" }}>
                     <div style={{ fontSize: "20px", marginBottom: "4px" }}>🎬</div>
                     <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
                     <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
                       {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                      <span onClick={e=>{e.stopPropagation();setVideoFile(null);}} style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
+                      <span onClick={e => { e.stopPropagation(); setVideoFile(null); }}
+                        style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
                     </div>
                   </div>
                 ) : (
-                  <div style={{ padding: "14px 20px" }}>
-                    <div style={{ fontSize: "26px", marginBottom: "5px" }}>⬆</div>
+                  <div style={{ padding: "12px 20px" }}>
+                    <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
                     <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "3px", lineHeight: "1.4" }}>{plat.hint}</div>
+                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>{plat.hint}</div>
                   </div>
                 )}
               </div>
               <input ref={fileInputRef} type="file" accept="video/*"
-                onChange={e=>{const f=e.target.files[0];if(f){setVideoFile(f);setVideoUrl("");}}}
+                onChange={e => { const f = e.target.files[0]; if (f) setVideoFile(f); }}
                 style={{ display: "none" }}/>
-              {!videoFile && (
-                <>
-                  <div style={{ textAlign: "center", fontSize: "11px", color: "#bbb", marginBottom: "8px" }}>— or paste a direct .mp4 URL —</div>
-                  <input value={videoUrl} onChange={e=>setVideoUrl(e.target.value)}
-                    placeholder="https://example.com/your-video.mp4"
-                    style={{ width: "100%", padding: "10px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "13px", fontFamily: "Montserrat, sans-serif" }}/>
-                </>
-              )}
             </div>
 
             {/* 2 — Platform pills */}
-            <div className="pp-section-gap" style={{ marginBottom: "16px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "8px" }}>Platform</div>
+            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
+              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Platform</div>
               <div style={{ display: "flex", gap: "6px" }}>
                 {PLATFORMS.map(p => (
                   <button key={p.id} onClick={() => setPlatform(p.id)} style={{
@@ -486,30 +469,33 @@ export default function PreviewPanel() {
             </div>
 
             {/* 3 — Target audience */}
-            <div className="pp-section-gap" style={{ marginBottom: "16px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "8px" }}>
+            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
+              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>
                 Audience <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(optional)</span>
               </div>
-              <input value={targetAudience} onChange={e=>setTargetAudience(e.target.value)}
+              <input value={targetAudience} onChange={e => setTargetAudience(e.target.value)}
                 placeholder="e.g. First-time investors, 25–35, financially curious"
-                style={{ width: "100%", padding: "10px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "13px", fontFamily: "Montserrat, sans-serif" }}/>
+                style={{ width: "100%", padding: "9px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "13px", fontFamily: "Montserrat, sans-serif" }}/>
             </div>
 
             {/* 4 — Judge selector */}
-            <div className="pp-section-gap" style={{ marginBottom: "20px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "8px" }}>Your Panel</div>
-              <div className="pp-judge-list" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div className="pp-section-gap" style={{ marginBottom: "16px" }}>
+              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Panel</div>
+              <div className="pp-judge-list" style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
                 {JUDGES.map(j => {
                   const active = selectedJudges.includes(j.id);
                   return (
                     <div key={j.id} onClick={() => toggleJudge(j.id)} style={{
                       display: "flex", alignItems: "center", gap: "10px",
-                      padding: "8px 14px", borderRadius: "10px",
+                      padding: "7px 12px", borderRadius: "10px",
                       border: `1.5px solid ${active ? j.color+"50" : B.border}`,
                       background: active ? j.softBg : "#fff",
                       cursor: "pointer", transition: "all 0.15s ease",
                     }}>
-                      <img src={j.avatar} alt={j.name} style={{ width: "28px", height: "28px", objectFit: "contain", flexShrink: 0 }} />
+                      <div style={{ background: active ? j.softBg : "#F5F5F5", borderRadius: "6px", flexShrink: 0 }}>
+                        <img src={j.avatar} alt={j.name}
+                          style={{ width: "28px", height: "28px", objectFit: "contain", display: "block", background: active ? j.softBg : "#F5F5F5" }} />
+                      </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: "800", fontSize: "12px", color: active ? j.color : "#bbb" }}>{j.name}</div>
                         <div style={{ fontSize: "10px", color: "#bbb", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.tagline}</div>
@@ -526,19 +512,51 @@ export default function PreviewPanel() {
             {/* 5 — CTA (sticky on mobile) */}
             <div className="pp-sticky-wrap">
               <button className="pp-btn" onClick={handleSubmit}
-                disabled={(!videoFile && !videoUrl.trim()) || selectedJudges.length === 0}
+                disabled={!videoFile || selectedJudges.length === 0}
                 style={{ width: "100%", padding: "15px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "15px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
                 Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
               </button>
             </div>
 
+            {/* Add to Home Screen prompt (Android Chrome) */}
+            {deferredPrompt && (
+              <div style={{ marginTop: "12px", padding: "10px 14px", background: "#fff", border: `1px solid ${B.border}`, borderRadius: "10px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={{ fontSize: "18px" }}>📱</span>
+                <span style={{ fontSize: "12px", color: B.body, flex: 1 }}>Add PreviewPanel to your home screen for quick access.</span>
+                <button onClick={async () => {
+                  deferredPrompt.prompt();
+                  const { outcome } = await deferredPrompt.userChoice;
+                  if (outcome === "accepted") setDeferredPrompt(null);
+                }} style={{ background: B.action, color: "#fff", border: "none", borderRadius: "6px", padding: "6px 12px", fontSize: "11px", fontWeight: "700", cursor: "pointer", fontFamily: "Montserrat, sans-serif", whiteSpace: "nowrap" }}>
+                  Add
+                </button>
+                <button onClick={() => setDeferredPrompt(null)}
+                  style={{ background: "transparent", border: "none", color: "#bbb", cursor: "pointer", fontSize: "18px", padding: "0 4px", lineHeight: 1 }}>×</button>
+              </div>
+            )}
           </div>
         )}
 
+        {/* ── RESULTS SCREEN ── */}
         {step === 2 && (
           <div style={{ animation: "pp-slide 0.3s ease" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
-              <div style={{ padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", color: plat.color }}>
+
+            {/* Top bar: logo left, New Video right (only when finished) */}
+            <div style={{ display: "flex", alignItems: "center", marginBottom: "16px" }}>
+              <img src="/owl-logo.png" alt="PreviewPanel" style={{ height: "36px", width: "auto" }} />
+              {isFinished && (
+                <button onClick={reset} style={{
+                  marginLeft: "auto", background: "transparent",
+                  border: `1.5px solid ${B.border}`, borderRadius: "8px",
+                  padding: "6px 12px", fontSize: "12px", fontWeight: "700",
+                  color: B.brown, cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+                }}>← New Video</button>
+              )}
+            </div>
+
+            {/* Status row */}
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
+              <div style={{ padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", color: plat.color, flexShrink: 0 }}>
                 {plat.icon} {plat.label}
               </div>
               {videoFile && (
@@ -546,7 +564,7 @@ export default function PreviewPanel() {
                   {videoFile.name}
                 </div>
               )}
-              <span style={{ fontSize: "12px", color: jobStatus === "error" ? "#E53935" : "#bbb", fontStyle: "italic" }}>
+              <span style={{ fontSize: "12px", color: jobStatus === "error" ? "#E53935" : "#888", fontStyle: "italic", lineHeight: "1.55" }}>
                 {statusMessage}
               </span>
             </div>
@@ -557,7 +575,7 @@ export default function PreviewPanel() {
               <span>Powered by <strong style={{ color: B.body }}>TwelveLabs Pegasus</strong> — the AI watches your full video, analyzing visuals, delivery, audio, and pacing together.</span>
             </div>
 
-            {/* Consensus */}
+            {/* Panel Verdict */}
             {avgScore !== null && (
               <div style={{ background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "14px", padding: "20px 24px", marginBottom: "18px", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 2px 14px rgba(0,0,0,0.04)" }}>
                 <div>
