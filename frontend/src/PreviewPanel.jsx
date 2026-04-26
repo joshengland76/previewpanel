@@ -326,7 +326,13 @@ export default function PreviewPanel() {
       formData.append("judges", JSON.stringify(selectedJudges));
       if (videoFile) formData.append("video", videoFile);
       else formData.append("videoUrl", videoUrl);
-      const res = await fetch(`${API_BASE}/api/analyze`, { method: "POST", body: formData });
+      const res = await fetch(`${API_BASE}/api/analyze`, {
+        method: "POST",
+        headers: { "Accept": "application/json" },
+        body: formData,
+        // Note: Content-Type is intentionally omitted — browser must set it with
+        // the multipart boundary automatically; setting it manually breaks the upload
+      });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setJobId(data.jobId);

@@ -42,20 +42,15 @@ fs.mkdirSync(path.join(__dirname, "uploads"), { recursive: true });
 const upload = multer({
   dest: "uploads/",
   limits: { fileSize: 4 * 1024 * 1024 * 1024 }, // 4 GB
+  fileFilter: (_req, file, cb) => {
+    // Accept everything — log mimetype so we can debug mobile Safari quirks
+    console.log(`[multer] incoming file: ${file.originalname}, mimetype: ${file.mimetype}`);
+    cb(null, true);
+  },
 });
 
-const ALLOWED_ORIGINS = [
-  "https://previewpanel.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:3001",
-];
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. curl, Postman, Railway health checks)
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    callback(new Error(`CORS: origin ${origin} not allowed`));
-  },
-}));
+// Temporarily open to all origins to rule out CORS as the mobile Safari issue
+app.use(cors());
 app.use(express.json());
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
