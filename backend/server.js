@@ -44,7 +44,18 @@ const upload = multer({
   limits: { fileSize: 4 * 1024 * 1024 * 1024 }, // 4 GB
 });
 
-app.use(cors());
+const ALLOWED_ORIGINS = [
+  "https://previewpanel.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:3001",
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. curl, Postman, Railway health checks)
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS: origin ${origin} not allowed`));
+  },
+}));
 app.use(express.json());
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
