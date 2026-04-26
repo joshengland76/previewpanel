@@ -44,7 +44,7 @@ const app = express();
 fs.mkdirSync(path.join(__dirname, "uploads"), { recursive: true });
 
 const upload = multer({
-  dest: "uploads/",
+  dest: path.join(__dirname, "uploads"),
   limits: { fileSize: 4 * 1024 * 1024 * 1024 }, // 4 GB
   fileFilter: (_req, file, cb) => {
     // Accept everything — log mimetype so we can debug mobile Safari quirks
@@ -332,7 +332,7 @@ async function analyzeWithTwelveLabs(videoContext, judge, platform, targetAudien
 // ── Fallback: Claude structures raw TwelveLabs prose ─────────
 async function structureWithClaude(rawAnalysis, judge, platform) {
   const msg = await anthropic().messages.create({
-    model: "claude-sonnet-4-6-20251031",
+    model: "claude-sonnet-4-6",
     max_tokens: 1024,
     system: `You are ${judge.name}. ${judge.personality}`,
     messages: [
@@ -530,6 +530,6 @@ const server = app.listen(PORT, () => {
 // Disable all HTTP-level timeouts — uploads can be large and slow,
 // and the /api/analyze route returns a jobId immediately anyway.
 server.timeout = 0;
-server.headersTimeout = 0;
+server.headersTimeout = 600_000;
 server.requestTimeout = 0;
 server.keepAliveTimeout = 30000;
