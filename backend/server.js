@@ -231,9 +231,11 @@ async function convertToMp4(inputPath) {
   const t0 = Date.now();
   await execFileAsync(FFMPEG, [
     "-i", inputPath,
-    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+    "-vf", "scale=1280:-2",
     "-c:a", "aac",
     "-movflags", "+faststart",
+    "-threads", "1",
     "-y", outputPath,
   ]);
   const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(2);
@@ -454,8 +456,8 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     jobs[jobId].status = "analyzing";
     console.log(`[${jobId}] Step 2: running judges sequentially${videoDuration ? ` — duration: ${videoDuration.label}` : ""}`);
 
-    // 2. Run judges sequentially with retries
-    for (const judge of selectedJudges) {
+    // 2. Run judges in parallel with per-judge retries
+    async function runJudge(judge) {
       let lastErr;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
@@ -466,31 +468,29 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
           const result = await analyzeWithTwelveLabs(videoContext, judge, platform, targetAudience, videoDuration);
           jobs[jobId].results[judge.id] = { status: "done", data: result };
           console.log(`[${jobId}] Judge ${judge.id} complete — stored:`, JSON.stringify(jobs[jobId].results[judge.id]).slice(0, 300));
-          lastErr = null;
-          break;
+          return;
         } catch (err) {
           lastErr = err;
-          // Extract the most useful error info from TwelveLabs responses
           let detail = err.message;
           try { detail = JSON.parse(err.message.match(/\{[\s\S]*\}/)?.[0] ?? "{}").message || detail; } catch {}
           console.error(`[${jobId}] Judge ${judge.id} attempt ${attempt} failed: ${detail}`);
         }
       }
-      if (lastErr) {
-        let detail = lastErr.message;
-        try { detail = JSON.parse(lastErr.message.match(/\{[\s\S]*\}/)?.[0] ?? "{}").message || detail; } catch {}
-        jobs[jobId].results[judge.id] = {
-          status: "error",
-          error: detail,
-          data: {
-            overall: 0,
-            reaction: `${judge.name} couldn't analyse this video: ${detail}`,
-            positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "",
-            moments: [], suggestions: [],
-          },
-        };
-      }
+      let detail = lastErr.message;
+      try { detail = JSON.parse(lastErr.message.match(/\{[\s\S]*\}/)?.[0] ?? "{}").message || detail; } catch {}
+      jobs[jobId].results[judge.id] = {
+        status: "error",
+        error: detail,
+        data: {
+          overall: 0,
+          reaction: `${judge.name} couldn't analyse this video: ${detail}`,
+          positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "",
+          moments: [], suggestions: [],
+        },
+      };
     }
+
+    await Promise.all(selectedJudges.map(runJudge));
 
     const succeeded = selectedJudges.filter(j => jobs[jobId].results[j.id]?.status === "done").length;
     const total = selectedJudges.length;
