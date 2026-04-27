@@ -307,9 +307,9 @@ async function convertToMp4(inputPath) {
   const t0 = Date.now();
   await execFileAsync(FFMPEG, [
     "-i", inputPath,
-    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-    "-vf", "scale=1280:-2",
-    "-c:a", "aac",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+    "-vf", "scale=854:-2",
+    "-c:a", "aac", "-b:a", "96k",
     "-movflags", "+faststart",
     "-threads", "1",
     "-y", outputPath,
