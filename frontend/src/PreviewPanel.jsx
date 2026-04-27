@@ -434,7 +434,8 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
 
 // ── Issue #5 & #6: Big waiting banner ────────────────────────
 function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, selectedJudges, jobStatus }) {
-  const waitingMsg = useWaitingMessage(jobStatus === "analyzing" || jobStatus === "uploading" || jobStatus === "queued");
+  const isWaiting = jobStatus === "analyzing" || jobStatus === "uploading" || jobStatus === "queued";
+  const waitingMsg = useWaitingMessage(isWaiting);
   const isError = jobStatus === "error";
 
   const doneCount = Object.values(judgeResults).filter(r => r.status === "done").length;
@@ -443,8 +444,9 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
   const secs = elapsed % 60;
   const elapsedStr = `${mins}:${secs.toString().padStart(2, "0")}`;
 
-  if (isError) return null; // error shown separately
+  if (isError) return null;
 
+  // Queue waiting state
   if (queuePosition > 0) {
     return (
       <div style={{
@@ -466,6 +468,7 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
     );
   }
 
+  // Active processing state — always show this once queuePosition is 0
   return (
     <div style={{
       background: B.lightBrown, border: `1.5px solid ${B.brown}30`, borderRadius: "14px",
@@ -474,7 +477,9 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
       {/* Progress bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
         <div style={{ fontWeight: "800", fontSize: "15px", color: B.action }}>
-          {jobStatus === "uploading" ? "Uploading & converting…" : `${doneCount} of ${totalCount} judges done`}
+          {jobStatus === "uploading" || jobStatus === "queued"
+            ? "Uploading & converting…"
+            : `${doneCount} of ${totalCount} judges done`}
         </div>
         <div style={{ fontSize: "13px", fontWeight: "700", color: B.brown, fontFamily: "'Courier New', monospace" }}>
           {elapsedStr}
@@ -546,7 +551,6 @@ export default function PreviewPanel() {
   const savedRef = useRef(false);
   const plat = PLATFORMS.find(p => p.id === platform);
 
-  const isProcessing = jobStatus === "uploading" || jobStatus === "analyzing" || jobStatus === "queued";
   const elapsed = useElapsed(isProcessing);
 
   useEffect(() => {
@@ -690,6 +694,7 @@ export default function PreviewPanel() {
   const avgScore = doneResults.length > 0
     ? Math.round(doneResults.reduce((s,r) => s + r.data.overall, 0) / doneResults.length) : null;
   const isFinished = jobStatus === "done" || jobStatus === "partial";
+  const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== null;
 
   return (
     <div style={{ minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
