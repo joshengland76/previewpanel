@@ -403,16 +403,18 @@ export default function PreviewPanel() {
         {step === 1 && (
           <div className="pp-content-pad" style={{ animation: "pp-slide 0.35s ease" }}>
 
-            {/* Logo + BETA — centered, no sticky header */}
-            <div style={{ textAlign: "center", paddingTop: "20px", paddingBottom: "16px" }}>
+            {/* Logo + BETA — centered, floats on page background, no container */}
+            <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px" }}>
               <img src="/owl-logo.png" alt="PreviewPanel"
-                style={{ height: "78px", width: "auto", display: "block", margin: "0 auto 8px" }} />
-              <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
+                style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
+              <div style={{ marginTop: "4px" }}>
+                <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
+              </div>
             </div>
 
             {/* 1 — Video upload */}
-            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
+            <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
+              <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
               <div className="drop-zone" onClick={() => fileInputRef.current.click()}
                 onDragOver={e => e.preventDefault()}
                 onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setVideoFile(f); }}
@@ -421,7 +423,7 @@ export default function PreviewPanel() {
                   borderRadius: "12px", textAlign: "center",
                   cursor: "pointer", background: videoFile ? B.lightBrown : "#fff",
                   transition: "all 0.2s ease",
-                  minHeight: "100px", display: "flex", alignItems: "center", justifyContent: "center",
+                  minHeight: "140px", display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
                 {videoFile ? (
                   <div style={{ padding: "12px 20px" }}>
@@ -447,16 +449,16 @@ export default function PreviewPanel() {
             </div>
 
             {/* 2 — Platform pills */}
-            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Platform</div>
+            <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
+              <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Platform</div>
               <div style={{ display: "flex", gap: "6px" }}>
                 {PLATFORMS.map(p => (
                   <button key={p.id} onClick={() => setPlatform(p.id)} style={{
-                    flex: 1, height: "38px", borderRadius: "99px",
+                    flex: 1, height: "48px", borderRadius: "99px",
                     border: `2px solid ${platform === p.id ? p.color : B.border}`,
                     background: platform === p.id ? p.color+"10" : "#fff",
                     color: platform === p.id ? p.color : "#aaa",
-                    fontSize: "12px", fontWeight: "700", cursor: "pointer",
+                    fontSize: "13px", fontWeight: "700", cursor: "pointer",
                     fontFamily: "Montserrat, sans-serif", transition: "all 0.15s ease",
                     display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
                     padding: "0 6px", whiteSpace: "nowrap",
@@ -469,39 +471,39 @@ export default function PreviewPanel() {
             </div>
 
             {/* 3 — Target audience */}
-            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>
+            <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
+              <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>
                 Audience <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(optional)</span>
               </div>
               <input value={targetAudience} onChange={e => setTargetAudience(e.target.value)}
                 placeholder="e.g. First-time investors, 25–35, financially curious"
-                style={{ width: "100%", padding: "9px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "13px", fontFamily: "Montserrat, sans-serif" }}/>
+                style={{ width: "100%", padding: "13px", height: "48px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "14px", fontFamily: "Montserrat, sans-serif" }}/>
             </div>
 
             {/* 4 — Judge selector */}
-            <div className="pp-section-gap" style={{ marginBottom: "16px" }}>
-              <div style={{ fontSize: "11px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Panel</div>
-              <div className="pp-judge-list" style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
+              <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Panel</div>
+              <div className="pp-judge-list" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                 {JUDGES.map(j => {
                   const active = selectedJudges.includes(j.id);
                   return (
                     <div key={j.id} onClick={() => toggleJudge(j.id)} style={{
-                      display: "flex", alignItems: "center", gap: "10px",
-                      padding: "7px 12px", borderRadius: "10px",
+                      display: "flex", alignItems: "center", gap: "12px",
+                      padding: "14px 14px", borderRadius: "10px",
                       border: `1.5px solid ${active ? j.color+"50" : B.border}`,
                       background: active ? j.softBg : "#fff",
                       cursor: "pointer", transition: "all 0.15s ease",
                     }}>
                       <div style={{ background: active ? j.softBg : "#F5F5F5", borderRadius: "6px", flexShrink: 0 }}>
                         <img src={j.avatar} alt={j.name}
-                          style={{ width: "28px", height: "28px", objectFit: "contain", display: "block", background: active ? j.softBg : "#F5F5F5" }} />
+                          style={{ width: "44px", height: "44px", objectFit: "contain", display: "block", background: active ? j.softBg : "#F5F5F5" }} />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: "800", fontSize: "12px", color: active ? j.color : "#bbb" }}>{j.name}</div>
-                        <div style={{ fontSize: "10px", color: "#bbb", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.tagline}</div>
+                        <div style={{ fontWeight: "800", fontSize: "14px", color: active ? j.color : "#bbb" }}>{j.name}</div>
+                        <div style={{ fontSize: "12px", color: "#bbb", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{j.tagline}</div>
                       </div>
-                      <div style={{ width: "18px", height: "18px", borderRadius: "4px", border: `2px solid ${active ? j.color : B.border}`, background: active ? j.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all 0.15s" }}>
-                        {active && <span style={{ color: "#fff", fontSize: "10px", fontWeight: "800", lineHeight: 1 }}>✓</span>}
+                      <div style={{ width: "20px", height: "20px", borderRadius: "4px", border: `2px solid ${active ? j.color : B.border}`, background: active ? j.color : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all 0.15s" }}>
+                        {active && <span style={{ color: "#fff", fontSize: "11px", fontWeight: "800", lineHeight: 1 }}>✓</span>}
                       </div>
                     </div>
                   );
@@ -513,7 +515,7 @@ export default function PreviewPanel() {
             <div className="pp-sticky-wrap">
               <button className="pp-btn" onClick={handleSubmit}
                 disabled={!videoFile || selectedJudges.length === 0}
-                style={{ width: "100%", padding: "15px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "15px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
+                style={{ width: "100%", height: "56px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "16px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
                 Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
               </button>
             </div>
