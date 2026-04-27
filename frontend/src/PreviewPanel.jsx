@@ -550,6 +550,8 @@ export default function PreviewPanel() {
   const notifiedRef = useRef(false);
   const savedRef = useRef(false);
   const plat = PLATFORMS.find(p => p.id === platform);
+  const isFinished = jobStatus === "done" || jobStatus === "partial";
+  const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== null;
 
   const elapsed = useElapsed(isProcessing);
 
@@ -693,8 +695,6 @@ export default function PreviewPanel() {
   const doneResults = Object.values(judgeResults).filter(r => r.status === "done" && r.data?.overall);
   const avgScore = doneResults.length > 0
     ? Math.round(doneResults.reduce((s,r) => s + r.data.overall, 0) / doneResults.length) : null;
-  const isFinished = jobStatus === "done" || jobStatus === "partial";
-  const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== null;
 
   return (
     <div style={{ minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
