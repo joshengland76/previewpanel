@@ -37,6 +37,9 @@ const FFPROBE = fs.existsSync("/opt/homebrew/bin/ffprobe")
   ? "/usr/local/bin/ffprobe"
   : "ffprobe";
 
+// ── Issue #3: 3-minute video limit ───────────────────────────
+const MAX_VIDEO_DURATION_SECS = 180; // 3 minutes
+
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException] Unhandled exception — server will exit:", err);
   process.exit(1);
@@ -62,15 +65,38 @@ const upload = multer({
   dest: path.join(__dirname, "uploads"),
   limits: { fileSize: 4 * 1024 * 1024 * 1024 }, // 4 GB
   fileFilter: (_req, file, cb) => {
-    // Accept everything — log mimetype so we can debug mobile Safari quirks
     console.log(`[multer] incoming file: ${file.originalname}, mimetype: ${file.mimetype}`);
     cb(null, true);
   },
 });
 
-// Temporarily open to all origins to rule out CORS as the mobile Safari issue
 app.use(cors());
 app.use(express.json());
+
+// ── Issue #1: Job Queue — process ONE job at a time to prevent OOM ──────────
+let activeJob = null; // jobId of currently running pipeline
+const jobQueue = []; // array of { jobId, fn } waiting to run
+
+function enqueueJob(jobId, fn) {
+  jobQueue.push({ jobId, fn });
+  drainQueue();
+}
+
+async function drainQueue() {
+  if (activeJob !== null) return; // already running something
+  const next = jobQueue.shift();
+  if (!next) return;
+  activeJob = next.jobId;
+  console.log(`[queue] Starting job ${next.jobId} — queue depth after: ${jobQueue.length}`);
+  try {
+    await next.fn();
+  } catch (err) {
+    console.error(`[queue] Job ${next.jobId} threw uncaught error:`, err.message);
+  } finally {
+    activeJob = null;
+    drainQueue(); // pick up next job
+  }
+}
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
@@ -83,7 +109,7 @@ function anthropic() {
   return _anthropic;
 }
 
-// ── In-memory job store (use Redis in production) ─────────────
+// ── In-memory job store ───────────────────────────────────────
 const jobs = {};
 
 // ── Shared guardrails injected into every judge prompt ────────
@@ -92,7 +118,39 @@ STRICT EXCLUSIONS — you must NEVER suggest changes related to physical appeara
 
 CONTENT GUARDRAILS — you must NEVER provide suggestions that would encourage, normalize, or improve the effectiveness of offensive speech, hate speech, discriminatory language, violence, or the display or promotion of weapons including guns. If the video contains any of these elements, note it as a significant negative factor in the score and suggest removing or replacing that content rather than optimizing it.
 
-SCORING — Your scores must reflect genuine quality differences. Most decent videos score 6–8. Strong videos score 8–9. Exceptional videos score 9–10. Poor videos score 4–5. Avoid clustering scores around 7 — if the video deserves a 6 or a 9, give it that score. Score independently; do not anchor to what other judges might give.`;
+SCORING — Your scores must reflect genuine quality differences. Use the FULL range of the scale. A video of someone walking across a street with nothing interesting happening: 1–2. A randomly filmed clip with no intent or craft: 2–3. Poor execution of a decent idea: 3–4. Mediocre but watchable: 5. Decent but needs work: 6. Good: 7. Strong: 8. Excellent: 8–9. Exceptional or viral-worthy: 9–10. Do NOT cluster around 7. If it is genuinely bad, say 1–4. If it is genuinely great, say 8–10. Be honest.`;
+
+// ── Issue #10 & #12: Detect video type and calibrate review length ─────────
+function buildVideoContext(videoDuration) {
+  const secs = videoDuration?.secs || 0;
+
+  // Estimate richness by duration as a proxy
+  // Judges will also be told to calibrate based on what they actually see
+  let videoType = "standard";
+  let lengthGuidance = "";
+
+  if (secs <= 15) {
+    videoType = "very_short";
+    lengthGuidance = `\nVIDEO LENGTH — This is a very short clip (under 15 seconds). Calibrate your review length accordingly. DO NOT pad your feedback. If there is little to say, say little. Reaction: 1–2 sentences. Each text field: 1 sentence maximum. Suggestions: 1–2 maximum. If the video has almost nothing in it, reflect that with a low score and a brief honest assessment.`;
+  } else if (secs <= 60) {
+    videoType = "short";
+    lengthGuidance = `\nVIDEO LENGTH — This is a short video (under 60 seconds). Keep feedback proportional. DO NOT over-explain or repeat yourself. Reaction: 2 sentences. Each text field: 1–2 sentences. Suggestions: 2–3 maximum.`;
+  } else if (secs <= 180) {
+    videoType = "medium";
+    lengthGuidance = `\nVIDEO LENGTH — This is a medium-length video (1–3 minutes). Full feedback is appropriate but stay focused.`;
+  }
+
+  return { videoType, lengthGuidance };
+}
+
+// ── Issue #10: Content-type awareness ────────────────────────
+const CONTENT_TYPE_GUIDANCE = `
+IMPORTANT — VIDEO CONTENT TYPE: Before reviewing, identify what kind of video this actually is:
+- TALKING/VLOG: Creator speaks directly to camera, narrates, explains, or interviews. Hook, delivery, and script quality matter most.
+- AESTHETIC/VIBES: Minimal or no talking. Visual style, music choice, editing rhythm, and mood are the primary craft elements. Do NOT critique the absence of a spoken hook — that is not the format.
+- TUTORIAL/HOWTO: Demonstrates a skill or process. Clarity, pacing, and information density matter most.
+- ENTERTAINMENT/COMEDY: Relies on timing, reaction, or surprise. Evaluate on those terms, not vlog terms.
+Adapt your entire review to the actual format you observe. Do not apply vlog criteria to a vibes video.`;
 
 // ── Judge definitions ─────────────────────────────────────────
 const JUDGES = [
@@ -172,13 +230,20 @@ const PLATFORM_FOCUS = {
   },
 };
 
+// ── Issue #7: Hashtag instruction for TikTok and Instagram ───
+function buildHashtagInstruction(platform) {
+  if (platform === "tiktok" || platform === "instagram") {
+    return `\nHASHTAGS — Based on the video's content, suggest exactly 3 highly relevant hashtags that would help this video reach the right audience on ${platform.toUpperCase()}. Choose hashtags that are specific enough to reach the right niche but large enough to have meaningful search volume. Include them in the JSON as a "hashtags" array of strings (without the # symbol).`;
+  }
+  return "";
+}
+
 // ── Build per-judge prompt sent to TwelveLabs Pegasus ────────
 function formatTimestamp(secs) {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
-
 
 function buildTLPrompt(judge, platform, targetAudience, videoDuration) {
   const pf = PLATFORM_FOCUS[platform] || PLATFORM_FOCUS.youtube;
@@ -187,8 +252,14 @@ function buildTLPrompt(judge, platform, targetAudience, videoDuration) {
     ? `\nVIDEO DURATION — This video is ${videoDuration.label} long. You MUST ONLY reference timestamps between 0:00 and ${videoDuration.label}. Do NOT reference any timestamp beyond this duration.`
     : "";
 
+  const { lengthGuidance } = buildVideoContext(videoDuration);
+  const hashtagInstruction = buildHashtagInstruction(platform);
+  const needsHashtags = platform === "tiktok" || platform === "instagram";
+
   return `${judge.personality}
-${GUARDRAILS}${durationLine}
+${GUARDRAILS}${durationLine}${lengthGuidance}
+
+${CONTENT_TYPE_GUIDANCE}
 
 You are reviewing this video BEFORE it is published on ${platform.toUpperCase()}.
 The creator's target audience is: ${audience}.
@@ -199,29 +270,28 @@ Your score and feedback must explicitly connect to the platform metrics that mat
 Analyze BOTH:
 1. DELIVERY — how the video is presented: energy, pacing, body language, eye contact,
    on-camera presence, editing rhythm, audio quality, visual style, and on-screen text
-2. CONTENT — what is said: script quality, hook strength, information value,
+2. CONTENT — what is said or shown: script quality, hook strength, information value,
    narrative structure, and call to action
 
 ${judge.momentsInstruction}
+${hashtagInstruction}
 
 You are one of three judges reviewing this video. Each judge must identify a DIFFERENT genuine strength — focus on an aspect the other judges are less likely to notice given your unique lens. Do not manufacture praise; only include positives that are genuinely present in the video.
 
 Provide your analysis in this exact JSON format (no markdown, no backticks):
 {
   "overall": <integer 1-10>,
-  "reaction": "<2-3 sentence gut reaction in first person>",
-  "positives": "<1-2 sentences of genuine praise in your authentic voice — specific, content-focused, never about appearance>",
-  "delivery": "<2-3 sentences on HOW the video is delivered>",
-  "content": "<2-3 sentences on WHAT is said>",
-  "platformFit": "<2 sentences on fit for ${platform} specifically, referencing ${pf.metrics}>",
+  "reaction": "<gut reaction in first person — 1 sentence for short/empty videos, 2-3 for longer ones>",
+  "positives": "<genuine praise in your authentic voice — specific, content-focused, never about appearance. Omit this field entirely if there is nothing genuine to praise>",
+  "delivery": "<how the video is delivered — scale length to video richness>",
+  "content": "<what is said or shown — scale length to video richness>",
+  "platformFit": "<fit for ${platform} specifically, referencing ${pf.metrics}>",
   "moments": [
     { "timestamp": "<exact timestamp you observed>", "type": "peak|drop|note", "note": "<your observation>" }
   ],
   "suggestions": [
-    "<specific actionable improvement tied to ${pf.metrics}, with timestamp reference>",
-    "<specific actionable improvement tied to ${pf.metrics}, with timestamp reference>",
-    "<specific actionable improvement tied to ${pf.metrics}, with timestamp reference>"
-  ]
+    "<specific actionable improvement tied to ${pf.metrics}, with timestamp reference if relevant>"
+  ]${needsHashtags ? `,\n  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>"]` : ""}
 }`;
 }
 
@@ -264,9 +334,6 @@ async function getVideoDuration(filePath) {
 }
 
 // ── Step 1: Build a VideoContext for the TwelveLabs analyze call ─────────────
-// For user-supplied URLs, use { type: "url" } directly — no upload needed.
-// For uploaded files, POST the mp4 directly to TwelveLabs /assets using native
-// fetch with a long timeout, bypassing the SDK's hardcoded 60s limit entirely.
 async function getVideoContext(videoUrl, filePath) {
   if (videoUrl) {
     console.log(`[TwelveLabs] Using supplied URL as video context`);
@@ -296,7 +363,7 @@ async function uploadAssetDirect(filePath) {
     method: "POST",
     headers: { "x-api-key": process.env.TWELVELABS_API_KEY },
     body: form,
-    signal: AbortSignal.timeout(600_000), // 10 min — SDK was hardcoded to 60s
+    signal: AbortSignal.timeout(600_000),
   });
 
   const body = await response.json();
@@ -327,7 +394,6 @@ async function analyzeWithTwelveLabs(videoContext, judge, platform, targetAudien
   console.log(`[TwelveLabs][${judge.id}] result.data type:`, typeof result?.data);
   console.log(`[TwelveLabs][${judge.id}] result.data value:`, JSON.stringify(result?.data)?.slice(0, 500));
 
-  // Parse JSON from TwelveLabs response
   const text = result.data || result || "";
   const clean = String(text).replace(/```json|```/g, "").trim();
   console.log(`[TwelveLabs][${judge.id}] clean text (first 500 chars):`, clean.slice(0, 500));
@@ -395,8 +461,6 @@ Required JSON format:
 }
 
 // ── POST /api/analyze ─────────────────────────────────────────
-// Accepts: multipart form (file upload) or JSON (videoUrl)
-// Returns: { jobId } immediately, then poll /api/status/:jobId
 app.post("/api/analyze", (req, res, next) => {
   console.log(`[upload] Request received — starting multer file parse`);
   upload.single("video")(req, res, (err) => {
@@ -423,16 +487,19 @@ app.post("/api/analyze", (req, res, next) => {
       return res.status(400).json({ error: "Provide a videoUrl or upload a file" });
     }
 
-    // Determine which judges to run
     const selectedJudgeIds = judgesParam
       ? JSON.parse(judgesParam)
       : ["critic", "cool", "dreamer"];
     const selectedJudges = JUDGES.filter((j) => selectedJudgeIds.includes(j.id));
 
-    // Create a job ID and start async processing
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    // Issue #1: Report queue position to client
+    const queuePosition = jobQueue.length + (activeJob !== null ? 1 : 0);
+
     jobs[jobId] = {
-      status: "uploading",
+      status: queuePosition > 0 ? "queued" : "uploading",
+      queuePosition,
       platform,
       targetAudience,
       results: {},
@@ -440,11 +507,13 @@ app.post("/api/analyze", (req, res, next) => {
       createdAt: Date.now(),
     };
 
-    console.log(`[${jobId}] Job created — sending jobId to client`);
-    res.json({ jobId });
+    console.log(`[${jobId}] Job created — queue position: ${queuePosition} — sending jobId to client`);
+    res.json({ jobId, queuePosition });
 
-    // Run the pipeline asynchronously (don't await in request handler)
-    runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges);
+    // Enqueue (don't run immediately if another job is active)
+    enqueueJob(jobId, () =>
+      runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges)
+    );
   } catch (err) {
     console.error(`[analyze] Unexpected error:`, err.message);
     res.status(500).json({ error: err.message });
@@ -456,20 +525,30 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
   console.log(`[${jobId}] Pipeline starting — platform: ${platform}, judges: ${selectedJudges.map(j=>j.id).join(", ")}`);
   let convertedPath = null;
   try {
-    // 1. Convert uploaded file to mp4, then resolve a public URL
     jobs[jobId].status = "uploading";
     console.log(`[${jobId}] Step 1: converting and uploading to TwelveLabs`);
     let videoDuration = null;
     if (filePath) {
       convertedPath = await convertToMp4(filePath);
       videoDuration = await getVideoDuration(convertedPath);
+
+      // Issue #3: Enforce 3-minute limit
+      if (videoDuration && videoDuration.secs > MAX_VIDEO_DURATION_SECS) {
+        jobs[jobId].status = "error";
+        jobs[jobId].error = `Video is ${videoDuration.label} long. PreviewPanel currently supports videos up to 3:00. Please trim your video and try again.`;
+        console.log(`[${jobId}] Rejected — video too long: ${videoDuration.label}`);
+        if (filePath) fs.unlink(filePath, () => {});
+        if (convertedPath) fs.unlink(convertedPath, () => {});
+        return;
+      }
+
       if (videoDuration) jobs[jobId].videoDuration = videoDuration;
     }
     const videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
     jobs[jobId].status = "analyzing";
-    console.log(`[${jobId}] Step 2: running judges sequentially${videoDuration ? ` — duration: ${videoDuration.label}` : ""}`);
+    console.log(`[${jobId}] Step 2: running judges in parallel${videoDuration ? ` — duration: ${videoDuration.label}` : ""}`);
 
-    // 2. Run judges in parallel with per-judge retries
+    // Run judges in parallel with per-judge retries
     async function runJudge(judge) {
       let lastErr;
       for (let attempt = 1; attempt <= 3; attempt++) {
@@ -520,7 +599,6 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
       console.log(`[${jobId}] Pipeline failed — 0/${total} judges succeeded`);
     }
 
-    // 3. Clean up both the original upload and the converted mp4
     if (filePath) fs.unlink(filePath, () => {});
     if (convertedPath) fs.unlink(convertedPath, () => {});
   } catch (err) {
@@ -536,11 +614,17 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
 app.get("/api/status/:jobId", (req, res) => {
   const job = jobs[req.params.jobId];
   if (!job) return res.status(404).json({ error: "Job not found" });
+
+  // Report live queue position
+  const queuePos = jobQueue.findIndex(q => q.jobId === req.params.jobId);
+  const currentQueuePosition = queuePos >= 0 ? queuePos + 1 : (activeJob === req.params.jobId ? 0 : -1);
+
   res.json({
     status: job.status,
     results: job.results,
     error: job.error,
     duration: job.videoDuration?.secs || null,
+    queuePosition: currentQueuePosition,
   });
 });
 
@@ -562,15 +646,11 @@ try {
     process.exit(1);
   });
 
-  // Disable all HTTP-level timeouts — uploads can be large and slow,
-  // and the /api/analyze route returns a jobId immediately anyway.
   server.timeout = 0;
   server.headersTimeout = 600_000;
   server.requestTimeout = 0;
   server.keepAliveTimeout = 30000;
 
-  // Keep-warm ping — Render free tier spins down after 15min of inactivity.
-  // Only runs when RENDER_EXTERNAL_URL is set (i.e. on Render, not locally).
   if (process.env.RENDER_EXTERNAL_URL) {
     const pingUrl = process.env.RENDER_EXTERNAL_URL + "/health";
     setInterval(() => {

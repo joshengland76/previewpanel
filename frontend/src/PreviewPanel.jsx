@@ -30,6 +30,40 @@ const JUDGES = [
     avatar: "/owl-dreamer.png" },
 ];
 
+// ── Issue #9: Local history helpers ──────────────────────────
+const HISTORY_KEY = "pp_history_v1";
+const MAX_HISTORY = 10;
+
+function loadHistory() {
+  try {
+    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+  } catch { return []; }
+}
+
+function saveToHistory(entry) {
+  try {
+    const history = loadHistory();
+    history.unshift(entry);
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
+  } catch {}
+}
+
+// ── Elapsed time hook ─────────────────────────────────────────
+function useElapsed(running) {
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(null);
+  useEffect(() => {
+    if (running) {
+      startRef.current = Date.now();
+      const iv = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+      return () => clearInterval(iv);
+    } else {
+      setElapsed(0);
+    }
+  }, [running]);
+  return elapsed;
+}
+
 function ScoreRing({ score, color, size = 52 }) {
   const r = (size - 8) / 2, circ = 2 * Math.PI * r, fill = ((score || 0) / 10) * circ;
   return (
@@ -129,11 +163,114 @@ function TimelineDots({ points, color }) {
   );
 }
 
-function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
+// ── Issue #6: Animated status messages while waiting ─────────
+const WAITING_MESSAGES = [
+  "The panel is watching your video…",
+  "Judges are taking notes…",
+  "Analyzing every frame…",
+  "This takes a few minutes — hang tight…",
+  "Still going — AI reviews are thorough…",
+  "Your feedback is being prepared…",
+  "Almost certainly still working on it…",
+  "Good things take time — and so does this…",
+];
+
+function useWaitingMessage(isWaiting) {
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    if (!isWaiting) { setIdx(0); return; }
+    const iv = setInterval(() => setIdx(i => (i + 1) % WAITING_MESSAGES.length), 7000);
+    return () => clearInterval(iv);
+  }, [isWaiting]);
+  return WAITING_MESSAGES[idx];
+}
+
+// ── Issue #4: Notification permission priming modal ───────────
+function NotificationPrimer({ onAllow, onSkip }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 100, padding: "20px",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: "18px", padding: "28px 24px",
+        maxWidth: "340px", width: "100%", textAlign: "center",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.2)",
+        animation: "pp-slide 0.25s ease",
+      }}>
+        <div style={{ fontSize: "48px", marginBottom: "12px" }}>🔔</div>
+        <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
+          Don't miss your results
+        </div>
+        <div style={{ fontSize: "14px", color: "#666", lineHeight: "1.6", marginBottom: "20px" }}>
+          AI analysis takes <strong>2–4 minutes</strong>. Since you probably won't stare at the screen the whole time, enable notifications so we can tell you the moment your panel is ready.
+        </div>
+        <button onClick={onAllow} style={{
+          width: "100%", height: "50px", background: B.action, border: "none",
+          borderRadius: "10px", color: "#fff", fontSize: "15px", fontWeight: "800",
+          cursor: "pointer", fontFamily: "Montserrat, sans-serif", marginBottom: "10px",
+        }}>
+          Yes, notify me when it's ready
+        </button>
+        <button onClick={onSkip} style={{
+          width: "100%", height: "40px", background: "transparent", border: "none",
+          color: "#aaa", fontSize: "13px", cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+        }}>
+          I'll wait and watch the screen
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Issue #9: History panel ───────────────────────────────────
+function HistoryPanel({ history, onRestore, onClose }) {
+  if (!history.length) return (
+    <div style={{ padding: "24px", textAlign: "center", color: "#aaa", fontSize: "13px" }}>
+      No previous results yet.
+    </div>
+  );
+  return (
+    <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
+      {history.map((entry, i) => {
+        const plat = PLATFORMS.find(p => p.id === entry.platform) || PLATFORMS[0];
+        const date = new Date(entry.savedAt).toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+        return (
+          <div key={i} onClick={() => onRestore(entry)} style={{
+            background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "12px",
+            padding: "14px 16px", cursor: "pointer", transition: "border-color 0.15s",
+          }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = B.brown}
+            onMouseLeave={e => e.currentTarget.style.borderColor = B.border}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+              <span style={{ fontSize: "11px", fontWeight: "700", color: plat.color }}>{plat.icon} {plat.label}</span>
+              <span style={{ fontSize: "10px", color: "#bbb", marginLeft: "auto" }}>{date}</span>
+            </div>
+            <div style={{ fontSize: "12px", color: "#888", marginBottom: "6px", fontFamily: "'Courier New', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {entry.fileName}
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              {entry.scores.map(s => (
+                <span key={s.id} style={{ fontSize: "11px", fontWeight: "700", color: JUDGES.find(j=>j.id===s.id)?.color || B.brown }}>
+                  {JUDGES.find(j=>j.id===s.id)?.name.split(" ")[1] || s.id}: {s.score}/10
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
   const [open, setOpen] = useState(false);
   const loading = judgeResult?.status === "pending";
   const result = judgeResult?.data;
   const has = !!result && judgeResult?.status === "done";
+  const showHashtags = (platform === "tiktok" || platform === "instagram") && result?.hashtags?.length > 0;
 
   return (
     <div style={{
@@ -141,13 +278,13 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
       borderRadius: "14px", background: "#fff", overflow: "hidden",
       boxShadow: has ? `0 2px 18px ${judge.color}10` : "none", transition: "box-shadow 0.3s",
     }}>
+      {/* ── Issue #8: More obvious expand affordance ── */}
       <div style={{
         background: judge.softBg, padding: "16px 18px",
         display: "flex", alignItems: "center", gap: "12px",
         cursor: has ? "pointer" : "default",
         borderBottom: `1px solid ${judge.color}18`, userSelect: "none",
       }} onClick={() => has && setOpen(o => !o)}>
-        {/* Owl wrapped in softBg container so PNG white box blends in */}
         <div style={{ background: judge.softBg, borderRadius: "8px", flexShrink: 0 }}>
           <img src={judge.avatar} alt={judge.name}
             style={{ width: "52px", height: "52px", objectFit: "contain", display: "block", background: judge.softBg }} />
@@ -155,6 +292,17 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: "800", fontSize: "14px", color: has ? judge.color : "#bbb" }}>{judge.name}</div>
           <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px" }}>{judge.scoreLabel}</div>
+          {/* Issue #8: Explicit tap hint */}
+          {has && !open && (
+            <div style={{ fontSize: "10px", color: judge.color, marginTop: "3px", fontWeight: "700", letterSpacing: "0.04em" }}>
+              TAP TO READ FULL FEEDBACK ↓
+            </div>
+          )}
+          {has && open && (
+            <div style={{ fontSize: "10px", color: "#aaa", marginTop: "3px", fontWeight: "700", letterSpacing: "0.04em" }}>
+              TAP TO COLLAPSE ↑
+            </div>
+          )}
         </div>
         {loading && (
           <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
@@ -168,9 +316,15 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
         )}
         {has && <ScoreRing score={result.overall} color={judge.color} size={52}/>}
         {has && (
-          <span style={{ fontSize: "18px", color: "#555", lineHeight: 1, userSelect: "none" }}>
-            {open ? "▲" : "▼"}
-          </span>
+          <div style={{
+            width: "28px", height: "28px", borderRadius: "50%",
+            background: judge.color, display: "flex", alignItems: "center", justifyContent: "center",
+            flexShrink: 0, boxShadow: `0 2px 6px ${judge.color}50`,
+          }}>
+            <span style={{ fontSize: "13px", color: "#fff", lineHeight: 1, fontWeight: "800" }}>
+              {open ? "▲" : "▼"}
+            </span>
+          </div>
         )}
       </div>
 
@@ -199,7 +353,7 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
           {(result.delivery || result.content) && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
               {[{label:"Delivery — How it's presented", val:result.delivery},
-                {label:"Content — What's said", val:result.content}].map(item => (
+                {label:"Content — What's said or shown", val:result.content}].map(item => (
                 <div key={item.label} style={{ background: judge.softBg, borderRadius: "8px", padding: "12px" }}>
                   <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px", fontWeight: "700" }}>
                     {item.label}
@@ -215,6 +369,23 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
               <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.platformFit}</div>
             </div>
           )}
+
+          {/* Issue #7: Hashtags */}
+          {showHashtags && (
+            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
+              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Suggested Hashtags</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                {result.hashtags.map((tag, i) => (
+                  <span key={i} style={{
+                    background: judge.color + "15", color: judge.color,
+                    border: `1px solid ${judge.color}35`, borderRadius: "99px",
+                    padding: "4px 12px", fontSize: "12px", fontWeight: "700",
+                  }}>#{tag}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {result.moments?.length > 0 && (
             <div style={{ marginBottom: "16px" }}>
               <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "10px", fontWeight: "700" }}>
@@ -251,6 +422,105 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs }) {
           )}
         </div>
       )}
+
+      {/* Issue #8: Bottom tap hint when collapsed and has results */}
+      {has && !open && (
+        <div onClick={() => setOpen(true)} style={{
+          padding: "10px 18px", borderTop: `1px solid ${judge.color}18`,
+          textAlign: "center", cursor: "pointer",
+          fontSize: "11px", fontWeight: "700", color: judge.color,
+          background: judge.softBg, letterSpacing: "0.04em",
+        }}>
+          TAP TO READ FULL FEEDBACK ↓
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Issue #5 & #6: Big waiting banner ────────────────────────
+function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, selectedJudges, jobStatus }) {
+  const waitingMsg = useWaitingMessage(jobStatus === "analyzing" || jobStatus === "uploading" || jobStatus === "queued");
+  const isError = jobStatus === "error";
+
+  const doneCount = Object.values(judgeResults).filter(r => r.status === "done").length;
+  const totalCount = selectedJudges.length;
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const elapsedStr = `${mins}:${secs.toString().padStart(2, "0")}`;
+
+  if (isError) return null; // error shown separately
+
+  if (queuePosition > 0) {
+    return (
+      <div style={{
+        background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "14px",
+        padding: "20px 24px", marginBottom: "18px", textAlign: "center",
+      }}>
+        <div style={{ fontSize: "28px", marginBottom: "8px" }}>⏳</div>
+        <div style={{ fontWeight: "800", fontSize: "16px", color: "#795548", marginBottom: "6px" }}>
+          {queuePosition === 1
+            ? "You're next in line — starting very soon!"
+            : queuePosition <= 3
+            ? "Other videos being processed. You're nearing the top of the queue!"
+            : `Other videos being processed. You're #${queuePosition} in line.`}
+        </div>
+        <div style={{ fontSize: "13px", color: "#888", lineHeight: "1.6" }}>
+          Your analysis will start automatically — no need to do anything.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background: B.lightBrown, border: `1.5px solid ${B.brown}30`, borderRadius: "14px",
+      padding: "20px 24px", marginBottom: "18px",
+    }}>
+      {/* Progress bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+        <div style={{ fontWeight: "800", fontSize: "15px", color: B.action }}>
+          {jobStatus === "uploading" ? "Uploading & converting…" : `${doneCount} of ${totalCount} judges done`}
+        </div>
+        <div style={{ fontSize: "13px", fontWeight: "700", color: B.brown, fontFamily: "'Courier New', monospace" }}>
+          {elapsedStr}
+        </div>
+      </div>
+
+      {/* Judge progress pills */}
+      {jobStatus === "analyzing" && (
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "14px" }}>
+          {selectedJudges.map(jid => {
+            const judge = JUDGES.find(j => j.id === jid);
+            const res = judgeResults[jid];
+            const done = res?.status === "done";
+            return (
+              <div key={jid} style={{
+                display: "flex", alignItems: "center", gap: "6px",
+                padding: "5px 10px", borderRadius: "99px",
+                background: done ? judge.color + "20" : "#fff",
+                border: `1.5px solid ${done ? judge.color : B.border}`,
+                fontSize: "12px", fontWeight: "700", color: done ? judge.color : "#bbb",
+              }}>
+                <span>{done ? "✓" : "…"}</span>
+                {judge.name}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Rotating message */}
+      <div style={{
+        fontSize: "13px", color: B.body, fontStyle: "italic",
+        lineHeight: "1.6", transition: "opacity 0.5s",
+      }}>
+        {waitingMsg}
+      </div>
+
+      <div style={{ marginTop: "10px", fontSize: "11px", color: "#aaa" }}>
+        Analysis typically takes 2–4 minutes. You can leave this screen — we'll notify you when it's ready.
+      </div>
     </div>
   );
 }
@@ -267,12 +537,19 @@ export default function PreviewPanel() {
   const [statusMessage, setStatusMessage] = useState("");
   const [videoDurationSecs, setVideoDurationSecs] = useState(null);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [showNotifPrimer, setShowNotifPrimer] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [history, setHistory] = useState(loadHistory);
+  const [queuePosition, setQueuePosition] = useState(0);
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
   const notifiedRef = useRef(false);
+  const savedRef = useRef(false);
   const plat = PLATFORMS.find(p => p.id === platform);
 
-  // Capture Add-to-Home-Screen prompt (Android Chrome)
+  const isProcessing = jobStatus === "uploading" || jobStatus === "analyzing" || jobStatus === "queued";
+  const elapsed = useElapsed(isProcessing);
+
   useEffect(() => {
     const handler = e => { e.preventDefault(); setDeferredPrompt(e); };
     window.addEventListener("beforeinstallprompt", handler);
@@ -290,27 +567,46 @@ export default function PreviewPanel() {
         setJobStatus(data.status);
         setJudgeResults(data.results || {});
         if (data.duration) setVideoDurationSecs(data.duration);
-        if (data.status === "uploading") {
-          setStatusMessage("Converting and uploading your video to TwelveLabs…");
+        if (typeof data.queuePosition === "number") setQueuePosition(data.queuePosition);
+
+        if (data.status === "queued") {
+          setStatusMessage(`Waiting in queue — position #${data.queuePosition}…`);
+        } else if (data.status === "uploading") {
+          setStatusMessage("Converting and uploading your video…");
         } else if (data.status === "analyzing") {
           const done = Object.values(data.results||{}).filter(r=>r.status==="done").length;
           const total = Object.keys(data.results||{}).length;
-          setStatusMessage(`Judges watching your video — ${done} of ${total} reviews complete…`);
+          setStatusMessage(`${done} of ${total} judges done…`);
         } else if (data.status === "done" || data.status === "partial" || data.status === "error") {
           clearInterval(pollRef.current);
-          if (data.status === "done") {
-            setStatusMessage("Analysis complete.");
+          if (data.status === "done" || data.status === "partial") {
+            const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
+            const total = Object.keys(data.results||{}).length;
+            setStatusMessage(data.status === "done" ? "Analysis complete!" : `${succeeded} of ${total} judges completed.`);
+
+            // Notification
             if (!notifiedRef.current && Notification?.permission === "granted") {
               notifiedRef.current = true;
               new Notification("PreviewPanel 🦉", { body: "Your results are ready!" });
             }
-          } else if (data.status === "partial") {
-            const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
-            const total = Object.keys(data.results||{}).length;
-            setStatusMessage(`${succeeded} of ${total} judges completed.`);
-            if (!notifiedRef.current && Notification?.permission === "granted") {
-              notifiedRef.current = true;
-              new Notification("PreviewPanel 🦉", { body: "Your PreviewPanel results are ready!" });
+
+            // Issue #9: Auto-save to history
+            if (!savedRef.current) {
+              savedRef.current = true;
+              const scores = Object.entries(data.results || {})
+                .filter(([,v]) => v.status === "done")
+                .map(([id, v]) => ({ id, score: v.data?.overall }));
+              const entry = {
+                platform,
+                fileName: videoFile?.name || "video",
+                savedAt: Date.now(),
+                scores,
+                results: data.results,
+                videoDuration: data.duration,
+                selectedJudges,
+              };
+              saveToHistory(entry);
+              setHistory(loadHistory());
             }
           } else {
             setStatusMessage(`Error: ${data.error}`);
@@ -326,16 +622,23 @@ export default function PreviewPanel() {
   const handleSubmit = async () => {
     if (!videoFile || selectedJudges.length === 0) return;
 
-    // Request notification permission so we can alert when analysis finishes
+    // Issue #4: Show notification primer before starting
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
-      Notification.requestPermission();
+      setShowNotifPrimer(true);
+      return;
     }
+    startAnalysis();
+  };
 
+  const startAnalysis = async () => {
+    setShowNotifPrimer(false);
     notifiedRef.current = false;
+    savedRef.current = false;
     setStep(2);
     setJudgeResults({});
     setJobStatus("uploading");
-    setStatusMessage("Your video is being analyzed — this typically takes 2–4 minutes. We're converting your video, uploading it to TwelveLabs, and running three independent AI reviews.");
+    setQueuePosition(0);
+    setStatusMessage("Uploading your video…");
     const pending = {};
     selectedJudges.forEach(id => { pending[id] = { status: "pending" }; });
     setJudgeResults(pending);
@@ -349,17 +652,39 @@ export default function PreviewPanel() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setJobId(data.jobId);
+      if (data.queuePosition > 0) {
+        setJobStatus("queued");
+        setQueuePosition(data.queuePosition);
+      }
     } catch (err) {
       setJobStatus("error");
       setStatusMessage(`Failed: ${err.message}`);
     }
   };
 
+  const handleAllowNotifications = async () => {
+    await Notification.requestPermission();
+    startAnalysis();
+  };
+
   const reset = () => {
     clearInterval(pollRef.current);
     setStep(1); setJobId(null); setJobStatus(null);
-    setJudgeResults({}); setVideoFile(null); setStatusMessage(""); setVideoDurationSecs(null);
-    notifiedRef.current = false;
+    setJudgeResults({}); setVideoFile(null); setStatusMessage("");
+    setVideoDurationSecs(null); setQueuePosition(0);
+    notifiedRef.current = false; savedRef.current = false;
+  };
+
+  // Issue #9: Restore from history
+  const restoreFromHistory = (entry) => {
+    setShowHistory(false);
+    setPlatform(entry.platform);
+    setSelectedJudges(entry.selectedJudges || ["critic","cool","dreamer"]);
+    setJudgeResults(entry.results || {});
+    if (entry.videoDuration) setVideoDurationSecs(entry.videoDuration);
+    setJobStatus("done");
+    setStatusMessage("Restored from history.");
+    setStep(2);
   };
 
   const doneResults = Object.values(judgeResults).filter(r => r.status === "done" && r.data?.overall);
@@ -397,20 +722,58 @@ export default function PreviewPanel() {
         }
       `}</style>
 
+      {/* Issue #4: Notification primer modal */}
+      {showNotifPrimer && (
+        <NotificationPrimer
+          onAllow={handleAllowNotifications}
+          onSkip={startAnalysis}
+        />
+      )}
+
       <main className="pp-main" style={{ maxWidth: "740px", margin: "0 auto", padding: "32px 20px 60px" }}>
 
         {/* ── INPUT SCREEN ── */}
         {step === 1 && (
           <div className="pp-content-pad" style={{ animation: "pp-slide 0.35s ease" }}>
 
-            {/* Logo + BETA — centered, floats on page background, no container */}
-            <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px" }}>
+            {/* Logo + BETA + History button */}
+            <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px", position: "relative" }}>
               <img src="/owl-logo.png" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
               <div style={{ marginTop: "4px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
               </div>
+              {/* Issue #9: History button */}
+              {history.length > 0 && (
+                <button onClick={() => setShowHistory(v => !v)} style={{
+                  position: "absolute", top: "10px", right: "0",
+                  background: "#fff", border: `1.5px solid ${B.border}`,
+                  borderRadius: "8px", padding: "6px 10px",
+                  fontSize: "11px", fontWeight: "700", color: B.brown,
+                  cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+                }}>
+                  📋 History ({history.length})
+                </button>
+              )}
             </div>
+
+            {/* History panel */}
+            {showHistory && (
+              <div style={{
+                border: `1.5px solid ${B.border}`, borderRadius: "14px",
+                background: "#fff", marginBottom: "16px",
+                animation: "pp-fade 0.2s ease",
+              }}>
+                <div style={{
+                  padding: "14px 16px", borderBottom: `1px solid ${B.border}`,
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                }}>
+                  <div style={{ fontWeight: "800", fontSize: "14px", color: B.black }}>Recent Results</div>
+                  <button onClick={() => setShowHistory(false)} style={{ background: "none", border: "none", fontSize: "18px", color: "#aaa", cursor: "pointer" }}>×</button>
+                </div>
+                <HistoryPanel history={history} onRestore={restoreFromHistory} onClose={() => setShowHistory(false)} />
+              </div>
+            )}
 
             {/* 1 — Video upload */}
             <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
@@ -439,7 +802,8 @@ export default function PreviewPanel() {
                   <div style={{ padding: "12px 20px" }}>
                     <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
                     <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>{plat.hint}</div>
+                    {/* Issue #3: Show limit in UI */}
+                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · {plat.hint}</div>
                   </div>
                 )}
               </div>
@@ -511,16 +875,21 @@ export default function PreviewPanel() {
               </div>
             </div>
 
-            {/* 5 — CTA (sticky on mobile) */}
+            {/* 5 — CTA */}
             <div className="pp-sticky-wrap">
               <button className="pp-btn" onClick={handleSubmit}
                 disabled={!videoFile || selectedJudges.length === 0}
                 style={{ width: "100%", height: "56px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "16px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
                 Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
               </button>
+              {videoFile && (
+                <div style={{ textAlign: "center", marginTop: "8px", fontSize: "11px", color: "#aaa" }}>
+                  ⏱ Analysis takes 2–4 minutes — we'll notify you when it's ready
+                </div>
+              )}
             </div>
 
-            {/* Add to Home Screen prompt (Android Chrome) */}
+            {/* Add to Home Screen prompt */}
             {deferredPrompt && (
               <div style={{ marginTop: "12px", padding: "10px 14px", background: "#fff", border: `1px solid ${B.border}`, borderRadius: "10px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <span style={{ fontSize: "18px" }}>📱</span>
@@ -543,10 +912,10 @@ export default function PreviewPanel() {
         {step === 2 && (
           <div style={{ animation: "pp-slide 0.3s ease" }}>
 
-            {/* Top bar: logo left, New Video right (only when finished) */}
+            {/* Top bar */}
             <div style={{ display: "flex", alignItems: "center", marginBottom: "16px" }}>
               <img src="/owl-logo.png" alt="PreviewPanel" style={{ height: "36px", width: "auto" }} />
-              {isFinished && (
+              {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{
                   marginLeft: "auto", background: "transparent",
                   border: `1.5px solid ${B.border}`, borderRadius: "8px",
@@ -556,20 +925,54 @@ export default function PreviewPanel() {
               )}
             </div>
 
-            {/* Status row */}
-            <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
-              <div style={{ padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", color: plat.color, flexShrink: 0 }}>
-                {plat.icon} {plat.label}
-              </div>
-              {videoFile && (
-                <div style={{ padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: "#888", fontFamily: "'Courier New', monospace" }}>
-                  {videoFile.name}
+            {/* Issue #5 & #6: Prominent waiting banner */}
+            {isProcessing && (
+              <WaitingBanner
+                elapsed={elapsed}
+                statusMessage={statusMessage}
+                queuePosition={queuePosition}
+                judgeResults={judgeResults}
+                selectedJudges={selectedJudges}
+                jobStatus={jobStatus}
+              />
+            )}
+
+            {/* Issue #6: Error state — clear message */}
+            {jobStatus === "error" && (
+              <div style={{
+                background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "14px",
+                padding: "20px 24px", marginBottom: "18px",
+              }}>
+                <div style={{ fontWeight: "800", fontSize: "15px", color: "#C62828", marginBottom: "6px" }}>
+                  ⚠️ Something went wrong
                 </div>
-              )}
-              <span style={{ fontSize: "12px", color: jobStatus === "error" ? "#E53935" : "#888", fontStyle: "italic", lineHeight: "1.55" }}>
-                {statusMessage}
-              </span>
-            </div>
+                <div style={{ fontSize: "13px", color: "#B71C1C", lineHeight: "1.6" }}>
+                  {statusMessage.replace("Error: ", "")}
+                </div>
+                <button onClick={reset} style={{
+                  marginTop: "14px", background: "#C62828", color: "#fff", border: "none",
+                  borderRadius: "8px", padding: "10px 20px", fontSize: "13px", fontWeight: "700",
+                  cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+                }}>
+                  ← Try Again
+                </button>
+              </div>
+            )}
+
+            {/* Platform + file tags (only when finished) */}
+            {isFinished && (
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
+                <div style={{ padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", color: plat.color, flexShrink: 0 }}>
+                  {plat.icon} {plat.label}
+                </div>
+                {videoFile && (
+                  <div style={{ padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: "#888", fontFamily: "'Courier New', monospace" }}>
+                    {videoFile.name}
+                  </div>
+                )}
+                <span style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}>{statusMessage}</span>
+              </div>
+            )}
 
             {/* TwelveLabs attribution */}
             <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "8px", padding: "10px 16px", fontSize: "11px", color: "#aaa", display: "flex", alignItems: "center", gap: "8px", marginBottom: "18px" }}>
@@ -597,7 +1000,7 @@ export default function PreviewPanel() {
 
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               {selectedJudges.map(jid => (
-                <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs}/>
+                <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs} platform={platform}/>
               ))}
             </div>
           </div>
