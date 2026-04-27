@@ -112,6 +112,9 @@ function anthropic() {
 // ── In-memory job store ───────────────────────────────────────
 const jobs = {};
 
+// ── Submission log (in-memory; max 500; cleared on restart) ──
+const submissionLog = [];
+
 // ── Shared guardrails injected into every judge prompt ────────
 const GUARDRAILS = `
 STRICT EXCLUSIONS — you must NEVER suggest changes related to physical appearance, attractiveness, body type, clothing that reveals skin, or any factor outside the creator's direct control over their content. Focus exclusively on: script structure, hook strength, pacing, editing choices, audio quality, lighting choices, on-screen text, thumbnails, titles, and delivery style.
@@ -510,6 +513,8 @@ app.post("/api/analyze", (req, res, next) => {
       results: {},
       error: null,
       createdAt: Date.now(),
+      ip: ((req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown") + "").split(",")[0].trim(),
+      fileSizeMB: req.file ? parseFloat((req.file.size / 1024 / 1024).toFixed(2)) : null,
     };
 
     console.log(`[${jobId}] Job created — queue position: ${queuePosition} — sending jobId to client`);
@@ -528,13 +533,47 @@ app.post("/api/analyze", (req, res, next) => {
 // ── Background pipeline ───────────────────────────────────────
 async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges) {
   console.log(`[${jobId}] Pipeline starting — platform: ${platform}, judges: ${selectedJudges.map(j=>j.id).join(", ")}`);
+  const t_start = Date.now();
+  const timings = { conversionMs: null, uploadMs: null, judges: {} };
   let convertedPath = null;
+
+  function recordSubmission(finalStatus) {
+    const job = jobs[jobId] || {};
+    const scores = {};
+    let scoreSum = 0, scoreCount = 0;
+    for (const [id, r] of Object.entries(job.results || {})) {
+      if (r.status === "done" && r.data?.overall) {
+        scores[id] = r.data.overall;
+        scoreSum += r.data.overall;
+        scoreCount++;
+      }
+    }
+    timings.totalMs = Date.now() - t_start;
+    const entry = {
+      jobId,
+      timestamp: new Date(t_start).toISOString(),
+      ip: job.ip || "unknown",
+      platform,
+      fileSizeMB: job.fileSizeMB || null,
+      videoDurationSecs: job.videoDuration?.secs || null,
+      status: finalStatus,
+      timings: { ...timings },
+      scores,
+      avgScore: scoreCount > 0 ? parseFloat((scoreSum / scoreCount).toFixed(1)) : null,
+    };
+    submissionLog.unshift(entry);
+    if (submissionLog.length > 500) submissionLog.length = 500;
+    console.log(`[${jobId}] [log] ${JSON.stringify(entry)}`);
+  }
+
   try {
     jobs[jobId].status = "uploading";
     console.log(`[${jobId}] Step 1: converting and uploading to TwelveLabs`);
     let videoDuration = null;
     if (filePath) {
+      const t_conv = Date.now();
       convertedPath = await convertToMp4(filePath);
+      timings.conversionMs = Date.now() - t_conv;
       videoDuration = await getVideoDuration(convertedPath);
 
       // Issue #3: Enforce 3-minute limit
@@ -544,17 +583,21 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
         console.log(`[${jobId}] Rejected — video too long: ${videoDuration.label}`);
         if (filePath) fs.unlink(filePath, () => {});
         if (convertedPath) fs.unlink(convertedPath, () => {});
+        recordSubmission("rejected_too_long");
         return;
       }
 
       if (videoDuration) jobs[jobId].videoDuration = videoDuration;
     }
+    const t_upload = Date.now();
     const videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
+    timings.uploadMs = Date.now() - t_upload;
     jobs[jobId].status = "analyzing";
     console.log(`[${jobId}] Step 2: running judges in parallel${videoDuration ? ` — duration: ${videoDuration.label}` : ""}`);
 
     // Run judges in parallel with per-judge retries
     async function runJudge(judge) {
+      const t_judge = Date.now();
       let lastErr;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
@@ -564,6 +607,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
           }
           const result = await analyzeWithTwelveLabs(videoContext, judge, platform, targetAudience, videoDuration);
           jobs[jobId].results[judge.id] = { status: "done", data: result };
+          timings.judges[judge.id] = Date.now() - t_judge;
           console.log(`[${jobId}] Judge ${judge.id} complete — stored:`, JSON.stringify(jobs[jobId].results[judge.id]).slice(0, 300));
           return;
         } catch (err) {
@@ -573,6 +617,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
           console.error(`[${jobId}] Judge ${judge.id} attempt ${attempt} failed: ${detail}`);
         }
       }
+      timings.judges[judge.id] = Date.now() - t_judge;
       let detail = lastErr.message;
       try { detail = JSON.parse(lastErr.message.match(/\{[\s\S]*\}/)?.[0] ?? "{}").message || detail; } catch {}
       jobs[jobId].results[judge.id] = {
@@ -594,14 +639,17 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     if (succeeded === total) {
       jobs[jobId].status = "done";
       console.log(`[${jobId}] Pipeline complete — all ${total} judges succeeded`);
+      recordSubmission("done");
     } else if (succeeded > 0) {
       jobs[jobId].status = "partial";
       console.log(`[${jobId}] Pipeline complete — ${succeeded}/${total} judges succeeded`);
+      recordSubmission("partial");
     } else {
       const errors = selectedJudges.map(j => jobs[jobId].results[j.id]?.error).filter(Boolean);
       jobs[jobId].status = "error";
       jobs[jobId].error = errors[0] ?? "All judges failed — check TwelveLabs API status";
       console.log(`[${jobId}] Pipeline failed — 0/${total} judges succeeded`);
+      recordSubmission("error");
     }
 
     if (filePath) fs.unlink(filePath, () => {});
@@ -612,6 +660,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     console.error(`[${jobId}] Pipeline error: ${err.message}`, err);
     if (filePath) fs.unlink(filePath, () => {});
     if (convertedPath) fs.unlink(convertedPath, () => {});
+    recordSubmission("error");
   }
 }
 
@@ -631,6 +680,104 @@ app.get("/api/status/:jobId", (req, res) => {
     duration: job.videoDuration?.secs || null,
     queuePosition: currentQueuePosition,
   });
+});
+
+// ── GET /admin/logs — submission dashboard ────────────────────
+app.get("/admin/logs", (req, res) => {
+  const secret = process.env.ADMIN_SECRET;
+  if (secret && req.query.secret !== secret) {
+    return res.status(401).send("Unauthorized — add ?secret=YOUR_ADMIN_SECRET to the URL");
+  }
+
+  const fmt = ms => ms != null ? `${(ms / 1000).toFixed(1)}s` : "—";
+  const fmtDur = secs => secs != null
+    ? `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, "0")}`
+    : "—";
+
+  const totalSubmissions = submissionLog.length;
+  const completed = submissionLog.filter(e => e.status === "done" || e.status === "partial").length;
+  const avgTotal = submissionLog.filter(e => e.timings.totalMs).reduce((s, e, _, a) => s + e.timings.totalMs / a.length, 0);
+  const allScores = submissionLog.flatMap(e => Object.values(e.scores));
+  const overallAvg = allScores.length ? (allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(1) : "—";
+
+  const platColor = p => p === "youtube" ? "#CC0000" : p === "tiktok" ? "#555" : "#C13584";
+  const platBg = p => p === "youtube" ? "#CC000018" : p === "tiktok" ? "#55555518" : "#C1358418";
+  const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s === "rejected_too_long" ? "#795548" : "#C62828";
+
+  const rows = submissionLog.map(e => {
+    const judgeCells = ["critic", "cool", "dreamer"].map(id => {
+      const score = e.scores[id];
+      const t = e.timings.judges[id];
+      return `<td style="text-align:center;white-space:nowrap">${score != null ? `<strong>${score}</strong>` : "—"}${t != null ? `<br><span style="color:#bbb;font-size:10px">${fmt(t)}</span>` : ""}</td>`;
+    }).join("");
+
+    const scoreColor = e.avgScore >= 7 ? "#43A047" : e.avgScore >= 5 ? "#FB8C00" : "#E53935";
+    const date = new Date(e.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+
+    return `<tr>
+      <td style="color:#999;font-size:11px;white-space:nowrap">${date}</td>
+      <td style="font-family:monospace;font-size:11px;color:#666">${e.ip}</td>
+      <td><span style="background:${platBg(e.platform)};color:${platColor(e.platform)};padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap">${e.platform}</span></td>
+      <td style="text-align:right;white-space:nowrap">${e.fileSizeMB != null ? e.fileSizeMB + " MB" : "—"}</td>
+      <td style="text-align:right;font-family:monospace">${fmtDur(e.videoDurationSecs)}</td>
+      <td><strong style="color:${statusColor(e.status)}">${e.status}</strong></td>
+      <td style="text-align:right;font-family:monospace;font-weight:700">${fmt(e.timings.totalMs)}</td>
+      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.conversionMs)}</td>
+      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.uploadMs)}</td>
+      ${judgeCells}
+      <td style="text-align:center;font-size:18px;font-weight:800;color:${scoreColor}">${e.avgScore ?? "—"}</td>
+    </tr>`;
+  }).join("\n");
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PreviewPanel — Submission Log</title>
+  <meta http-equiv="refresh" content="30">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #FAFAFA; color: #212121; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 4px; color: #4E342E; }
+    .meta { font-size: 12px; color: #999; margin-bottom: 16px; }
+    .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+    .stat { background: #fff; border: 1px solid #E0D6D3; border-radius: 10px; padding: 12px 18px; min-width: 120px; }
+    .stat-val { font-size: 22px; font-weight: 800; color: #4E342E; }
+    .stat-label { font-size: 11px; color: #999; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 8px rgba(0,0,0,0.07); font-size: 13px; min-width: 900px; }
+    th { background: #EFEBE9; padding: 10px 12px; text-align: left; font-size: 10px; font-weight: 700; color: #795548; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+    td { padding: 9px 12px; border-top: 1px solid #F5F0EE; vertical-align: middle; }
+    tr:hover td { background: #FDFAF9; }
+    .empty { text-align: center; padding: 48px; color: #bbb; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>🦉 PreviewPanel — Submission Log</h1>
+  <div class="meta">${totalSubmissions} submission${totalSubmissions !== 1 ? "s" : ""} · auto-refreshes every 30s · resets on server restart</div>
+  <div class="stats">
+    <div class="stat"><div class="stat-val">${totalSubmissions}</div><div class="stat-label">Total</div></div>
+    <div class="stat"><div class="stat-val">${completed}</div><div class="stat-label">Completed</div></div>
+    <div class="stat"><div class="stat-val">${totalSubmissions ? Math.round((completed / totalSubmissions) * 100) + "%" : "—"}</div><div class="stat-label">Success Rate</div></div>
+    <div class="stat"><div class="stat-val">${avgTotal ? fmt(avgTotal) : "—"}</div><div class="stat-label">Avg Total Time</div></div>
+    <div class="stat"><div class="stat-val">${overallAvg}</div><div class="stat-label">Avg Score</div></div>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>IP</th><th>Platform</th><th>File</th><th>Duration</th>
+        <th>Status</th><th>Total</th><th>Convert</th><th>Upload</th>
+        <th>Critic</th><th>Trend</th><th>Dream</th><th>Avg</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows || `<tr><td colspan="13" class="empty">No submissions yet</td></tr>`}
+    </tbody>
+  </table>
+  </div>
+</body>
+</html>`);
 });
 
 // ── Health check ──────────────────────────────────────────────
