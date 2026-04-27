@@ -90,18 +90,37 @@ function enqueueJob(jobId, fn) {
   drainQueue();
 }
 
+const PIPELINE_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes hard cap per job
+
 async function drainQueue() {
   if (activeJob !== null) return; // already running something
   const next = jobQueue.shift();
   if (!next) return;
   activeJob = next.jobId;
   console.log(`[queue] Starting job ${next.jobId} — queue depth after: ${jobQueue.length}`);
+
+  let timeoutHandle;
+  const pipelineTimeout = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error("PIPELINE_TIMEOUT"));
+    }, PIPELINE_TIMEOUT_MS);
+  });
+
   try {
-    await next.fn();
+    await Promise.race([next.fn(), pipelineTimeout]);
   } catch (err) {
-    console.error(`[queue] Job ${next.jobId} threw uncaught error:`, err.message);
+    const isTimeout = err.message === "PIPELINE_TIMEOUT";
+    console.error(`[queue] Job ${next.jobId} ${isTimeout ? "timed out after 8 minutes" : "threw: " + err.message}`);
+    if (jobs[next.jobId] && !["done", "partial"].includes(jobs[next.jobId].status)) {
+      jobs[next.jobId].status = "error";
+      jobs[next.jobId].error = isTimeout
+        ? "Analysis timed out after 8 minutes. Please try again — this can happen during high API load."
+        : err.message;
+    }
   } finally {
+    clearTimeout(timeoutHandle);
     activeJob = null;
+    console.log(`[queue] Job ${next.jobId} released queue — ${jobQueue.length} job(s) waiting`);
     drainQueue(); // pick up next job
   }
 }
@@ -564,10 +583,28 @@ async function analyzeWithTwelveLabs(videoContext, judge, platform, targetAudien
 
   console.log(`[TwelveLabs] Starting analysis — judge: ${judge.id}, context: ${JSON.stringify(videoContext)}`);
   const t0 = Date.now();
-  const result = await tl().analyze(
-    { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
-    { timeoutInSeconds: 600 }
-  );
+
+  const JUDGE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per judge attempt
+  let judgeTimeoutHandle;
+  const judgeTimeout = new Promise((_, reject) => {
+    judgeTimeoutHandle = setTimeout(
+      () => reject(new Error(`TwelveLabs analyze timed out after 5 minutes (judge: ${judge.id})`)),
+      JUDGE_TIMEOUT_MS
+    );
+  });
+
+  let result;
+  try {
+    result = await Promise.race([
+      tl().analyze(
+        { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
+        { timeoutInSeconds: 300 }
+      ),
+      judgeTimeout,
+    ]);
+  } finally {
+    clearTimeout(judgeTimeoutHandle);
+  }
   console.log(`[TwelveLabs] Analysis done in ${((Date.now()-t0)/1000).toFixed(1)}s — judge: ${judge.id}`);
   console.log(`[TwelveLabs][${judge.id}] Raw result object keys:`, Object.keys(result ?? {}));
   console.log(`[TwelveLabs][${judge.id}] result.data type:`, typeof result?.data);
@@ -702,6 +739,11 @@ app.post("/api/analyze", (req, res, next) => {
 });
 
 // ── Background pipeline ───────────────────────────────────────
+function isJobCancelled(jobId) {
+  // True if the pipeline timeout fired externally before we got here
+  return jobs[jobId]?.status === "error";
+}
+
 async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges) {
   console.log(`[${jobId}] Pipeline starting — platform: ${platform}, judges: ${selectedJudges.map(j=>j.id).join(", ")}`);
   const t_start = Date.now();
@@ -774,6 +816,12 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     const t_upload = Date.now();
     const videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
     timings.uploadMs = Date.now() - t_upload;
+    if (isJobCancelled(jobId)) {
+      console.log(`[${jobId}] Job was cancelled by pipeline timeout before judges started — aborting`);
+      if (filePath) fs.unlink(filePath, () => {});
+      if (convertedPath) fs.unlink(convertedPath, () => {});
+      return;
+    }
     jobs[jobId].status = "analyzing";
     console.log(`[${jobId}] Step 2: running judges in parallel${videoDuration ? ` — duration: ${videoDuration.label}` : ""}`);
 
