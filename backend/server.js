@@ -304,19 +304,47 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
 }
 
 // ── ffmpeg conversion ─────────────────────────────────────────────────────────
+async function probeCodecs(filePath) {
+  try {
+    const { stdout: vout } = await execFileAsync(FFPROBE, [
+      "-v", "quiet", "-select_streams", "v:0",
+      "-show_entries", "stream=codec_name", "-of", "csv=p=0", filePath,
+    ]);
+    const { stdout: aout } = await execFileAsync(FFPROBE, [
+      "-v", "quiet", "-select_streams", "a:0",
+      "-show_entries", "stream=codec_name", "-of", "csv=p=0", filePath,
+    ]);
+    return { video: vout.trim(), audio: aout.trim() };
+  } catch {
+    return { video: null, audio: null };
+  }
+}
+
 async function convertToMp4(inputPath) {
   const outputPath = inputPath + ".mp4";
-  console.log(`[ffmpeg] Converting ${inputPath} → ${outputPath}`);
   const t0 = Date.now();
-  await execFileAsync(FFMPEG, [
-    "-i", inputPath,
-    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
-    "-vf", "scale=854:-2",
-    "-c:a", "aac", "-b:a", "96k",
-    "-movflags", "+faststart",
-    "-threads", "1",
-    "-y", outputPath,
-  ]);
+
+  const { video: vcodec, audio: acodec } = await probeCodecs(inputPath);
+  const copyVideo = vcodec === "h264";
+  const copyAudio = acodec === "aac";
+
+  const args = ["-i", inputPath];
+  if (copyVideo) {
+    args.push("-c:v", "copy");
+  } else {
+    args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2");
+  }
+  if (copyAudio) {
+    args.push("-c:a", "copy");
+  } else {
+    args.push("-c:a", "aac", "-b:a", "96k");
+  }
+  args.push("-movflags", "+faststart", "-threads", "1", "-y", outputPath);
+
+  const mode = copyVideo && copyAudio ? "stream copy" : copyVideo ? "copy video, re-encode audio" : "full re-encode";
+  console.log(`[ffmpeg] ${mode} — video: ${vcodec || "?"}, audio: ${acodec || "?"}`);
+
+  await execFileAsync(FFMPEG, args);
   const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(2);
   console.log(`[ffmpeg] Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — output: ${sizeMB} MB`);
   return outputPath;
@@ -777,7 +805,7 @@ app.get("/admin/logs", (req, res) => {
     <thead>
       <tr>
         <th>Time</th><th>IP</th><th>Platform</th><th>File</th><th>Duration</th>
-        <th>Status</th><th>Total</th><th>Convert</th><th>Upload</th>
+        <th>Status</th><th>Total</th><th>ffmpeg</th><th>TL Upload</th>
         <th>Critic</th><th>Trend</th><th>Dream</th><th>Avg</th>
       </tr>
     </thead>
