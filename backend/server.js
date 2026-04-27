@@ -23,7 +23,10 @@ import { promisify } from "util";
 import { fileURLToPath } from "url";
 import Anthropic from "@anthropic-ai/sdk";
 import { TwelveLabs } from "twelvelabs-js";
+import pg from "pg";
 import "dotenv/config";
+
+const { Pool } = pg;
 
 const execFileAsync = promisify(execFile);
 const FFMPEG = fs.existsSync("/opt/homebrew/bin/ffmpeg")
@@ -112,18 +115,60 @@ function anthropic() {
 // ── In-memory job store ───────────────────────────────────────
 const jobs = {};
 
-// ── Submission log — persisted to disk as NDJSON ─────────────
+// ── Submission log — PostgreSQL if DATABASE_URL is set, else file ────────────
 const SUBMISSIONS_PATH = path.join(__dirname, "submissions.ndjson");
+let pgPool = null;
 
-function loadSubmissionLog() {
+async function initDb() {
+  if (!process.env.DATABASE_URL) {
+    console.log("[db] No DATABASE_URL — using file-based submission log");
+    return;
+  }
+  try {
+    pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS submissions (
+        id SERIAL PRIMARY KEY,
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    console.log("[db] PostgreSQL connected — submissions table ready");
+  } catch (err) {
+    console.error("[db] Failed to connect to PostgreSQL:", err.message);
+    pgPool = null;
+  }
+}
+
+async function loadSubmissionLog() {
+  if (pgPool) {
+    try {
+      const result = await pgPool.query("SELECT data FROM submissions ORDER BY created_at DESC LIMIT 500");
+      return result.rows.map(r => r.data);
+    } catch (err) {
+      console.error("[db] Failed to load submissions:", err.message);
+      return [];
+    }
+  }
   try {
     const lines = fs.readFileSync(SUBMISSIONS_PATH, "utf8").split("\n").filter(Boolean);
-    return lines.map(l => JSON.parse(l)).reverse(); // newest first
+    return lines.map(l => JSON.parse(l)).reverse();
   } catch { return []; }
 }
 
-const submissionLog = loadSubmissionLog();
-console.log(`[startup] Submission log loaded — ${submissionLog.length} entries from disk`);
+async function saveSubmission(entry) {
+  if (pgPool) {
+    try {
+      await pgPool.query("INSERT INTO submissions (data) VALUES ($1)", [entry]);
+      return;
+    } catch (err) {
+      console.error("[db] Failed to save submission:", err.message);
+    }
+  }
+  try { fs.appendFileSync(SUBMISSIONS_PATH, JSON.stringify(entry) + "\n"); } catch (e) { console.warn("[log] Failed to write submission to disk:", e.message); }
+}
+
+const submissionLog = [];
 
 // ── Shared guardrails injected into every judge prompt ────────
 const GUARDRAILS = `
@@ -575,7 +620,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
   const timings = { conversionMs: null, uploadMs: null, judges: {} };
   let convertedPath = null;
 
-  function recordSubmission(finalStatus) {
+  async function recordSubmission(finalStatus) {
     const job = jobs[jobId] || {};
     const scores = {};
     let scoreSum = 0, scoreCount = 0;
@@ -601,7 +646,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     };
     submissionLog.unshift(entry);
     if (submissionLog.length > 500) submissionLog.length = 500;
-    try { fs.appendFileSync(SUBMISSIONS_PATH, JSON.stringify(entry) + "\n"); } catch (e) { console.warn("[log] Failed to write submission to disk:", e.message); }
+    await saveSubmission(entry);
     console.log(`[${jobId}] [log] ${JSON.stringify(entry)}`);
   }
 
@@ -622,7 +667,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
         console.log(`[${jobId}] Rejected — video too long: ${videoDuration.label}`);
         if (filePath) fs.unlink(filePath, () => {});
         if (convertedPath) fs.unlink(convertedPath, () => {});
-        recordSubmission("rejected_too_long");
+        await recordSubmission("rejected_too_long");
         return;
       }
 
@@ -632,7 +677,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
         console.log(`[${jobId}] Rejected — video too short: ${videoDuration.label}`);
         if (filePath) fs.unlink(filePath, () => {});
         if (convertedPath) fs.unlink(convertedPath, () => {});
-        recordSubmission("rejected_too_short");
+        await recordSubmission("rejected_too_short");
         return;
       }
 
@@ -688,17 +733,17 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     if (succeeded === total) {
       jobs[jobId].status = "done";
       console.log(`[${jobId}] Pipeline complete — all ${total} judges succeeded`);
-      recordSubmission("done");
+      await recordSubmission("done");
     } else if (succeeded > 0) {
       jobs[jobId].status = "partial";
       console.log(`[${jobId}] Pipeline complete — ${succeeded}/${total} judges succeeded`);
-      recordSubmission("partial");
+      await recordSubmission("partial");
     } else {
       const errors = selectedJudges.map(j => jobs[jobId].results[j.id]?.error).filter(Boolean);
       jobs[jobId].status = "error";
       jobs[jobId].error = errors[0] ?? "All judges failed — check TwelveLabs API status";
       console.log(`[${jobId}] Pipeline failed — 0/${total} judges succeeded`);
-      recordSubmission("error");
+      await recordSubmission("error");
     }
 
     if (filePath) fs.unlink(filePath, () => {});
@@ -709,7 +754,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     console.error(`[${jobId}] Pipeline error: ${err.message}`, err);
     if (filePath) fs.unlink(filePath, () => {});
     if (convertedPath) fs.unlink(convertedPath, () => {});
-    recordSubmission("error");
+    await recordSubmission("error");
   }
 }
 
@@ -835,6 +880,11 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 // ── Start ─────────────────────────────────────────────────────
 let server;
 try {
+  await initDb();
+  const saved = await loadSubmissionLog();
+  submissionLog.push(...saved);
+  console.log(`[startup] Submission log loaded — ${submissionLog.length} entries`);
+
   const PORT = process.env.PORT || 3001;
   server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
