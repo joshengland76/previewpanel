@@ -169,6 +169,7 @@ const WAITING_MESSAGES = [
   { text: "Your judges are analyzing visuals, audio, pacing, and delivery simultaneously — the same way a real viewer experiences it.", highlight: false },
   { text: "Most AI video tools convert speech to text and analyze that. PreviewPanel sees what your audience sees.", highlight: true },
   { text: "Feel free to switch apps — you'll get a notification the moment your results are ready.", highlight: true },
+  { text: "Hashtag suggestions coming…", highlight: false },
   { text: "PreviewPanel is tracking energy levels, editing rhythm, and on-screen moments across your entire video right now.", highlight: false },
   { text: "This is worth the wait. Your judges are watching the full video, not skimming it.", highlight: false },
   { text: "You can put your phone down. We'll notify you when the panel has reached its verdict.", highlight: true },
@@ -182,7 +183,6 @@ const WAITING_MESSAGES = [
   { text: "You can leave this screen — the analysis runs in the background and we'll notify you.", highlight: true },
   { text: "Delivery, content, platform fit, timestamps — every dimension is being scored independently.", highlight: false },
   { text: "Still running. Complex video analysis is worth every second of this wait.", highlight: false },
-  { text: "Hashtag suggestions coming…", highlight: false },
   { text: "Three judges, three perspectives, one video. Almost there.", highlight: false },
   { text: "Go live your life — PreviewPanel will find you when it's ready.", highlight: true },
 ];
