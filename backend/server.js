@@ -112,8 +112,18 @@ function anthropic() {
 // ── In-memory job store ───────────────────────────────────────
 const jobs = {};
 
-// ── Submission log (in-memory; max 500; cleared on restart) ──
-const submissionLog = [];
+// ── Submission log — persisted to disk as NDJSON ─────────────
+const SUBMISSIONS_PATH = path.join(__dirname, "submissions.ndjson");
+
+function loadSubmissionLog() {
+  try {
+    const lines = fs.readFileSync(SUBMISSIONS_PATH, "utf8").split("\n").filter(Boolean);
+    return lines.map(l => JSON.parse(l)).reverse(); // newest first
+  } catch { return []; }
+}
+
+const submissionLog = loadSubmissionLog();
+console.log(`[startup] Submission log loaded — ${submissionLog.length} entries from disk`);
 
 // ── Shared guardrails injected into every judge prompt ────────
 const GUARDRAILS = `
@@ -591,6 +601,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     };
     submissionLog.unshift(entry);
     if (submissionLog.length > 500) submissionLog.length = 500;
+    try { fs.appendFileSync(SUBMISSIONS_PATH, JSON.stringify(entry) + "\n"); } catch (e) { console.warn("[log] Failed to write submission to disk:", e.message); }
     console.log(`[${jobId}] [log] ${JSON.stringify(entry)}`);
   }
 
