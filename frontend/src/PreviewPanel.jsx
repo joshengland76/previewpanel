@@ -165,7 +165,7 @@ function TimelineDots({ points, color }) {
 
 // ── Issue #6: Animated status messages while waiting ─────────
 const WAITING_MESSAGES = [
-  { text: "Unlike other tools that just read a transcript, TwelveLabs actually watches your video — every frame, every expression, every cut.", highlight: true },
+  { text: "Unlike other tools that just read a transcript, PreviewPanel actually watches your video — every frame, every expression, every cut.", highlight: true },
   { text: "Your judges are analyzing visuals, audio, pacing, and delivery simultaneously — the same way a real viewer experiences it.", highlight: false },
   { text: "Most AI video tools convert speech to text and analyze that. PreviewPanel sees what your audience sees.", highlight: true },
   { text: "Feel free to switch apps — you'll get a notification the moment your results are ready.", highlight: true },
