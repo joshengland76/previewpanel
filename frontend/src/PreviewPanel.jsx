@@ -169,7 +169,7 @@ const WAITING_MESSAGES = [
   { text: "Your judges are analyzing visuals, audio, pacing, and delivery simultaneously — the same way a real viewer experiences it.", highlight: false },
   { text: "Most AI video tools convert speech to text and analyze that. PreviewPanel sees what your audience sees.", highlight: true },
   { text: "Feel free to switch apps — you'll get a notification the moment your results are ready.", highlight: true },
-  { text: "Pegasus is tracking energy levels, editing rhythm, and on-screen moments across your entire video right now.", highlight: false },
+  { text: "PreviewPanel is tracking energy levels, editing rhythm, and on-screen moments across your entire video right now.", highlight: false },
   { text: "This is worth the wait. Your judges are watching the full video, not skimming it.", highlight: false },
   { text: "You can put your phone down. We'll notify you when the panel has reached its verdict.", highlight: true },
   { text: "Three independent AI reviewers. One video. Zero shortcuts. That's why it takes a few minutes.", highlight: false },
@@ -912,11 +912,13 @@ export default function PreviewPanel() {
           <div style={{ animation: "pp-slide 0.3s ease" }}>
 
             {/* Top bar */}
-            <div style={{ display: "flex", alignItems: "center", marginBottom: "16px" }}>
-              <img src="/owl-logo.png" alt="PreviewPanel" style={{ height: "36px", width: "auto" }} />
+            <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px", position: "relative" }}>
+              <img src="/owl-logo.png" alt="PreviewPanel"
+                style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
               {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{
-                  marginLeft: "auto", background: "transparent",
+                  position: "absolute", top: "10px", right: "0",
+                  background: "transparent",
                   border: `1.5px solid ${B.border}`, borderRadius: "8px",
                   padding: "6px 12px", fontSize: "12px", fontWeight: "700",
                   color: B.brown, cursor: "pointer", fontFamily: "Montserrat, sans-serif",
