@@ -570,6 +570,12 @@ export default function PreviewPanel() {
       try {
         const res = await fetch(`${API_BASE}/api/status/${jobId}`);
         const data = await res.json();
+        if (res.status === 404 || data.error === "Job not found") {
+          clearInterval(pollRef.current);
+          setJobStatus("error");
+          setStatusMessage("The server restarted during analysis. Please submit your video again.");
+          return;
+        }
         setJobStatus(data.status);
         setJudgeResults(data.results || {});
         if (data.duration) setVideoDurationSecs(data.duration);

@@ -21,9 +21,11 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { fileURLToPath } from "url";
+import https from "https";
 import Anthropic from "@anthropic-ai/sdk";
 import { TwelveLabs } from "twelvelabs-js";
 import pg from "pg";
+import FormDataStream from "form-data";
 import "dotenv/config";
 
 const { Pool } = pg;
@@ -82,6 +84,9 @@ const jobQueue = []; // array of { jobId, fn } waiting to run
 
 function enqueueJob(jobId, fn) {
   jobQueue.push({ jobId, fn });
+  if (activeJob !== null) {
+    console.log(`[queue] Job ${jobId} queued behind ${activeJob} — queue depth: ${jobQueue.length}`);
+  }
   drainQueue();
 }
 
@@ -514,32 +519,40 @@ async function getVideoContext(videoUrl, filePath) {
 
 async function uploadAssetDirect(filePath) {
   const sizeMB = (fs.statSync(filePath).size / 1024 / 1024).toFixed(2);
-  console.log(`[TwelveLabs] Uploading asset directly: ${filePath} (${sizeMB} MB)…`);
+  console.log(`[TwelveLabs] Uploading asset: ${filePath} (${sizeMB} MB) — streaming to avoid memory spike…`);
   const t0 = Date.now();
 
-  const buffer = fs.readFileSync(filePath);
-  const blob = new Blob([buffer], { type: "video/mp4" });
-  const filename = path.basename(filePath);
-
-  const form = new FormData();
+  // Stream directly from disk — avoids loading the full file into memory
+  const form = new FormDataStream();
   form.append("method", "direct");
-  form.append("file", blob, filename);
+  form.append("file", fs.createReadStream(filePath), path.basename(filePath));
 
-  const response = await fetch("https://api.twelvelabs.io/v1.3/assets", {
-    method: "POST",
-    headers: { "x-api-key": process.env.TWELVELABS_API_KEY },
-    body: form,
-    signal: AbortSignal.timeout(600_000),
+  const responseBody = await new Promise((resolve, reject) => {
+    const req = https.request({
+      method: "POST",
+      hostname: "api.twelvelabs.io",
+      path: "/v1.3/assets",
+      headers: { "x-api-key": process.env.TWELVELABS_API_KEY, ...form.getHeaders() },
+      timeout: 600_000,
+    }, (res) => {
+      const chunks = [];
+      res.on("data", c => chunks.push(c));
+      res.on("end", () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }); }
+        catch (e) { reject(new Error(`TwelveLabs upload: failed to parse response — ${e.message}`)); }
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("TwelveLabs upload timed out")); });
+    form.pipe(req);
   });
 
-  const body = await response.json();
-
-  if (!response.ok) {
-    throw new Error(`TwelveLabs asset upload failed: HTTP ${response.status} — ${JSON.stringify(body)}`);
+  if (responseBody.status >= 400) {
+    throw new Error(`TwelveLabs asset upload failed: HTTP ${responseBody.status} — ${JSON.stringify(responseBody.body)}`);
   }
 
-  const assetId = body._id;
-  if (!assetId) throw new Error(`TwelveLabs asset upload returned no _id: ${JSON.stringify(body)}`);
+  const assetId = responseBody.body._id;
+  if (!assetId) throw new Error(`TwelveLabs asset upload returned no _id: ${JSON.stringify(responseBody.body)}`);
 
   console.log(`[TwelveLabs] Asset uploaded in ${((Date.now() - t0) / 1000).toFixed(1)}s — assetId: ${assetId}`);
   return assetId;
