@@ -128,9 +128,24 @@ async function initDb() {
     pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
     await pgPool.query(`
       CREATE TABLE IF NOT EXISTS submissions (
-        id SERIAL PRIMARY KEY,
-        data JSONB NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        id            SERIAL PRIMARY KEY,
+        job_id        TEXT,
+        created_at    TIMESTAMPTZ DEFAULT NOW(),
+        ip            TEXT,
+        platform      TEXT,
+        file_size_mb  NUMERIC,
+        duration_secs NUMERIC,
+        status        TEXT,
+        total_ms      INTEGER,
+        ffmpeg_ms     INTEGER,
+        upload_ms     INTEGER,
+        critic_ms     INTEGER,
+        trendsetter_ms INTEGER,
+        dreamer_ms    INTEGER,
+        critic_score  NUMERIC,
+        trendsetter_score NUMERIC,
+        dreamer_score NUMERIC,
+        avg_score     NUMERIC
       )
     `);
     console.log("[db] PostgreSQL connected — submissions table ready");
@@ -143,8 +158,38 @@ async function initDb() {
 async function loadSubmissionLog() {
   if (pgPool) {
     try {
-      const result = await pgPool.query("SELECT data FROM submissions ORDER BY created_at DESC LIMIT 500");
-      return result.rows.map(r => r.data);
+      const { rows } = await pgPool.query(`
+        SELECT job_id, created_at, ip, platform, file_size_mb, duration_secs, status,
+               total_ms, ffmpeg_ms, upload_ms,
+               critic_ms, trendsetter_ms, dreamer_ms,
+               critic_score, trendsetter_score, dreamer_score, avg_score
+        FROM submissions ORDER BY created_at DESC LIMIT 500
+      `);
+      return rows.map(r => ({
+        jobId: r.job_id,
+        timestamp: r.created_at,
+        ip: r.ip,
+        platform: r.platform,
+        fileSizeMB: r.file_size_mb != null ? parseFloat(r.file_size_mb) : null,
+        videoDurationSecs: r.duration_secs != null ? parseFloat(r.duration_secs) : null,
+        status: r.status,
+        timings: {
+          totalMs: r.total_ms,
+          conversionMs: r.ffmpeg_ms,
+          uploadMs: r.upload_ms,
+          judges: {
+            critic: r.critic_ms,
+            cool: r.trendsetter_ms,
+            dreamer: r.dreamer_ms,
+          },
+        },
+        scores: {
+          ...(r.critic_score != null ? { critic: parseFloat(r.critic_score) } : {}),
+          ...(r.trendsetter_score != null ? { cool: parseFloat(r.trendsetter_score) } : {}),
+          ...(r.dreamer_score != null ? { dreamer: parseFloat(r.dreamer_score) } : {}),
+        },
+        avgScore: r.avg_score != null ? parseFloat(r.avg_score) : null,
+      }));
     } catch (err) {
       console.error("[db] Failed to load submissions:", err.message);
       return [];
@@ -159,7 +204,31 @@ async function loadSubmissionLog() {
 async function saveSubmission(entry) {
   if (pgPool) {
     try {
-      await pgPool.query("INSERT INTO submissions (data) VALUES ($1)", [entry]);
+      await pgPool.query(`
+        INSERT INTO submissions
+          (job_id, ip, platform, file_size_mb, duration_secs, status,
+           total_ms, ffmpeg_ms, upload_ms,
+           critic_ms, trendsetter_ms, dreamer_ms,
+           critic_score, trendsetter_score, dreamer_score, avg_score)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      `, [
+        entry.jobId,
+        entry.ip,
+        entry.platform,
+        entry.fileSizeMB,
+        entry.videoDurationSecs,
+        entry.status,
+        entry.timings.totalMs,
+        entry.timings.conversionMs,
+        entry.timings.uploadMs,
+        entry.timings.judges.critic ?? null,
+        entry.timings.judges.cool ?? null,
+        entry.timings.judges.dreamer ?? null,
+        entry.scores.critic ?? null,
+        entry.scores.cool ?? null,
+        entry.scores.dreamer ?? null,
+        entry.avgScore,
+      ]);
       return;
     } catch (err) {
       console.error("[db] Failed to save submission:", err.message);
