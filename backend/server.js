@@ -120,12 +120,17 @@ const SUBMISSIONS_PATH = path.join(__dirname, "submissions.ndjson");
 let pgPool = null;
 
 async function initDb() {
+  console.log(`[db] DATABASE_URL present: ${!!process.env.DATABASE_URL}`);
   if (!process.env.DATABASE_URL) {
     console.log("[db] No DATABASE_URL — using file-based submission log");
     return;
   }
+  console.log("[db] Connecting to PostgreSQL…");
   try {
     pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+    console.log("[db] Pool created — testing connection…");
+    await pgPool.query("SELECT 1");
+    console.log("[db] Connection OK — creating table if needed…");
     await pgPool.query(`
       CREATE TABLE IF NOT EXISTS submissions (
         id            SERIAL PRIMARY KEY,
@@ -151,6 +156,7 @@ async function initDb() {
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
+    console.error("[db] Full error:", err);
     pgPool = null;
   }
 }
