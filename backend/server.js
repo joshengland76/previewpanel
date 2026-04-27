@@ -587,6 +587,16 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
         return;
       }
 
+      if (videoDuration && videoDuration.secs < 4) {
+        jobs[jobId].status = "error";
+        jobs[jobId].error = "Video is too short. Please use a video that is at least 4 seconds long.";
+        console.log(`[${jobId}] Rejected — video too short: ${videoDuration.label}`);
+        if (filePath) fs.unlink(filePath, () => {});
+        if (convertedPath) fs.unlink(convertedPath, () => {});
+        recordSubmission("rejected_too_short");
+        return;
+      }
+
       if (videoDuration) jobs[jobId].videoDuration = videoDuration;
     }
     const t_upload = Date.now();
