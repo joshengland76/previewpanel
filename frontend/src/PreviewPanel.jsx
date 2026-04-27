@@ -216,7 +216,7 @@ function NotificationPrimer({ onAllow, onSkip }) {
           Don't miss your results
         </div>
         <div style={{ fontSize: "14px", color: "#666", lineHeight: "1.6", marginBottom: "20px" }}>
-          AI analysis takes <strong>10–15 minutes</strong>. Since you probably won't stare at the screen the whole time, enable notifications so we can tell you the moment your panel is ready.
+          AI analysis takes <strong>5–10 minutes</strong>. Since you probably won't stare at the screen the whole time, enable notifications so we can tell you the moment your panel is ready.
         </div>
         <button onClick={onAllow} style={{
           width: "100%", height: "50px", background: B.action, border: "none",
@@ -524,7 +524,7 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
       </div>
 
       <div style={{ marginTop: "10px", fontSize: "11px", color: "#aaa" }}>
-        Analysis typically takes 10–15 minutes. You can leave this screen — we'll notify you when it's ready.
+        Analysis typically takes 5–10 minutes. You can leave this screen — we'll notify you when it's ready.
       </div>
     </div>
   );
@@ -889,7 +889,7 @@ export default function PreviewPanel() {
               </button>
               {videoFile && (
                 <div style={{ textAlign: "center", marginTop: "8px", fontSize: "11px", color: "#aaa" }}>
-                  ⏱ Analysis takes 10–15 minutes — we'll notify you when it's ready
+                  ⏱ Analysis takes 5–10 minutes — we'll notify you when it's ready
                 </div>
               )}
             </div>
