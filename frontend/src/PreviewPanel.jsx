@@ -182,6 +182,7 @@ const WAITING_MESSAGES = [
   { text: "You can leave this screen — the analysis runs in the background and we'll notify you.", highlight: true },
   { text: "Delivery, content, platform fit, timestamps — every dimension is being scored independently.", highlight: false },
   { text: "Still running. Complex video analysis is worth every second of this wait.", highlight: false },
+  { text: "Hashtag suggestions coming…", highlight: false },
   { text: "Three judges, three perspectives, one video. Almost there.", highlight: false },
   { text: "Go live your life — PreviewPanel will find you when it's ready.", highlight: true },
 ];
