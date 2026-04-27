@@ -165,21 +165,32 @@ function TimelineDots({ points, color }) {
 
 // ── Issue #6: Animated status messages while waiting ─────────
 const WAITING_MESSAGES = [
-  "The panel is watching your video…",
-  "Judges are taking notes…",
-  "Analyzing every frame…",
-  "This takes a few minutes — hang tight…",
-  "Still going — AI reviews are thorough…",
-  "Your feedback is being prepared…",
-  "Almost certainly still working on it…",
-  "Good things take time — and so does this…",
+  { text: "Unlike other tools that just read a transcript, TwelveLabs actually watches your video — every frame, every expression, every cut.", highlight: true },
+  { text: "Your judges are analyzing visuals, audio, pacing, and delivery simultaneously — the same way a real viewer experiences it.", highlight: false },
+  { text: "Most AI video tools convert speech to text and analyze that. PreviewPanel sees what your audience sees.", highlight: true },
+  { text: "Feel free to switch apps — you'll get a notification the moment your results are ready.", highlight: true },
+  { text: "Pegasus is tracking energy levels, editing rhythm, and on-screen moments across your entire video right now.", highlight: false },
+  { text: "This is worth the wait. Your judges are watching the full video, not skimming it.", highlight: false },
+  { text: "You can put your phone down. We'll notify you when the panel has reached its verdict.", highlight: true },
+  { text: "Three independent AI reviewers. One video. Zero shortcuts. That's why it takes a few minutes.", highlight: false },
+  { text: "Still working — deep video analysis takes time. Your results will be thorough.", highlight: false },
+  { text: "Judges are identifying specific timestamps where your video peaks and drops — frame by frame.", highlight: false },
+  { text: "Go check your email, grab a coffee. We'll ping you when the verdict is in.", highlight: true },
+  { text: "Audio quality, lighting, pacing, hook strength — it's all being evaluated right now.", highlight: false },
+  { text: "Most AI feedback takes seconds because it's shallow. This takes minutes because it's real.", highlight: true },
+  { text: "Your judges have watched more content than any human critic. They're applying that now.", highlight: false },
+  { text: "You can leave this screen — the analysis runs in the background and we'll notify you.", highlight: true },
+  { text: "Delivery, content, platform fit, timestamps — every dimension is being scored independently.", highlight: false },
+  { text: "Still running. Complex video analysis is worth every second of this wait.", highlight: false },
+  { text: "Three judges, three perspectives, one video. Almost there.", highlight: false },
+  { text: "Go live your life — PreviewPanel will find you when it's ready.", highlight: true },
 ];
 
 function useWaitingMessage(isWaiting) {
   const [idx, setIdx] = useState(0);
   useEffect(() => {
     if (!isWaiting) { setIdx(0); return; }
-    const iv = setInterval(() => setIdx(i => (i + 1) % WAITING_MESSAGES.length), 7000);
+    const iv = setInterval(() => setIdx(i => (i + 1) % WAITING_MESSAGES.length), 10000);
     return () => clearInterval(iv);
   }, [isWaiting]);
   return WAITING_MESSAGES[idx];
@@ -292,12 +303,6 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: "800", fontSize: "14px", color: has ? judge.color : "#bbb" }}>{judge.name}</div>
           <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px" }}>{judge.scoreLabel}</div>
-          {/* Issue #8: Explicit tap hint */}
-          {has && !open && (
-            <div style={{ fontSize: "10px", color: judge.color, marginTop: "3px", fontWeight: "700", letterSpacing: "0.04em" }}>
-              TAP TO READ FULL FEEDBACK ↓
-            </div>
-          )}
           {has && open && (
             <div style={{ fontSize: "10px", color: "#aaa", marginTop: "3px", fontWeight: "700", letterSpacing: "0.04em" }}>
               TAP TO COLLAPSE ↑
@@ -315,17 +320,6 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
           </div>
         )}
         {has && <ScoreRing score={result.overall} color={judge.color} size={52}/>}
-        {has && (
-          <div style={{
-            width: "28px", height: "28px", borderRadius: "50%",
-            background: judge.color, display: "flex", alignItems: "center", justifyContent: "center",
-            flexShrink: 0, boxShadow: `0 2px 6px ${judge.color}50`,
-          }}>
-            <span style={{ fontSize: "13px", color: "#fff", lineHeight: 1, fontWeight: "800" }}>
-              {open ? "▲" : "▼"}
-            </span>
-          </div>
-        )}
       </div>
 
       {has && (
@@ -512,10 +506,15 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
 
       {/* Rotating message */}
       <div style={{
-        fontSize: "13px", color: B.body, fontStyle: "italic",
+        fontSize: waitingMsg.highlight ? "14px" : "13px",
+        color: waitingMsg.highlight ? B.action : B.body,
+        fontWeight: waitingMsg.highlight ? "700" : "400",
+        fontStyle: waitingMsg.highlight ? "normal" : "italic",
         lineHeight: "1.6", transition: "opacity 0.5s",
+        borderLeft: waitingMsg.highlight ? `3px solid ${B.brown}` : "none",
+        paddingLeft: waitingMsg.highlight ? "12px" : "0",
       }}>
-        {waitingMsg}
+        {waitingMsg.text}
       </div>
 
       <div style={{ marginTop: "10px", fontSize: "11px", color: "#aaa" }}>

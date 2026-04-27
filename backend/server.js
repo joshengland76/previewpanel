@@ -233,7 +233,12 @@ const PLATFORM_FOCUS = {
 // ── Issue #7: Hashtag instruction for TikTok and Instagram ───
 function buildHashtagInstruction(platform) {
   if (platform === "tiktok" || platform === "instagram") {
-    return `\nHASHTAGS — Based on the video's content, suggest exactly 3 highly relevant hashtags that would help this video reach the right audience on ${platform.toUpperCase()}. Choose hashtags that are specific enough to reach the right niche but large enough to have meaningful search volume. Include them in the JSON as a "hashtags" array of strings (without the # symbol).`;
+    return `\nHASHTAGS — Suggest exactly 3 hashtags to maximize reach and views on ${platform.toUpperCase()}. Strategy:
+- If the video features a specific brand, product, sports team, athlete, city, neighborhood, landmark, or recognizable scene — include that as one hashtag (these are high-intent, specific searches that attract exactly the right viewers)
+- Mix specificity: one niche/specific tag (smaller but highly targeted), one mid-size community tag, one broader discovery tag
+- Choose hashtags people actually search, not generic ones like "video" or "content"
+- Base them entirely on what you actually observe in the video — do not invent content
+Include them in the JSON as a "hashtags" array of strings (without the # symbol).`;
   }
   return "";
 }
