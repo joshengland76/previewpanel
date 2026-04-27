@@ -474,12 +474,15 @@ async function probeCodecs(filePath) {
   }
 }
 
-async function convertToMp4(inputPath) {
+async function convertToMp4(inputPath, { preProbed = null, forceReencode = false } = {}) {
   const outputPath = inputPath + ".mp4";
   const t0 = Date.now();
 
-  const { video: vcodec, audio: acodec } = await probeCodecs(inputPath);
-  const copyVideo = vcodec === "h264";
+  const { video: vcodec, audio: acodec } = preProbed || await probeCodecs(inputPath);
+
+  // H264 and HEVC can both be stream-copied into MP4 without re-encoding.
+  // forceReencode overrides this when a stream-copied HEVC file was rejected by TwelveLabs.
+  const copyVideo = !forceReencode && (vcodec === "h264" || vcodec === "hevc" || vcodec === "h265");
   const copyAudio = acodec === "aac";
 
   const args = ["-i", inputPath];
@@ -495,12 +498,15 @@ async function convertToMp4(inputPath) {
   }
   args.push("-movflags", "+faststart", "-threads", "1", "-y", outputPath);
 
-  const mode = copyVideo && copyAudio ? "stream copy" : copyVideo ? "copy video, re-encode audio" : "full re-encode";
-  console.log(`[ffmpeg] ${mode} — video: ${vcodec || "?"}, audio: ${acodec || "?"}`);
+  const mode = forceReencode ? "H264 re-encode (HEVC fallback)"
+    : copyVideo && copyAudio ? "stream copy"
+    : copyVideo ? "copy video, re-encode audio"
+    : "full re-encode";
+  console.log(`[ffmpeg] Starting: ${mode} — video: ${vcodec || "?"}, audio: ${acodec || "?"}`);
 
   await execFileAsync(FFMPEG, args);
   const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(2);
-  console.log(`[ffmpeg] Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — output: ${sizeMB} MB`);
+  console.log(`[ffmpeg] Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${sizeMB} MB — mode: ${mode}`);
   return outputPath;
 }
 
@@ -784,9 +790,15 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     jobs[jobId].status = "uploading";
     console.log(`[${jobId}] Step 1: converting and uploading to TwelveLabs`);
     let videoDuration = null;
+    let inputCodecs = { video: null, audio: null };
     if (filePath) {
+      // Probe codec before anything else so it's visible in logs even if conversion hangs
+      inputCodecs = await probeCodecs(filePath);
+      const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
+      console.log(`[${jobId}] Input codec: video=${inputCodecs.video || "unknown"}, audio=${inputCodecs.audio || "unknown"}${isHEVC ? " — will attempt stream copy first" : ""}`);
+
       const t_conv = Date.now();
-      convertedPath = await convertToMp4(filePath);
+      convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
       timings.conversionMs = Date.now() - t_conv;
       videoDuration = await getVideoDuration(convertedPath);
 
@@ -814,7 +826,23 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
       if (videoDuration) jobs[jobId].videoDuration = videoDuration;
     }
     const t_upload = Date.now();
-    const videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
+    let videoContext;
+    try {
+      videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
+    } catch (uploadErr) {
+      // HEVC stream copy: if TwelveLabs rejected the file, fall back to H264 re-encode
+      const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
+      if (isHEVC && convertedPath) {
+        console.log(`[${jobId}] HEVC stream copy rejected (${uploadErr.message}) — re-encoding to H264`);
+        fs.unlink(convertedPath, () => {});
+        const t_conv2 = Date.now();
+        convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs, forceReencode: true });
+        timings.conversionMs = (timings.conversionMs || 0) + (Date.now() - t_conv2);
+        videoContext = await getVideoContext(videoUrl, convertedPath);
+      } else {
+        throw uploadErr;
+      }
+    }
     timings.uploadMs = Date.now() - t_upload;
     if (isJobCancelled(jobId)) {
       console.log(`[${jobId}] Job was cancelled by pipeline timeout before judges started — aborting`);
