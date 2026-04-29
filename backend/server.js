@@ -303,15 +303,33 @@ async function saveSubmission(entry) {
 async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs) {
   if (!pgPool) return;
   const job = jobs[jobId];
+
+  // Full INSERT including optional columns added in schema migration
+  const fullSql = `INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs, browser_upload_ms, file_name, file_size_mb) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`;
+  const fullValues = [
+    jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null,
+    job?.timings?.browserUploadMs ?? null, job?.fileName ?? null, job?.fileSizeMB ?? null,
+  ];
+
+  // Fallback INSERT using only original columns — works even if migration hasn't run
+  const baseSql = `INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs) VALUES ($1,$2,$3,$4,$5,$6)`;
+  const baseValues = [jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null];
+
   try {
-    await pgPool.query(`
-      INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs, browser_upload_ms, file_name, file_size_mb)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    `, [jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null,
-        job?.timings?.browserUploadMs ?? null, job?.fileName ?? null, job?.fileSizeMB ?? null]);
-    console.log(`[db] Saved analyze task — job=${jobId} judge=${judgeId} taskId=${taskId}`);
+    await pgPool.query(fullSql, fullValues);
+    console.log(`[db] Saved analyze task (full) — job=${jobId} judge=${judgeId} taskId=${taskId}`);
   } catch (err) {
-    console.error(`[db] FAILED to save analyze task for ${judgeId}/${taskId}: ${err.message}`);
+    console.error(`[db] saveAnalyzeTask full INSERT failed — code=${err.code} message=${err.message} detail=${err.detail ?? ""}`);
+    if (err.code === "42703") {
+      // 42703 = undefined_column — schema migration hasn't run yet, fall back to base columns
+      console.warn(`[db] Schema missing optional columns — retrying with base INSERT (run ALTER TABLE migration in Neon)`);
+      try {
+        await pgPool.query(baseSql, baseValues);
+        console.log(`[db] Saved analyze task (base fallback) — job=${jobId} judge=${judgeId} taskId=${taskId}`);
+      } catch (fallbackErr) {
+        console.error(`[db] saveAnalyzeTask base INSERT also failed — code=${fallbackErr.code} message=${fallbackErr.message}`);
+      }
+    }
   }
 }
 
