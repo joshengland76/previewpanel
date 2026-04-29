@@ -309,8 +309,9 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     `, [jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null,
         job?.timings?.browserUploadMs ?? null, job?.fileName ?? null, job?.fileSizeMB ?? null]);
+    console.log(`[db] Saved analyze task — job=${jobId} judge=${judgeId} taskId=${taskId}`);
   } catch (err) {
-    console.error(`[db] Failed to save analyze task: ${err.message}`);
+    console.error(`[db] FAILED to save analyze task for ${judgeId}/${taskId}: ${err.message}`);
   }
 }
 
@@ -556,27 +557,43 @@ async function probeCodecs(filePath) {
   return result;
 }
 
-async function convertToMp4(inputPath, { forceReencode = false } = {}) {
+async function convertToMp4(inputPath, { preProbed = null, forceReencode = false } = {}) {
   const outputPath = inputPath + ".mp4";
   const t0 = Date.now();
 
+  const { video: vcodec, audio: acodec } = preProbed || await probeCodecs(inputPath);
+
+  // Only stream-copy codecs confirmed compatible with MP4 — anything else gets re-encoded.
+  // forceReencode overrides when a stream-copied HEVC file was rejected by TwelveLabs.
+  const copyVideo = !forceReencode && (vcodec === "h264" || vcodec === "hevc" || vcodec === "h265");
+  const copyAudio = acodec === "aac";
+
   const args = ["-i", inputPath];
-  if (forceReencode) {
-    // TwelveLabs rejected stream copy — fall back to H264/AAC re-encode
-    args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2");
-    args.push("-c:a", "aac", "-b:a", "96k");
-    console.log(`[ffmpeg] ${path.basename(inputPath)} → H264/AAC re-encode (fallback after upload rejection)`);
+  if (copyVideo) {
+    args.push("-c:v", "copy");
   } else {
-    // Attempt stream copy for all codecs — TwelveLabs paid tier accepts HEVC natively.
-    // If TwelveLabs rejects, runPipeline will call convertToMp4 again with forceReencode=true.
-    args.push("-c", "copy");
-    console.log(`[ffmpeg] ${path.basename(inputPath)} → stream copy (all codecs)`);
+    args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2");
+  }
+  if (copyAudio) {
+    args.push("-c:a", "copy");
+  } else {
+    args.push("-c:a", "aac", "-b:a", "96k");
   }
   args.push("-movflags", "+faststart", "-threads", "1", "-y", outputPath);
 
+  const mode = forceReencode ? "H264 re-encode (HEVC fallback)"
+    : copyVideo && copyAudio ? "stream copy"
+    : copyVideo ? "copy video, re-encode audio"
+    : "full re-encode";
+  const why = forceReencode ? "forced after HEVC rejection"
+    : !copyVideo && !vcodec ? "video codec unknown"
+    : !copyVideo ? `video codec '${vcodec}' not stream-copyable`
+    : !copyAudio ? `audio codec '${acodec ?? "unknown"}' not AAC`
+    : "both codecs copyable";
+  console.log(`[ffmpeg] ${path.basename(inputPath)} — detected video=${vcodec ?? "null"} audio=${acodec ?? "null"} → ${mode} (${why})`);
+
   await execFileAsync(FFMPEG, args);
   const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(2);
-  const mode = forceReencode ? "re-encode" : "stream copy";
   console.log(`[ffmpeg] Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${sizeMB} MB — mode: ${mode}`);
   return outputPath;
 }
@@ -866,9 +883,11 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
         return;
       }
 
-      // 3. Stream copy to MP4 — fast for all formats; TwelveLabs paid tier accepts HEVC natively
+      // 3. Detect codecs and convert — stream copy for H264/HEVC, re-encode otherwise
+      const inputCodecs = await probeCodecs(filePath);
+      const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
       const t_conv = Date.now();
-      convertedPath = await convertToMp4(filePath);
+      convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
       jobs[jobId].timings.conversionMs = Date.now() - t_conv;
 
       // 4. Post-conversion size check — must pass before attempting TwelveLabs upload
@@ -891,12 +910,12 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     try {
       videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
     } catch (uploadErr) {
-      if (convertedPath && filePath) {
-        // Stream copy was rejected by TwelveLabs — fall back to H264/AAC re-encode
-        console.log(`[${jobId}] Upload rejected (${uploadErr.message}) — falling back to H264/AAC re-encode`);
+      if (isHEVC && convertedPath && filePath) {
+        // HEVC stream copy rejected by TwelveLabs — re-encode to H264
+        console.log(`[${jobId}] HEVC upload rejected (${uploadErr.message}) — re-encoding to H264`);
         fs.unlink(convertedPath, () => {});
         const t_conv2 = Date.now();
-        convertedPath = await convertToMp4(filePath, { forceReencode: true });
+        convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs, forceReencode: true });
         jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + (Date.now() - t_conv2);
         videoContext = await getVideoContext(videoUrl, convertedPath);
       } else {
@@ -1081,8 +1100,8 @@ async function pollAnalyzeTasks() {
       `SELECT job_id, judge_id, task_id, platform, target_audience, video_duration_secs, created_at
        FROM analyze_tasks WHERE status = 'pending'`
     );
+    console.log(`[poller] Pending tasks in Neon: ${rows.length}`);
     if (rows.length === 0) return;
-    console.log(`[poller] Checking ${rows.length} in-flight TwelveLabs task(s)`);
 
     await Promise.allSettled(rows.map(async row => {
       // Skip if the job was already finalized (e.g. timeout fired while tasks were being created)
