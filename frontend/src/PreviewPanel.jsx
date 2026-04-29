@@ -21,13 +21,13 @@ const PLATFORMS = [
 const JUDGES = [
   { id: "critic", name: "The Critic", color: B.brown, softBg: "#EFEBE9",
     tagline: "Hard to impress. Spots lazy editing immediately.", scoreLabel: "The Critic's Verdict",
-    avatar: "/owl-critic.png" },
+    avatar: "/owl-critic.png?v=2" },
   { id: "cool", name: "The Trendsetter", color: "#546E7A", softBg: "#ECEFF1",
     tagline: "Platform-native, trend-aware, detached.", scoreLabel: "The Trendsetter's Take",
-    avatar: "/owl-trendsetter.png" },
+    avatar: "/owl-trendsetter.png?v=2" },
   { id: "dreamer", name: "The Dreamer", color: "#8D6E63", softBg: "#FBF8F7",
     tagline: "Emotionally intelligent. Asks: how does this feel?", scoreLabel: "The Dreamer's Feeling",
-    avatar: "/owl-dreamer.png" },
+    avatar: "/owl-dreamer.png?v=2" },
 ];
 
 // ── Issue #9: Local history helpers ──────────────────────────
@@ -663,11 +663,9 @@ export default function PreviewPanel() {
       const res = await fetch(`${API_BASE}/api/analyze`, { method: "POST", body: formData });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      setJobStatus(data.queuePosition > 0 ? "queued" : "uploading");
+      setQueuePosition(data.queuePosition || 0);
       setJobId(data.jobId);
-      if (data.queuePosition > 0) {
-        setJobStatus("queued");
-        setQueuePosition(data.queuePosition);
-      }
     } catch (err) {
       setJobStatus("error");
       setStatusMessage(`Failed: ${err.message}`);
@@ -749,7 +747,7 @@ export default function PreviewPanel() {
 
             {/* Logo + BETA + History button */}
             <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px", position: "relative" }}>
-              <img src="/owl-logo.png" alt="PreviewPanel"
+              <img src="/owl-logo.png?v=2" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
               <div style={{ marginTop: "4px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
@@ -814,7 +812,7 @@ export default function PreviewPanel() {
                     <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
                     <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
                     {/* Issue #3: Show limit in UI */}
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · {plat.hint}</div>
+                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · 200MB · {plat.hint}</div>
                   </div>
                 )}
               </div>
@@ -925,7 +923,7 @@ export default function PreviewPanel() {
 
             {/* Top bar */}
             <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px", position: "relative" }}>
-              <img src="/owl-logo.png" alt="PreviewPanel"
+              <img src="/owl-logo.png?v=2" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
               {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{
