@@ -36,11 +36,6 @@ const FFMPEG = fs.existsSync("/opt/homebrew/bin/ffmpeg")
   : fs.existsSync("/usr/local/bin/ffmpeg")
   ? "/usr/local/bin/ffmpeg"
   : "ffmpeg";
-const FFPROBE = fs.existsSync("/opt/homebrew/bin/ffprobe")
-  ? "/opt/homebrew/bin/ffprobe"
-  : fs.existsSync("/usr/local/bin/ffprobe")
-  ? "/usr/local/bin/ffprobe"
-  : "ffprobe";
 
 // ── Issue #3: 3-minute video limit ───────────────────────────
 const MAX_VIDEO_DURATION_SECS = 180; // 3 minutes
@@ -90,7 +85,7 @@ function enqueueJob(jobId, fn) {
   drainQueue();
 }
 
-const PIPELINE_TIMEOUT_MS = 8 * 60 * 1000; // 8 minutes hard cap per job
+const PIPELINE_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes — covers ffmpeg + TwelveLabs upload only
 
 async function drainQueue() {
   if (activeJob !== null) return; // already running something
@@ -110,17 +105,25 @@ async function drainQueue() {
     await Promise.race([next.fn(), pipelineTimeout]);
   } catch (err) {
     const isTimeout = err.message === "PIPELINE_TIMEOUT";
-    console.error(`[queue] Job ${next.jobId} ${isTimeout ? "timed out after 8 minutes" : "threw: " + err.message}`);
-    if (jobs[next.jobId] && !["done", "partial"].includes(jobs[next.jobId].status)) {
-      jobs[next.jobId].status = "error";
-      jobs[next.jobId].error = isTimeout
-        ? "Analysis timed out after 8 minutes. Please try again — this can happen during high API load."
+    const timeoutMins = Math.round(PIPELINE_TIMEOUT_MS / 60000);
+    console.error(`[queue] Job ${next.jobId} ${isTimeout ? `timed out after ${timeoutMins} minutes` : "threw: " + err.message}`);
+    const tj = jobs[next.jobId];
+    if (tj && !tj.finalized) {
+      tj.status = "error";
+      tj.error = isTimeout
+        ? `Upload timed out after ${timeoutMins} minutes. Please try again with a smaller file or check your connection.`
         : err.message;
+      tj.timings = tj.timings || {};
+      tj.timings.totalMs = (Date.now() - (tj.createdAt || tj.startedAt || Date.now())) + (tj.timings.browserUploadMs || 0);
+      // Fire-and-forget — sets finalized=true synchronously before first await,
+      // so any concurrent runPipeline catch will see finalized and skip.
+      recordSubmissionForJob(next.jobId, isTimeout ? "timeout" : "error");
     }
   } finally {
     clearTimeout(timeoutHandle);
+    const releaseTime = new Date().toISOString();
     activeJob = null;
-    console.log(`[queue] Job ${next.jobId} released queue — ${jobQueue.length} job(s) waiting`);
+    console.log(`[queue] *** QUEUE SLOT FREED *** job=${next.jobId} at=${releaseTime} waiting=${jobQueue.length}`);
     drainQueue(); // pick up next job
   }
 }
@@ -177,6 +180,29 @@ async function initDb() {
         avg_score     NUMERIC
       )
     `);
+    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS file_name TEXT`);
+    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS analyze_tasks (
+        id                  SERIAL PRIMARY KEY,
+        job_id              TEXT NOT NULL,
+        judge_id            TEXT NOT NULL,
+        task_id             TEXT NOT NULL UNIQUE,
+        status              TEXT DEFAULT 'pending',
+        result              TEXT,
+        error               TEXT,
+        platform            TEXT,
+        target_audience     TEXT,
+        video_duration_secs NUMERIC,
+        browser_upload_ms   INTEGER,
+        file_name           TEXT,
+        file_size_mb        NUMERIC,
+        created_at          TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
+    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_name TEXT`);
+    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
@@ -190,9 +216,10 @@ async function loadSubmissionLog() {
     try {
       const { rows } = await pgPool.query(`
         SELECT job_id, created_at, ip, platform, file_size_mb, duration_secs, status,
-               total_ms, ffmpeg_ms, upload_ms,
+               total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
                critic_ms, trendsetter_ms, dreamer_ms,
-               critic_score, trendsetter_score, dreamer_score, avg_score
+               critic_score, trendsetter_score, dreamer_score, avg_score,
+               file_name
         FROM submissions ORDER BY created_at DESC LIMIT 500
       `);
       return rows.map(r => ({
@@ -200,6 +227,7 @@ async function loadSubmissionLog() {
         timestamp: r.created_at,
         ip: r.ip,
         platform: r.platform,
+        fileName: r.file_name ?? null,
         fileSizeMB: r.file_size_mb != null ? parseFloat(r.file_size_mb) : null,
         videoDurationSecs: r.duration_secs != null ? parseFloat(r.duration_secs) : null,
         status: r.status,
@@ -207,6 +235,7 @@ async function loadSubmissionLog() {
           totalMs: r.total_ms,
           conversionMs: r.ffmpeg_ms,
           uploadMs: r.upload_ms,
+          browserUploadMs: r.browser_upload_ms,
           judges: {
             critic: r.critic_ms,
             cool: r.trendsetter_ms,
@@ -234,13 +263,15 @@ async function loadSubmissionLog() {
 async function saveSubmission(entry) {
   if (pgPool) {
     try {
+      console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs} ffmpeg_ms=${entry.timings.conversionMs} upload_ms=${entry.timings.uploadMs}`);
       await pgPool.query(`
         INSERT INTO submissions
           (job_id, ip, platform, file_size_mb, duration_secs, status,
-           total_ms, ffmpeg_ms, upload_ms,
+           total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
            critic_ms, trendsetter_ms, dreamer_ms,
-           critic_score, trendsetter_score, dreamer_score, avg_score)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+           critic_score, trendsetter_score, dreamer_score, avg_score,
+           file_name)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
       `, [
         entry.jobId,
         entry.ip,
@@ -251,6 +282,7 @@ async function saveSubmission(entry) {
         entry.timings.totalMs,
         entry.timings.conversionMs,
         entry.timings.uploadMs,
+        entry.timings.browserUploadMs ?? null,
         entry.timings.judges.critic ?? null,
         entry.timings.judges.cool ?? null,
         entry.timings.judges.dreamer ?? null,
@@ -258,6 +290,7 @@ async function saveSubmission(entry) {
         entry.scores.cool ?? null,
         entry.scores.dreamer ?? null,
         entry.avgScore,
+        entry.fileName ?? null,
       ]);
       return;
     } catch (err) {
@@ -265,6 +298,35 @@ async function saveSubmission(entry) {
     }
   }
   try { fs.appendFileSync(SUBMISSIONS_PATH, JSON.stringify(entry) + "\n"); } catch (e) { console.warn("[log] Failed to write submission to disk:", e.message); }
+}
+
+async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs) {
+  if (!pgPool) return;
+  const job = jobs[jobId];
+  try {
+    await pgPool.query(`
+      INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs, browser_upload_ms, file_name, file_size_mb)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, [jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null,
+        job?.timings?.browserUploadMs ?? null, job?.fileName ?? null, job?.fileSizeMB ?? null]);
+  } catch (err) {
+    console.error(`[db] Failed to save analyze task: ${err.message}`);
+  }
+}
+
+async function loadInFlightTasks() {
+  if (!pgPool) return [];
+  try {
+    const { rows } = await pgPool.query(`
+      SELECT job_id, judge_id, task_id, platform, target_audience, video_duration_secs,
+             browser_upload_ms, file_name, file_size_mb, created_at
+      FROM analyze_tasks WHERE status = 'pending'
+    `);
+    return rows;
+  } catch (err) {
+    console.error(`[db] Failed to load in-flight tasks: ${err.message}`);
+    return [];
+  }
 }
 
 const submissionLog = [];
@@ -459,74 +521,83 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
 
 // ── ffmpeg conversion ─────────────────────────────────────────────────────────
 async function probeCodecs(filePath) {
-  try {
-    const { stdout: vout } = await execFileAsync(FFPROBE, [
-      "-v", "quiet", "-select_streams", "v:0",
-      "-show_entries", "stream=codec_name", "-of", "csv=p=0", filePath,
-    ]);
-    const { stdout: aout } = await execFileAsync(FFPROBE, [
-      "-v", "quiet", "-select_streams", "a:0",
-      "-show_entries", "stream=codec_name", "-of", "csv=p=0", filePath,
-    ]);
-    return { video: vout.trim(), audio: aout.trim() };
-  } catch {
-    return { video: null, audio: null };
+  // Use `ffmpeg -i` (guaranteed available) rather than ffprobe (separate binary,
+  // not always installed). ffmpeg -i exits with code 1 when no output is given,
+  // but writes full stream info to stderr — we catch the error and parse stderr.
+  async function runProbe() {
+    try {
+      await execFileAsync(FFMPEG, ["-i", filePath]);
+      // ffmpeg exited 0 — no streams detected (treat as unknown)
+      console.warn(`[ffprobe] ffmpeg -i exited 0 — no stream info in stderr`);
+      return { video: null, audio: null };
+    } catch (err) {
+      const stderr = err.stderr || "";
+      const videoMatch = stderr.match(/Stream #\S+: Video: (\w+)/);
+      const audioMatch = stderr.match(/Stream #\S+: Audio: (\w+)/);
+      const video = videoMatch?.[1] ?? null;
+      const audio = audioMatch?.[1] ?? null;
+      if (video === null && audio === null) {
+        console.warn(`[ffprobe] No stream match in stderr — first 300 chars: ${stderr.slice(0, 300)}`);
+      }
+      return { video, audio };
+    }
   }
+
+  let result = await runProbe();
+  if (result.video === null && result.audio === null) {
+    console.warn(`[ffprobe] Both codecs null — retrying once after 200ms`);
+    await new Promise(r => setTimeout(r, 200));
+    result = await runProbe();
+    if (result.video === null && result.audio === null) {
+      console.warn(`[ffprobe] Retry also returned null — will default to full re-encode`);
+    }
+  }
+  console.log(`[ffprobe] final result: video=${result.video ?? "null"} audio=${result.audio ?? "null"}`);
+  return result;
 }
 
-async function convertToMp4(inputPath, { preProbed = null, forceReencode = false } = {}) {
+async function convertToMp4(inputPath, { forceReencode = false } = {}) {
   const outputPath = inputPath + ".mp4";
   const t0 = Date.now();
 
-  const { video: vcodec, audio: acodec } = preProbed || await probeCodecs(inputPath);
-
-  // H264 and HEVC can both be stream-copied into MP4 without re-encoding.
-  // forceReencode overrides this when a stream-copied HEVC file was rejected by TwelveLabs.
-  const copyVideo = !forceReencode && (vcodec === "h264" || vcodec === "hevc" || vcodec === "h265");
-  const copyAudio = acodec === "aac";
-
   const args = ["-i", inputPath];
-  if (copyVideo) {
-    args.push("-c:v", "copy");
-  } else {
+  if (forceReencode) {
+    // TwelveLabs rejected stream copy — fall back to H264/AAC re-encode
     args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2");
-  }
-  if (copyAudio) {
-    args.push("-c:a", "copy");
-  } else {
     args.push("-c:a", "aac", "-b:a", "96k");
+    console.log(`[ffmpeg] ${path.basename(inputPath)} → H264/AAC re-encode (fallback after upload rejection)`);
+  } else {
+    // Attempt stream copy for all codecs — TwelveLabs paid tier accepts HEVC natively.
+    // If TwelveLabs rejects, runPipeline will call convertToMp4 again with forceReencode=true.
+    args.push("-c", "copy");
+    console.log(`[ffmpeg] ${path.basename(inputPath)} → stream copy (all codecs)`);
   }
   args.push("-movflags", "+faststart", "-threads", "1", "-y", outputPath);
 
-  const mode = forceReencode ? "H264 re-encode (HEVC fallback)"
-    : copyVideo && copyAudio ? "stream copy"
-    : copyVideo ? "copy video, re-encode audio"
-    : "full re-encode";
-  console.log(`[ffmpeg] Starting: ${mode} — video: ${vcodec || "?"}, audio: ${acodec || "?"}`);
-
   await execFileAsync(FFMPEG, args);
   const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(2);
+  const mode = forceReencode ? "re-encode" : "stream copy";
   console.log(`[ffmpeg] Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${sizeMB} MB — mode: ${mode}`);
   return outputPath;
 }
 
-// ── Get video duration via ffprobe ────────────────────────────────────────────
+// ── Get video duration via ffmpeg -i stderr parsing ───────────────────────────
 async function getVideoDuration(filePath) {
   try {
-    const { stdout } = await execFileAsync(FFPROBE, [
-      "-v", "quiet",
-      "-show_entries", "format=duration",
-      "-of", "csv=p=0",
-      filePath,
-    ]);
-    const secs = parseFloat(stdout.trim());
-    if (isNaN(secs) || secs <= 0) return null;
-    console.log(`[ffprobe] Duration: ${secs.toFixed(1)}s`);
-    return { secs, label: formatTimestamp(secs) };
-  } catch (e) {
-    console.warn(`[ffprobe] Could not read duration: ${e.message}`);
-    return null;
+    await execFileAsync(FFMPEG, ["-i", filePath]);
+  } catch (err) {
+    const stderr = err.stderr || "";
+    const match = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+    if (match) {
+      const secs = parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseFloat(match[3]);
+      if (secs > 0) {
+        console.log(`[ffmpeg] Duration: ${secs.toFixed(1)}s`);
+        return { secs, label: formatTimestamp(secs) };
+      }
+    }
   }
+  console.warn(`[ffmpeg] Could not read duration`);
+  return null;
 }
 
 // ── Step 1: Build a VideoContext for the TwelveLabs analyze call ─────────────
@@ -583,68 +654,69 @@ async function uploadAssetDirect(filePath) {
   return assetId;
 }
 
-// ── Step 2: Run TwelveLabs Pegasus analysis for one judge ─────
-async function analyzeWithTwelveLabs(videoContext, judge, platform, targetAudience, videoDuration) {
-  const prompt = buildTLPrompt(judge, platform, targetAudience, videoDuration);
-
-  console.log(`[TwelveLabs] Starting analysis — judge: ${judge.id}, context: ${JSON.stringify(videoContext)}`);
-  const t0 = Date.now();
-
-  const JUDGE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per judge attempt
-  let judgeTimeoutHandle;
-  const judgeTimeout = new Promise((_, reject) => {
-    judgeTimeoutHandle = setTimeout(
-      () => reject(new Error(`TwelveLabs analyze timed out after 5 minutes (judge: ${judge.id})`)),
-      JUDGE_TIMEOUT_MS
-    );
-  });
-
-  let result;
-  try {
-    result = await Promise.race([
-      tl().analyze(
-        { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
-        { timeoutInSeconds: 300 }
-      ),
-      judgeTimeout,
-    ]);
-  } finally {
-    clearTimeout(judgeTimeoutHandle);
+// ── Parse raw TwelveLabs text into structured judge result ─────
+async function processAnalyzeResult(rawText, judge, platform, targetAudience, videoDuration) {
+  // If the SDK already deserialized the result into an object, use it directly
+  if (rawText !== null && typeof rawText === "object") {
+    console.log(`[TwelveLabs][${judge.id}] result already deserialized — keys:`, Object.keys(rawText));
+    return applyMomentFilters(rawText, judge, videoDuration);
   }
-  console.log(`[TwelveLabs] Analysis done in ${((Date.now()-t0)/1000).toFixed(1)}s — judge: ${judge.id}`);
-  console.log(`[TwelveLabs][${judge.id}] Raw result object keys:`, Object.keys(result ?? {}));
-  console.log(`[TwelveLabs][${judge.id}] result.data type:`, typeof result?.data);
-  console.log(`[TwelveLabs][${judge.id}] result.data value:`, JSON.stringify(result?.data)?.slice(0, 500));
 
-  const text = result.data || result || "";
-  const clean = String(text).replace(/```json|```/g, "").trim();
-  console.log(`[TwelveLabs][${judge.id}] clean text (first 500 chars):`, clean.slice(0, 500));
+  const clean = String(rawText || "").replace(/```json|```/g, "").trim();
+  console.log(`[TwelveLabs][${judge.id}] raw text type=${typeof rawText}, length=${clean.length}, first 500 chars:`, clean.slice(0, 500));
 
   try {
     const parsed = JSON.parse(clean);
     console.log(`[TwelveLabs][${judge.id}] JSON parsed OK — keys:`, Object.keys(parsed));
-
-    // Validate and sort moments
-    if (parsed.moments?.length) {
-      const tsToSecs = ts => { const p = String(ts).split(":").map(Number); return p.length === 2 ? p[0]*60+p[1] : p[0]; };
-      if (videoDuration?.secs) {
-        const before = parsed.moments.length;
-        parsed.moments = parsed.moments.filter(m => tsToSecs(m.timestamp) <= videoDuration.secs + 2);
-        if (parsed.moments.length < before) console.log(`[TwelveLabs][${judge.id}] Dropped ${before - parsed.moments.length} out-of-range moments`);
-      }
-      parsed.moments.sort((a, b) => tsToSecs(a.timestamp) - tsToSecs(b.timestamp));
-    }
-
-    const momentTypes = (parsed.moments || []).map(m => `${m.timestamp}:${m.type}`).join(", ");
-    console.log(`[TwelveLabs][${judge.id}] moment types:`, momentTypes || "(none)");
-    return parsed;
+    return applyMomentFilters(parsed, judge, videoDuration);
   } catch (parseErr) {
-    console.warn(`[TwelveLabs][${judge.id}] JSON parse failed: ${parseErr.message} — raw length: ${clean.length} chars`);
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return { overall: 0, reaction: clean, positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] };
+    console.error(`[TwelveLabs][${judge.id}] JSON parse FAILED: ${parseErr.message}`);
+    console.error(`[TwelveLabs][${judge.id}] Full raw text (${clean.length} chars): ${clean.slice(0, 2000)}`);
+    if (clean.length > 2000) console.error(`[TwelveLabs][${judge.id}] ...truncated (${clean.length - 2000} more chars)`);
+
+    if (process.env.ANTHROPIC_API_KEY) {
+      try {
+        console.log(`[TwelveLabs][${judge.id}] Attempting Claude fallback to structure raw text`);
+        return await structureWithClaude(clean, judge, platform);
+      } catch (claudeErr) {
+        console.error(`[TwelveLabs][${judge.id}] Claude fallback also failed: ${claudeErr.message}`);
+      }
     }
-    return await structureWithClaude(clean, judge, platform);
+
+    return {
+      overall: null,
+      reaction: "This judge was unable to complete analysis. Please try again.",
+      positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "",
+      moments: [], suggestions: [],
+    };
   }
+}
+
+function applyMomentFilters(parsed, judge, videoDuration) {
+  if (parsed.moments?.length) {
+    const tsToSecs = ts => { const p = String(ts).split(":").map(Number); return p.length === 2 ? p[0]*60+p[1] : p[0]; };
+    if (videoDuration?.secs) {
+      const before = parsed.moments.length;
+      parsed.moments = parsed.moments.filter(m => tsToSecs(m.timestamp) <= videoDuration.secs + 2);
+      if (parsed.moments.length < before) console.log(`[TwelveLabs][${judge.id}] Dropped ${before - parsed.moments.length} out-of-range moments`);
+    }
+    parsed.moments.sort((a, b) => tsToSecs(a.timestamp) - tsToSecs(b.timestamp));
+  }
+  const momentTypes = (parsed.moments || []).map(m => `${m.timestamp}:${m.type}`).join(", ");
+  console.log(`[TwelveLabs][${judge.id}] moment types:`, momentTypes || "(none)");
+  return parsed;
+}
+
+// ── Create an async TwelveLabs analysis task, return taskId ────
+async function createAnalyzeTask(videoContext, judge, platform, targetAudience, videoDuration) {
+  const prompt = buildTLPrompt(judge, platform, targetAudience, videoDuration);
+  console.log(`[TwelveLabs] Creating async task — judge: ${judge.id}`);
+  const { data } = await tl().analyzeAsync.tasks.create(
+    { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
+    { timeoutInSeconds: 30 }
+  );
+  console.log(`[TwelveLabs] Task created — judge: ${judge.id}, taskId: ${data.taskId}, status: ${data.status}`);
+  return data.taskId;
 }
 
 // ── Fallback: Claude structures raw TwelveLabs prose ─────────
@@ -684,14 +756,16 @@ Required JSON format:
 
 // ── POST /api/analyze ─────────────────────────────────────────
 app.post("/api/analyze", (req, res, next) => {
+  const t_request = Date.now();
   console.log(`[upload] Request received — starting multer file parse`);
   upload.single("video")(req, res, (err) => {
     if (err) {
       console.error(`[upload] Multer error:`, err.message);
       return res.status(400).json({ error: err.message });
     }
+    req.browserUploadMs = Date.now() - t_request;
     const fileSizeMB = req.file ? (req.file.size / 1024 / 1024).toFixed(2) : null;
-    console.log(`[upload] Multer done — file: ${req.file?.originalname ?? "none"}, size: ${fileSizeMB ? fileSizeMB + " MB" : "n/a"}, path: ${req.file?.path ?? "n/a"}`);
+    console.log(`[upload] Multer done — file: ${req.file?.originalname ?? "none"}, size: ${fileSizeMB ? fileSizeMB + " MB" : "n/a"}, browser upload: ${req.browserUploadMs}ms`);
     next();
   });
 }, async (req, res) => {
@@ -727,11 +801,15 @@ app.post("/api/analyze", (req, res, next) => {
       results: {},
       error: null,
       createdAt: Date.now(),
+      startedAt: null,
+      timings: { conversionMs: null, uploadMs: null, browserUploadMs: req.browserUploadMs ?? null, judges: {} },
       ip: ((req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown") + "").split(",")[0].trim(),
       fileSizeMB: req.file ? parseFloat((req.file.size / 1024 / 1024).toFixed(2)) : null,
+      fileName: req.file?.originalname ?? null,
+      browserUploadMs: req.browserUploadMs ?? null,
     };
 
-    console.log(`[${jobId}] Job created — queue position: ${queuePosition} — sending jobId to client`);
+    console.log(`[${jobId}] Job created — queue position: ${queuePosition}, browser_upload_ms: ${req.browserUploadMs ?? "null"} — sending jobId to client`);
     res.json({ jobId, queuePosition });
 
     // Enqueue (don't run immediately if another job is active)
@@ -744,182 +822,372 @@ app.post("/api/analyze", (req, res, next) => {
   }
 });
 
-// ── Background pipeline ───────────────────────────────────────
-function isJobCancelled(jobId) {
-  // True if the pipeline timeout fired externally before we got here
-  return jobs[jobId]?.status === "error";
-}
-
+// ── Upload phase pipeline (queue slot held only during this) ──────────────────
 async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges) {
   console.log(`[${jobId}] Pipeline starting — platform: ${platform}, judges: ${selectedJudges.map(j=>j.id).join(", ")}`);
-  const t_start = Date.now();
-  const timings = { conversionMs: null, uploadMs: null, judges: {} };
+  jobs[jobId].startedAt = Date.now();
   let convertedPath = null;
-
-  async function recordSubmission(finalStatus) {
-    const job = jobs[jobId] || {};
-    const scores = {};
-    let scoreSum = 0, scoreCount = 0;
-    for (const [id, r] of Object.entries(job.results || {})) {
-      if (r.status === "done" && r.data?.overall) {
-        scores[id] = r.data.overall;
-        scoreSum += r.data.overall;
-        scoreCount++;
-      }
-    }
-    timings.totalMs = Date.now() - t_start;
-    const entry = {
-      jobId,
-      timestamp: new Date(t_start).toISOString(),
-      ip: job.ip || "unknown",
-      platform,
-      fileSizeMB: job.fileSizeMB || null,
-      videoDurationSecs: job.videoDuration?.secs || null,
-      status: finalStatus,
-      timings: { ...timings },
-      scores,
-      avgScore: scoreCount > 0 ? parseFloat((scoreSum / scoreCount).toFixed(1)) : null,
-    };
-    submissionLog.unshift(entry);
-    if (submissionLog.length > 500) submissionLog.length = 500;
-    await saveSubmission(entry);
-    console.log(`[${jobId}] [log] ${JSON.stringify(entry)}`);
-  }
 
   try {
     jobs[jobId].status = "uploading";
     console.log(`[${jobId}] Step 1: converting and uploading to TwelveLabs`);
     let videoDuration = null;
-    let inputCodecs = { video: null, audio: null };
     if (filePath) {
-      // Probe codec before anything else so it's visible in logs even if conversion hangs
-      inputCodecs = await probeCodecs(filePath);
-      const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
-      console.log(`[${jobId}] Input codec: video=${inputCodecs.video || "unknown"}, audio=${inputCodecs.audio || "unknown"}${isHEVC ? " — will attempt stream copy first" : ""}`);
+      // ── Pre-conversion checks (fast — no ffmpeg encode needed) ──────────────
 
-      const t_conv = Date.now();
-      convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
-      timings.conversionMs = Date.now() - t_conv;
-      videoDuration = await getVideoDuration(convertedPath);
+      // 1. Raw file size — instant stat, no ffmpeg
+      const rawSizeMB = fs.statSync(filePath).size / 1024 / 1024;
+      console.log(`[${jobId}] Raw file: ${jobs[jobId].fileName || "unknown"} — ${rawSizeMB.toFixed(1)} MB`);
+      if (rawSizeMB > 500) {
+        jobs[jobId].status = "error";
+        jobs[jobId].error = "File too large to process. Please use a video under 500MB.";
+        console.log(`[${jobId}] Rejected — raw file too large: ${rawSizeMB.toFixed(1)}MB`);
+        fs.unlink(filePath, () => {});
+        await recordSubmissionForJob(jobId, "rejected_too_large");
+        return;
+      }
 
-      // Issue #3: Enforce 3-minute limit
+      // 2. Duration check on raw file — just reads headers, no encode
+      videoDuration = await getVideoDuration(filePath);
       if (videoDuration && videoDuration.secs > MAX_VIDEO_DURATION_SECS) {
         jobs[jobId].status = "error";
         jobs[jobId].error = `Video is ${videoDuration.label} long. PreviewPanel currently supports videos up to 3:00. Please trim your video and try again.`;
         console.log(`[${jobId}] Rejected — video too long: ${videoDuration.label}`);
-        if (filePath) fs.unlink(filePath, () => {});
-        if (convertedPath) fs.unlink(convertedPath, () => {});
-        await recordSubmission("rejected_too_long");
+        fs.unlink(filePath, () => {});
+        await recordSubmissionForJob(jobId, "rejected_too_long");
         return;
       }
-
       if (videoDuration && videoDuration.secs < 4) {
         jobs[jobId].status = "error";
         jobs[jobId].error = "Video is too short. Please use a video that is at least 4 seconds long.";
         console.log(`[${jobId}] Rejected — video too short: ${videoDuration.label}`);
-        if (filePath) fs.unlink(filePath, () => {});
-        if (convertedPath) fs.unlink(convertedPath, () => {});
-        await recordSubmission("rejected_too_short");
+        fs.unlink(filePath, () => {});
+        await recordSubmissionForJob(jobId, "rejected_too_short");
+        return;
+      }
+
+      // 3. Stream copy to MP4 — fast for all formats; TwelveLabs paid tier accepts HEVC natively
+      const t_conv = Date.now();
+      convertedPath = await convertToMp4(filePath);
+      jobs[jobId].timings.conversionMs = Date.now() - t_conv;
+
+      // 4. Post-conversion size check — must pass before attempting TwelveLabs upload
+      const convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
+      if (convertedSizeMB > 190) {
+        jobs[jobId].status = "error";
+        jobs[jobId].error = "Your video is too large after processing. Please reduce the video quality or length before uploading.";
+        console.log(`[${jobId}] Rejected — converted file too large: ${convertedSizeMB.toFixed(1)}MB`);
+        fs.unlink(filePath, () => {});
+        fs.unlink(convertedPath, () => {});
+        await recordSubmissionForJob(jobId, "rejected_too_large");
         return;
       }
 
       if (videoDuration) jobs[jobId].videoDuration = videoDuration;
     }
+
     const t_upload = Date.now();
     let videoContext;
     try {
       videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
     } catch (uploadErr) {
-      // HEVC stream copy: if TwelveLabs rejected the file, fall back to H264 re-encode
-      const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
-      if (isHEVC && convertedPath) {
-        console.log(`[${jobId}] HEVC stream copy rejected (${uploadErr.message}) — re-encoding to H264`);
+      if (convertedPath && filePath) {
+        // Stream copy was rejected by TwelveLabs — fall back to H264/AAC re-encode
+        console.log(`[${jobId}] Upload rejected (${uploadErr.message}) — falling back to H264/AAC re-encode`);
         fs.unlink(convertedPath, () => {});
         const t_conv2 = Date.now();
-        convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs, forceReencode: true });
-        timings.conversionMs = (timings.conversionMs || 0) + (Date.now() - t_conv2);
+        convertedPath = await convertToMp4(filePath, { forceReencode: true });
+        jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + (Date.now() - t_conv2);
         videoContext = await getVideoContext(videoUrl, convertedPath);
       } else {
         throw uploadErr;
       }
     }
-    timings.uploadMs = Date.now() - t_upload;
-    if (isJobCancelled(jobId)) {
-      console.log(`[${jobId}] Job was cancelled by pipeline timeout before judges started — aborting`);
-      if (filePath) fs.unlink(filePath, () => {});
-      if (convertedPath) fs.unlink(convertedPath, () => {});
-      return;
-    }
-    jobs[jobId].status = "analyzing";
-    console.log(`[${jobId}] Step 2: running judges in parallel${videoDuration ? ` — duration: ${videoDuration.label}` : ""}`);
+    jobs[jobId].timings.uploadMs = Date.now() - t_upload;
 
-    // Run judges in parallel with per-judge retries
-    async function runJudge(judge) {
-      const t_judge = Date.now();
-      let lastErr;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          if (attempt > 1) {
-            console.log(`[${jobId}] Judge ${judge.id} retry ${attempt}/3 — waiting 5s…`);
-            await new Promise(r => setTimeout(r, 5000));
-          }
-          const result = await analyzeWithTwelveLabs(videoContext, judge, platform, targetAudience, videoDuration);
-          jobs[jobId].results[judge.id] = { status: "done", data: result };
-          timings.judges[judge.id] = Date.now() - t_judge;
-          console.log(`[${jobId}] Judge ${judge.id} complete — stored:`, JSON.stringify(jobs[jobId].results[judge.id]).slice(0, 300));
-          return;
-        } catch (err) {
-          lastErr = err;
-          let detail = err.message;
-          try { detail = JSON.parse(err.message.match(/\{[\s\S]*\}/)?.[0] ?? "{}").message || detail; } catch {}
-          console.error(`[${jobId}] Judge ${judge.id} attempt ${attempt} failed: ${detail}`);
-        }
-      }
-      timings.judges[judge.id] = Date.now() - t_judge;
-      let detail = lastErr.message;
-      try { detail = JSON.parse(lastErr.message.match(/\{[\s\S]*\}/)?.[0] ?? "{}").message || detail; } catch {}
-      jobs[jobId].results[judge.id] = {
-        status: "error",
-        error: detail,
-        data: {
-          overall: 0,
-          reaction: `${judge.name} couldn't analyse this video: ${detail}`,
-          positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "",
-          moments: [], suggestions: [],
-        },
-      };
-    }
-
-    await Promise.all(selectedJudges.map(runJudge));
-
-    const succeeded = selectedJudges.filter(j => jobs[jobId].results[j.id]?.status === "done").length;
-    const total = selectedJudges.length;
-    if (succeeded === total) {
-      jobs[jobId].status = "done";
-      console.log(`[${jobId}] Pipeline complete — all ${total} judges succeeded`);
-      await recordSubmission("done");
-    } else if (succeeded > 0) {
-      jobs[jobId].status = "partial";
-      console.log(`[${jobId}] Pipeline complete — ${succeeded}/${total} judges succeeded`);
-      await recordSubmission("partial");
-    } else {
-      const errors = selectedJudges.map(j => jobs[jobId].results[j.id]?.error).filter(Boolean);
-      jobs[jobId].status = "error";
-      jobs[jobId].error = errors[0] ?? "All judges failed — check TwelveLabs API status";
-      console.log(`[${jobId}] Pipeline failed — 0/${total} judges succeeded`);
-      await recordSubmission("error");
-    }
-
+    // Local files no longer needed — TwelveLabs holds the asset
     if (filePath) fs.unlink(filePath, () => {});
     if (convertedPath) fs.unlink(convertedPath, () => {});
+
+    if (jobs[jobId].finalized) {
+      // Pipeline timeout fired during upload
+      console.log(`[${jobId}] Cancelled by pipeline timeout — aborting before task creation`);
+      return;
+    }
+
+    jobs[jobId].status = "analyzing";
+    for (const judge of selectedJudges) {
+      jobs[jobId].results[judge.id] = { status: "pending" };
+    }
+
+    // ── Fire-and-forget task creation ────────────────────────────────────────
+    // Does NOT block runPipeline from returning — queue slot releases immediately.
+    // The IIFE runs after the current call stack unwinds (next event loop tick).
+    const _videoDuration = videoDuration;
+    const _videoContext = videoContext;
+    (async () => {
+      console.log(`[${jobId}] Step 2: creating async TwelveLabs tasks${_videoDuration ? ` — duration: ${_videoDuration.label}` : ""}`);
+      try {
+        const taskCreations = await Promise.allSettled(
+          selectedJudges.map(async judge => {
+            const taskId = await createAnalyzeTask(_videoContext, judge, platform, targetAudience, _videoDuration);
+            await saveAnalyzeTask(jobId, judge.id, taskId, platform, targetAudience, _videoDuration?.secs ?? null);
+            return { judgeId: judge.id, taskId };
+          })
+        );
+
+        if (jobs[jobId]?.finalized) {
+          console.log(`[${jobId}] Job was finalized during task creation (timeout?) — discarding`);
+          return;
+        }
+
+        let tasksCreated = 0;
+        for (let i = 0; i < taskCreations.length; i++) {
+          const creation = taskCreations[i];
+          const judge = selectedJudges[i];
+          if (creation.status === "rejected") {
+            const errMsg = creation.reason?.message || "Failed to create analysis task";
+            console.error(`[${jobId}] Task creation failed for ${judge.id}: ${errMsg}`);
+            if (jobs[jobId]) {
+              jobs[jobId].results[judge.id] = {
+                status: "error", error: errMsg,
+                data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] },
+              };
+            }
+          } else {
+            tasksCreated++;
+          }
+        }
+        console.log(`[${jobId}] ${tasksCreated}/${selectedJudges.length} tasks created — poller will complete job`);
+        if (tasksCreated === 0) {
+          if (jobs[jobId]) {
+            const j = jobs[jobId];
+            j.timings.totalMs = (Date.now() - (j.createdAt || j.startedAt || Date.now())) + (j.timings.browserUploadMs || 0);
+          }
+          await recordSubmissionForJob(jobId, "error");
+        } else {
+          // Some judges may have failed task creation — settle them immediately
+          await checkJobCompletion(jobId);
+        }
+      } catch (err) {
+        console.error(`[${jobId}] Task creation error: ${err.message}`);
+        if (jobs[jobId] && !jobs[jobId].finalized) {
+          const j = jobs[jobId];
+          j.timings.totalMs = (Date.now() - (j.createdAt || j.startedAt || Date.now())) + (j.timings.browserUploadMs || 0);
+        }
+        await recordSubmissionForJob(jobId, "error");
+      }
+    })();
+
+    // runPipeline returns here — queue slot is released NOW, before tasks are created
+    console.log(`[${jobId}] Upload phase done — returning to release queue slot, tasks creating in background`);
+
   } catch (err) {
+    const j = jobs[jobId];
+    j.timings.totalMs = (Date.now() - (j.createdAt || j.startedAt || Date.now())) + (j.timings.browserUploadMs || 0);
     jobs[jobId].status = "error";
     jobs[jobId].error = err.message;
     console.error(`[${jobId}] Pipeline error: ${err.message}`, err);
     if (filePath) fs.unlink(filePath, () => {});
     if (convertedPath) fs.unlink(convertedPath, () => {});
-    await recordSubmission("error");
+    await recordSubmissionForJob(jobId, "error");
   }
+}
+
+// ── Module-level submission recorder (used by pipeline + poller) ──────────────
+async function recordSubmissionForJob(jobId, finalStatus) {
+  const job = jobs[jobId] || {};
+  if (job.finalized) return;
+  job.finalized = true;
+  const scores = {};
+  let scoreSum = 0, scoreCount = 0;
+  for (const [id, r] of Object.entries(job.results || {})) {
+    if (r.status === "done" && r.data?.overall) {
+      scores[id] = r.data.overall;
+      scoreSum += r.data.overall;
+      scoreCount++;
+    }
+  }
+  const browserUploadMs = job.timings?.browserUploadMs ?? null;
+  console.log(`[${jobId}] [log] browser_upload_ms=${browserUploadMs} timings.browserUploadMs=${job.timings?.browserUploadMs} job.browserUploadMs=${job.browserUploadMs}`);
+  const entry = {
+    jobId,
+    timestamp: new Date(job.startedAt || job.createdAt || Date.now()).toISOString(),
+    ip: job.ip || "unknown",
+    platform: job.platform,
+    fileName: job.fileName ?? null,
+    fileSizeMB: job.fileSizeMB || null,
+    videoDurationSecs: job.videoDuration?.secs || null,
+    status: finalStatus,
+    timings: { ...(job.timings || {}), browserUploadMs },
+    scores,
+    avgScore: scoreCount > 0 ? parseFloat((scoreSum / scoreCount).toFixed(1)) : null,
+  };
+  submissionLog.unshift(entry);
+  if (submissionLog.length > 500) submissionLog.length = 500;
+  await saveSubmission(entry);
+  console.log(`[${jobId}] [log] ${JSON.stringify(entry)}`);
+}
+
+// ── Check if all judges for a job are settled; finalize if so ─────────────────
+async function checkJobCompletion(jobId) {
+  const job = jobs[jobId];
+  if (!job || job.finalized) return;
+  const results = job.results || {};
+  const judgeIds = Object.keys(results);
+  if (judgeIds.length === 0) return;
+  if (!judgeIds.every(id => ["done", "error"].includes(results[id].status))) return;
+
+  // Use createdAt (job entered queue) as baseline so total includes queue wait.
+  // Add browserUploadMs so total covers the full user-facing journey.
+  const pipelineMs = Date.now() - (job.createdAt || job.startedAt || Date.now());
+  job.timings.totalMs = pipelineMs + (job.timings.browserUploadMs || 0);
+  const succeeded = judgeIds.filter(id => results[id].status === "done").length;
+  const total = judgeIds.length;
+  let finalStatus;
+  if (succeeded === total) {
+    job.status = "done"; finalStatus = "done";
+    console.log(`[${jobId}] All ${total} judges complete`);
+  } else if (succeeded > 0) {
+    job.status = "partial"; finalStatus = "partial";
+    console.log(`[${jobId}] ${succeeded}/${total} judges complete`);
+  } else {
+    const errors = judgeIds.map(id => results[id].error).filter(Boolean);
+    job.status = "error";
+    job.error = errors[0] ?? "All judges failed";
+    finalStatus = "error";
+    console.log(`[${jobId}] All judges failed`);
+  }
+
+  await recordSubmissionForJob(jobId, finalStatus);
+
+  if (pgPool) {
+    pgPool.query(`DELETE FROM analyze_tasks WHERE job_id = $1`, [jobId]).catch(err =>
+      console.error(`[poller] Failed to cleanup tasks for ${jobId}: ${err.message}`)
+    );
+  }
+}
+
+// ── Background poller: checks TwelveLabs every 15s for completed tasks ────────
+const STALE_TASK_MS = 15 * 60 * 1000; // 15 minutes
+let pollerRunning = false;
+
+async function pollAnalyzeTasks() {
+  if (pollerRunning) return;
+  pollerRunning = true;
+  try {
+    if (!pgPool) return;
+    const { rows } = await pgPool.query(
+      `SELECT job_id, judge_id, task_id, platform, target_audience, video_duration_secs, created_at
+       FROM analyze_tasks WHERE status = 'pending'`
+    );
+    if (rows.length === 0) return;
+    console.log(`[poller] Checking ${rows.length} in-flight TwelveLabs task(s)`);
+
+    await Promise.allSettled(rows.map(async row => {
+      // Skip if the job was already finalized (e.g. timeout fired while tasks were being created)
+      if (jobs[row.job_id]?.finalized) {
+        await pgPool.query(`UPDATE analyze_tasks SET status = 'cancelled' WHERE task_id = $1`, [row.task_id]).catch(() => {});
+        return;
+      }
+      const ageMs = Date.now() - new Date(row.created_at).getTime();
+
+      if (ageMs > STALE_TASK_MS) {
+        console.warn(`[poller] Task ${row.task_id} (${row.judge_id}) stale after ${(ageMs/60000).toFixed(1)}min`);
+        await pgPool.query(`UPDATE analyze_tasks SET status = 'stale' WHERE task_id = $1`, [row.task_id]);
+        const judge = JUDGES.find(j => j.id === row.judge_id);
+        if (jobs[row.job_id]) {
+          jobs[row.job_id].results[row.judge_id] = {
+            status: "error", error: "Analysis timed out after 15 minutes",
+            data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] },
+          };
+        }
+        await checkJobCompletion(row.job_id);
+        return;
+      }
+
+      try {
+        const { data: task } = await tl().analyzeAsync.tasks.retrieve(row.task_id);
+        console.log(`[poller] Task ${row.task_id} (${row.judge_id}): ${task.status}`);
+
+        if (task.status === "ready") {
+          // Log the raw result structure so we can diagnose format issues
+          const resultType = typeof task.result;
+          const dataType = typeof task.result?.data;
+          console.log(`[poller] Task ${row.task_id} result structure: result=${resultType}, result.data=${dataType}`);
+          if (resultType !== "undefined") {
+            const preview = JSON.stringify(task.result).slice(0, 300);
+            console.log(`[poller] Task ${row.task_id} result preview: ${preview}`);
+          }
+
+          // SDK may return result.data as an already-deserialized object or as a string
+          const rawText = task.result?.data ?? task.result ?? "";
+          const judge = JUDGES.find(j => j.id === row.judge_id);
+          const videoDuration = row.video_duration_secs
+            ? { secs: parseFloat(row.video_duration_secs), label: formatTimestamp(parseFloat(row.video_duration_secs)) }
+            : null;
+          let parsed;
+          try {
+            parsed = await processAnalyzeResult(rawText, judge, row.platform, row.target_audience, videoDuration);
+          } catch (parseErr) {
+            console.error(`[poller] Parse failed for ${row.task_id} (${row.judge_id}): ${parseErr.message}`);
+            parsed = { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] };
+          }
+          await pgPool.query(`UPDATE analyze_tasks SET status = 'ready', result = $1 WHERE task_id = $2`, [JSON.stringify(parsed), row.task_id]);
+          if (!jobs[row.job_id]) {
+            console.warn(`[poller] Task ${row.task_id} result for ${row.judge_id} arrived but job ${row.job_id} not in memory — skipping state update`);
+          } else {
+            jobs[row.job_id].results[row.judge_id] = { status: "done", data: parsed };
+          }
+          console.log(`[poller] Judge ${row.judge_id} complete for job ${row.job_id}`);
+          await checkJobCompletion(row.job_id);
+
+        } else if (task.status === "failed") {
+          const errMsg = task.error?.message || "TwelveLabs analysis task failed";
+          console.error(`[poller] Task ${row.task_id} failed: ${errMsg}`);
+          await pgPool.query(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2`, [errMsg, row.task_id]);
+          const judge = JUDGES.find(j => j.id === row.judge_id);
+          if (jobs[row.job_id]) {
+            jobs[row.job_id].results[row.judge_id] = {
+              status: "error", error: errMsg,
+              data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] },
+            };
+          }
+          await checkJobCompletion(row.job_id);
+        }
+        // queued/pending/processing — check again next poll
+      } catch (err) {
+        console.error(`[poller] Error checking task ${row.task_id}: ${err.message}`);
+      }
+    }));
+  } finally {
+    pollerRunning = false;
+  }
+}
+
+// ── Restore in-flight jobs into memory after server restart ───────────────────
+async function resumeInFlightTasks() {
+  const rows = await loadInFlightTasks();
+  if (rows.length === 0) return;
+  const jobIds = new Set(rows.map(r => r.job_id));
+  for (const row of rows) {
+    if (!jobs[row.job_id]) {
+      const browserUploadMs = row.browser_upload_ms != null ? parseInt(row.browser_upload_ms) : null;
+      jobs[row.job_id] = {
+        status: "analyzing", results: {}, error: null,
+        platform: row.platform, targetAudience: row.target_audience,
+        createdAt: new Date(row.created_at).getTime(),
+        startedAt: new Date(row.created_at).getTime(),
+        timings: { conversionMs: null, uploadMs: null, browserUploadMs, judges: {} },
+        ip: "unknown",
+        fileSizeMB: row.file_size_mb != null ? parseFloat(row.file_size_mb) : null,
+        fileName: row.file_name ?? null,
+        browserUploadMs,
+      };
+    }
+    jobs[row.job_id].results[row.judge_id] = { status: "pending" };
+  }
+  console.log(`[startup] Resumed ${rows.length} in-flight task(s) across ${jobIds.size} job(s) from Neon`);
 }
 
 // ── GET /api/status/:jobId ────────────────────────────────────
@@ -960,7 +1228,7 @@ app.get("/admin/logs", (req, res) => {
 
   const platColor = p => p === "youtube" ? "#CC0000" : p === "tiktok" ? "#555" : "#C13584";
   const platBg = p => p === "youtube" ? "#CC000018" : p === "tiktok" ? "#55555518" : "#C1358418";
-  const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s === "rejected_too_long" ? "#795548" : "#C62828";
+  const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s.startsWith("rejected_") ? "#795548" : "#C62828";
 
   const rows = submissionLog.map(e => {
     const judgeCells = ["critic", "cool", "dreamer"].map(id => {
@@ -972,14 +1240,17 @@ app.get("/admin/logs", (req, res) => {
     const scoreColor = e.avgScore >= 7 ? "#43A047" : e.avgScore >= 5 ? "#FB8C00" : "#E53935";
     const date = new Date(e.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 
+    const safeFileName = e.fileName ? e.fileName.replace(/</g, "&lt;").replace(/>/g, "&gt;") : "—";
     return `<tr>
       <td style="color:#999;font-size:11px;white-space:nowrap">${date}</td>
       <td style="font-family:monospace;font-size:11px;color:#666">${e.ip}</td>
       <td><span style="background:${platBg(e.platform)};color:${platColor(e.platform)};padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap">${e.platform}</span></td>
+      <td style="font-size:11px;color:#555;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safeFileName}">${safeFileName}</td>
       <td style="text-align:right;white-space:nowrap">${e.fileSizeMB != null ? e.fileSizeMB + " MB" : "—"}</td>
       <td style="text-align:right;font-family:monospace">${fmtDur(e.videoDurationSecs)}</td>
       <td><strong style="color:${statusColor(e.status)}">${e.status}</strong></td>
       <td style="text-align:right;font-family:monospace;font-weight:700">${fmt(e.timings.totalMs)}</td>
+      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.browserUploadMs)}</td>
       <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.conversionMs)}</td>
       <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.uploadMs)}</td>
       ${judgeCells}
@@ -1024,13 +1295,13 @@ app.get("/admin/logs", (req, res) => {
   <table>
     <thead>
       <tr>
-        <th>Time</th><th>IP</th><th>Platform</th><th>File</th><th>Duration</th>
-        <th>Status</th><th>Total</th><th>ffmpeg</th><th>TL Upload</th>
+        <th>Time</th><th>IP</th><th>Platform</th><th>Filename</th><th>File</th><th>Duration</th>
+        <th>Status</th><th>Total</th><th>Br Upload</th><th>ffmpeg</th><th>TL Upload</th>
         <th>Critic</th><th>Trend</th><th>Dream</th><th>Avg</th>
       </tr>
     </thead>
     <tbody>
-      ${rows || `<tr><td colspan="13" class="empty">No submissions yet</td></tr>`}
+      ${rows || `<tr><td colspan="15" class="empty">No submissions yet</td></tr>`}
     </tbody>
   </table>
   </div>
@@ -1048,6 +1319,9 @@ try {
   const saved = await loadSubmissionLog();
   submissionLog.push(...saved);
   console.log(`[startup] Submission log loaded — ${submissionLog.length} entries`);
+  await resumeInFlightTasks();
+  setInterval(pollAnalyzeTasks, 15_000);
+  console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
 
   const PORT = process.env.PORT || 3001;
   server = app.listen(PORT, "0.0.0.0", () => {

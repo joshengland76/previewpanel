@@ -456,9 +456,7 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
       }}>
         <div style={{ fontSize: "28px", marginBottom: "8px" }}>⏳</div>
         <div style={{ fontWeight: "800", fontSize: "16px", color: "#795548", marginBottom: "6px" }}>
-          {queuePosition === 1
-            ? "You're next in line — starting very soon!"
-            : queuePosition <= 3
+          {queuePosition <= 3
             ? "Other videos being processed. You're nearing the top of the queue!"
             : `Other videos being processed. You're #${queuePosition} in line.`}
         </div>
