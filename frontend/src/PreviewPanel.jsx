@@ -550,6 +550,7 @@ export default function PreviewPanel() {
   const [showSlowConnWarning, setShowSlowConnWarning] = useState(false);
   const [largeFileWarning, setLargeFileWarning] = useState(null);
   const [largeSizeRiskWarning, setLargeSizeRiskWarning] = useState(false);
+  const [uploadZoneError, setUploadZoneError] = useState(null);
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
   const xhrRef = useRef(null);
@@ -651,6 +652,7 @@ export default function PreviewPanel() {
     setVideoFile(f);
     setLargeFileWarning(null);
     setLargeSizeRiskWarning(false);
+    setUploadZoneError(null);
     const sizeMB = f.size / 1024 / 1024;
     if (sizeMB > 150) {
       setLargeFileWarning(`${sizeMB.toFixed(0)}MB`);
@@ -666,6 +668,30 @@ export default function PreviewPanel() {
   };
 
   const startAnalysis = () => {
+    setUploadZoneError(null);
+    // Synchronous size check
+    const sizeMB = videoFile.size / 1024 / 1024;
+    if (sizeMB > 500) {
+      setUploadZoneError("File too large. Please use a video under 500MB.");
+      return;
+    }
+    // Async duration check via browser video element — only start XHR once we know it passes
+    const url = URL.createObjectURL(videoFile);
+    const vid = document.createElement("video");
+    vid.preload = "metadata";
+    vid.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      if (vid.duration > 180) {
+        setUploadZoneError("Video is over 3 minutes long. Please trim it and try again.");
+        return;
+      }
+      doStartAnalysis();
+    };
+    vid.onerror = () => { URL.revokeObjectURL(url); doStartAnalysis(); };
+    vid.src = url;
+  };
+
+  const doStartAnalysis = () => {
     setShowNotifPrimer(false);
     notifiedRef.current = false;
     savedRef.current = false;
@@ -757,7 +783,7 @@ export default function PreviewPanel() {
     setJudgeResults({}); setVideoFile(null); setStatusMessage("");
     setVideoDurationSecs(null); setQueuePosition(0);
     setUploadProgress(0); setUploadedMB(0); setUploadSpeedMBps(0);
-    setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false);
+    setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
     notifiedRef.current = false; savedRef.current = false;
   };
 
@@ -879,7 +905,7 @@ export default function PreviewPanel() {
                     <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
                     <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
                       {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                      <span onClick={e => { e.stopPropagation(); setVideoFile(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); }}
+                      <span onClick={e => { e.stopPropagation(); setVideoFile(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
                         style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
                     </div>
                   </div>
@@ -887,11 +913,16 @@ export default function PreviewPanel() {
                   <div style={{ padding: "12px 20px" }}>
                     <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
                     <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · 200MB · {plat.hint}</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "4px", lineHeight: "1.4" }}>💡 Tip: 1080p gives the best results — 4K adds file size without improving analysis quality.</div>
+                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
+                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "4px", lineHeight: "1.4" }}>💡 Tip: Film in 1080p for fastest uploads — 4K adds file size without improving results.</div>
                   </div>
                 )}
               </div>
+              {uploadZoneError && (
+                <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>
+                  ⛔ {uploadZoneError}
+                </div>
+              )}
               {largeSizeRiskWarning && (
                 <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "10px", fontSize: "12px", color: "#E65100", lineHeight: "1.5" }}>
                   ⚠️ <strong>Large file detected ({largeFileWarning})</strong> — this file may be too large after processing. Consider trimming your video to under 90 seconds or compressing before uploading.
