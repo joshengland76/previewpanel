@@ -818,8 +818,15 @@ app.post("/api/analyze", (req, res, next) => {
       return res.status(400).json({ error: err.message });
     }
     req.browserUploadMs = Date.now() - t_request;
-    const fileSizeMB = req.file ? (req.file.size / 1024 / 1024).toFixed(2) : null;
-    console.log(`[upload] Multer done — file: ${req.file?.originalname ?? "none"}, size: ${fileSizeMB ? fileSizeMB + " MB" : "n/a"}, browser upload: ${req.browserUploadMs}ms`);
+    const fileSizeMB = req.file ? (req.file.size / 1024 / 1024) : null;
+    if (req.file && fileSizeMB != null) {
+      const secs = req.browserUploadMs / 1000;
+      const mbps = secs > 0 ? (fileSizeMB / secs).toFixed(2) : "?";
+      const slow = parseFloat(mbps) < 0.5 ? " — likely slow network" : "";
+      console.log(`[upload] ${req.file.originalname} — ${fileSizeMB.toFixed(1)}MB in ${secs.toFixed(0)}s = ${mbps} MB/s${slow}`);
+    } else {
+      console.log(`[upload] Multer done — file: ${req.file?.originalname ?? "none"}, browser upload: ${req.browserUploadMs}ms`);
+    }
     next();
   });
 }, async (req, res) => {
@@ -1163,6 +1170,7 @@ async function pollAnalyzeTasks() {
       }
 
       try {
+        const t_judge = Date.now();
         // HttpResponsePromise.then() unwraps to data directly — no { data } destructure needed
         const task = await tl().analyzeAsync.tasks.retrieve(row.task_id);
         console.log(`[poller] Task ${row.task_id} (${row.judge_id}): ${task.status}`);
@@ -1195,8 +1203,9 @@ async function pollAnalyzeTasks() {
             console.warn(`[poller] Task ${row.task_id} result for ${row.judge_id} arrived but job ${row.job_id} not in memory — skipping state update`);
           } else {
             jobs[row.job_id].results[row.judge_id] = { status: "done", data: parsed };
+            jobs[row.job_id].timings.judges[row.judge_id] = Date.now() - t_judge;
           }
-          console.log(`[poller] Judge ${row.judge_id} complete for job ${row.job_id}`);
+          console.log(`[poller] Judge ${row.judge_id} complete for job ${row.job_id} in ${Date.now() - t_judge}ms`);
           await checkJobCompletion(row.job_id);
 
         } else if (task.status === "failed") {
