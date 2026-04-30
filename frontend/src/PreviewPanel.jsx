@@ -882,57 +882,29 @@ export default function PreviewPanel() {
               </div>
             )}
 
-            {/* 1 — Video upload */}
+            {/* 1 — Video upload — MINIMAL DIAGNOSTIC TEST
+                 Stripped to bare label+input to isolate whether the issue is in
+                 styling, drag handlers, or something deeper. No ref, no drag handlers,
+                 no display:none — input is visible and unstyled. */}
             <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
-              {/* Input is a direct child of the label — the most universally reliable
-                  way to open a file picker. No htmlFor/id linking, no .click() JS,
-                  works on iOS Safari, desktop Chrome, and Firefox. */}
-              <label className="drop-zone"
-                onDragOver={e => e.preventDefault()}
-                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f); }}
-                style={{
-                  border: `2px dashed ${videoFile ? B.brown : B.border}`,
-                  borderRadius: "12px", textAlign: "center",
-                  cursor: "pointer", background: videoFile ? B.lightBrown : "#fff",
-                  transition: "all 0.2s ease",
-                  minHeight: "140px", display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                <input ref={fileInputRef} type="file" accept="video/*"
-                  onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
-                  style={{ display: "none" }}/>
-                {videoFile ? (
-                  <div style={{ padding: "12px 20px" }}>
-                    <div style={{ fontSize: "20px", marginBottom: "4px" }}>🎬</div>
-                    <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
-                    <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
-                      {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                      <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
-                        style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ padding: "12px 20px" }}>
-                    <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
-                    <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "4px", lineHeight: "1.4" }}>💡 Tip: Film in 1080p for fastest uploads — 4K adds file size without improving results.</div>
+              <label style={{
+                display: "block", border: `2px dashed ${videoFile ? B.brown : B.border}`,
+                borderRadius: "12px", textAlign: "center", cursor: "pointer",
+                background: videoFile ? B.lightBrown : "#fff", padding: "24px 20px",
+                minHeight: "140px",
+              }}>
+                <input type="file" accept="video/*"
+                  onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}/>
+                {videoFile && (
+                  <div style={{ marginTop: "8px", fontSize: "13px", color: B.brown, fontWeight: "700" }}>
+                    {videoFile.name} — {(videoFile.size/1024/1024).toFixed(1)} MB
                   </div>
                 )}
               </label>
               {uploadZoneError && (
                 <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>
                   ⛔ {uploadZoneError}
-                </div>
-              )}
-              {largeSizeRiskWarning && (
-                <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "10px", fontSize: "12px", color: "#E65100", lineHeight: "1.5" }}>
-                  ⚠️ <strong>Large file detected ({largeFileWarning})</strong> — this file may be too large after processing. Consider trimming your video to under 90 seconds or compressing before uploading.
-                </div>
-              )}
-              {!largeSizeRiskWarning && largeFileWarning && (
-                <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "10px", fontSize: "12px", color: "#E65100", lineHeight: "1.5" }}>
-                  ⚠️ <strong>Large file detected ({largeFileWarning})</strong> — upload may take several minutes on slower connections. Consider trimming or compressing your video first.
                 </div>
               )}
             </div>
