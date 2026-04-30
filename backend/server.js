@@ -751,9 +751,11 @@ async function createAnalyzeTask(videoContext, judge, platform, targetAudience, 
   console.log(`[TwelveLabs] SDK check — typeof analyzeAsync: ${typeof tlClient.analyzeAsync}, typeof analyzeAsync.tasks: ${typeof tlClient.analyzeAsync?.tasks}, typeof analyzeAsync.tasks.create: ${typeof tlClient.analyzeAsync?.tasks?.create}`);
   console.log(`[TwelveLabs] Creating async task — judge: ${judge.id}, videoContext: ${JSON.stringify(videoContext)}`);
 
-  let response;
+  // HttpResponsePromise.then() unwraps to data directly — await resolves to the
+  // CreateAnalyzeTaskResponse object itself, not { data, rawResponse }.
+  let data;
   try {
-    response = await tlClient.analyzeAsync.tasks.create(
+    data = await tlClient.analyzeAsync.tasks.create(
       { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
       { timeoutInSeconds: 30 }
     );
@@ -767,8 +769,7 @@ async function createAnalyzeTask(videoContext, judge, platform, targetAudience, 
     throw err;
   }
 
-  const { data } = response;
-  console.log(`[TwelveLabs] Task created — judge: ${judge.id}, taskId: ${data.taskId}, status: ${data.status}`);
+  console.log(`[TwelveLabs] Task created — judge: ${judge.id}, taskId: ${data.taskId}, status: ${data.status}, raw: ${JSON.stringify(data)}`);
   return data.taskId;
 }
 
@@ -1162,7 +1163,8 @@ async function pollAnalyzeTasks() {
       }
 
       try {
-        const { data: task } = await tl().analyzeAsync.tasks.retrieve(row.task_id);
+        // HttpResponsePromise.then() unwraps to data directly — no { data } destructure needed
+        const task = await tl().analyzeAsync.tasks.retrieve(row.task_id);
         console.log(`[poller] Task ${row.task_id} (${row.judge_id}): ${task.status}`);
 
         if (task.status === "ready") {
