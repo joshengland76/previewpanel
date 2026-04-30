@@ -744,10 +744,10 @@ export default function PreviewPanel() {
           <div className="pp-content-pad" style={{ animation: "pp-slide 0.35s ease" }}>
 
             {/* Logo + BETA + History button */}
-            <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px", position: "relative" }}>
+            <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
               <img src="/owl-logo.png?v=2" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
-              <div style={{ marginTop: "4px" }}>
+              <div style={{ marginTop: "1px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
               </div>
               {/* Issue #9: History button */}
@@ -920,9 +920,12 @@ export default function PreviewPanel() {
           <div style={{ animation: "pp-slide 0.3s ease" }}>
 
             {/* Top bar */}
-            <div style={{ textAlign: "center", paddingTop: "10px", paddingBottom: "8px", position: "relative" }}>
+            <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
               <img src="/owl-logo.png?v=2" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
+              <div style={{ marginTop: "1px" }}>
+                <span style={{ fontSize: "10px", fontWeight: "700", background: "#4E342E", color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
+              </div>
               {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{
                   position: "absolute", top: "10px", right: "0",
