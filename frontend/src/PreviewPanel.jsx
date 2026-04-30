@@ -434,10 +434,9 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
 }
 
 // ── Issue #5 & #6: Big waiting banner ────────────────────────
-function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, selectedJudges, jobStatus }) {
+function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploadComplete }) {
   const isWaiting = jobStatus === "analyzing" || jobStatus === "uploading" || jobStatus === "queued";
   const waitingMsg = useWaitingMessage(isWaiting);
-  const isError = jobStatus === "error";
 
   const doneCount = Object.values(judgeResults).filter(r => r.status === "done").length;
   const totalCount = selectedJudges.length;
@@ -445,29 +444,19 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
   const secs = elapsed % 60;
   const elapsedStr = `${mins}:${secs.toString().padStart(2, "0")}`;
 
-  if (isError) return null;
-
-  // Queue waiting state
-  if (queuePosition > 0) {
-    return (
-      <div style={{
-        background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "14px",
-        padding: "20px 24px", marginBottom: "18px", textAlign: "center",
-      }}>
-        <div style={{ fontSize: "28px", marginBottom: "8px" }}>⏳</div>
-        <div style={{ fontWeight: "800", fontSize: "16px", color: "#795548", marginBottom: "6px" }}>
-          {queuePosition <= 3
-            ? "Other videos being processed. You're nearing the top of the queue!"
-            : `Other videos being processed. You're #${queuePosition} in line.`}
-        </div>
-        <div style={{ fontSize: "13px", color: "#888", lineHeight: "1.6" }}>
-          Your analysis will start automatically — no need to do anything.
-        </div>
-      </div>
-    );
+  let statusText;
+  if (jobStatus === "uploading" || jobStatus === "queued") {
+    statusText = uploadComplete ? "Preparing your case file…" : "Uploading & converting…";
+  } else if (doneCount === 0) {
+    statusText = "The panel is reviewing the evidence…";
+  } else if (doneCount === 1) {
+    statusText = "1 of 3 judges has reached their verdict";
+  } else if (doneCount === 2) {
+    statusText = "2 of 3 judges have reached their verdict";
+  } else {
+    statusText = `${doneCount} of ${totalCount} judges have reached their verdict`;
   }
 
-  // Active processing state — always show this once queuePosition is 0
   return (
     <div style={{
       background: B.lightBrown, border: `1.5px solid ${B.brown}30`, borderRadius: "14px",
@@ -476,9 +465,7 @@ function WaitingBanner({ elapsed, statusMessage, queuePosition, judgeResults, se
       {/* Progress bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
         <div style={{ fontWeight: "800", fontSize: "15px", color: B.action }}>
-          {jobStatus === "uploading" || jobStatus === "queued"
-            ? "Uploading & converting…"
-            : `${doneCount} of ${totalCount} judges done`}
+          {statusText}
         </div>
         <div style={{ fontSize: "13px", fontWeight: "700", color: B.brown, fontFamily: "'Courier New', monospace" }}>
           {elapsedStr}
@@ -543,8 +530,8 @@ export default function PreviewPanel() {
   const [showNotifPrimer, setShowNotifPrimer] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState(loadHistory);
-  const [queuePosition, setQueuePosition] = useState(0);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadProgressIndeterminate, setUploadProgressIndeterminate] = useState(false);
   const [uploadedMB, setUploadedMB] = useState(0);
   const [uploadSpeedMBps, setUploadSpeedMBps] = useState(0);
   const [showSlowConnWarning, setShowSlowConnWarning] = useState(false);
@@ -558,7 +545,7 @@ export default function PreviewPanel() {
   const savedRef = useRef(false);
   const plat = PLATFORMS.find(p => p.id === platform);
   const isFinished = jobStatus === "done" || jobStatus === "partial";
-  const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== null;
+  const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== "timeout" && jobStatus !== null;
 
   const elapsed = useElapsed(isProcessing);
 
@@ -585,17 +572,8 @@ export default function PreviewPanel() {
         setJobStatus(data.status);
         setJudgeResults(data.results || {});
         if (data.duration) setVideoDurationSecs(data.duration);
-        if (typeof data.queuePosition === "number") setQueuePosition(data.queuePosition);
 
-        if (data.status === "queued") {
-          setStatusMessage(`Waiting in queue — position #${data.queuePosition}…`);
-        } else if (data.status === "uploading") {
-          setStatusMessage("Converting and uploading your video…");
-        } else if (data.status === "analyzing") {
-          const done = Object.values(data.results||{}).filter(r=>r.status==="done").length;
-          const total = Object.keys(data.results||{}).length;
-          setStatusMessage(`${done} of ${total} judges done…`);
-        } else if (data.status === "done" || data.status === "partial" || data.status === "error") {
+        if (data.status === "done" || data.status === "partial" || data.status === "error" || data.status === "timeout") {
           clearInterval(pollRef.current);
           if (data.status === "done" || data.status === "partial") {
             const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
@@ -626,6 +604,8 @@ export default function PreviewPanel() {
               saveToHistory(entry);
               setHistory(loadHistory());
             }
+          } else if (data.status === "timeout") {
+            setStatusMessage(data.error || "The panel took too long to reach a verdict.");
           } else {
             setStatusMessage(`Error: ${data.error}`);
           }
@@ -656,16 +636,40 @@ export default function PreviewPanel() {
     setUploadZoneError(null);
     const sizeMB = f.size / 1024 / 1024;
 
-    // Duration check runs first (async) — size check follows inside the callback
-    // so the user always sees the most actionable error (too long beats too large).
+    const clearFile = () => {
+      setVideoFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    };
+
     const url = URL.createObjectURL(f);
     const vid = document.createElement("video");
     vid.preload = "metadata";
+    let settled = false;
+
+    // 3-second timeout — MacBook Chrome sometimes never fires onloadedmetadata for .mov
+    const metadataTimeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      console.log(`[PreviewPanel] Metadata load timed out — file: "${f.name}", size: ${sizeMB.toFixed(1)}MB`);
+      if (sizeMB > 400) {
+        clearFile();
+        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
+      } else if (sizeMB > 150) {
+        setLargeFileWarning(`${Math.round(sizeMB)}MB`);
+      }
+    }, 3000);
+
     vid.onloadedmetadata = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(metadataTimeout);
       URL.revokeObjectURL(url);
       if (vid.duration > 180) {
+        clearFile();
         setUploadZoneError("Video is over 3 minutes long. Please trim it and try again.");
       } else if (sizeMB > 500) {
+        clearFile();
         setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
       } else if (sizeMB > 300 && vid.duration > 90) {
         setLargeSizeRiskWarning(true);
@@ -674,15 +678,20 @@ export default function PreviewPanel() {
         setLargeFileWarning(`${Math.round(sizeMB)}MB`);
       }
     };
+
     vid.onerror = () => {
-      // Metadata unreadable — skip duration check, fall back to size-only
+      if (settled) return;
+      settled = true;
+      clearTimeout(metadataTimeout);
       URL.revokeObjectURL(url);
       if (sizeMB > 500) {
+        clearFile();
         setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
       } else if (sizeMB > 150) {
         setLargeFileWarning(`${Math.round(sizeMB)}MB`);
       }
     };
+
     vid.src = url;
   };
 
@@ -699,8 +708,8 @@ export default function PreviewPanel() {
     setStep(2);
     setJudgeResults({});
     setJobStatus("uploading");
-    setQueuePosition(0);
     setUploadProgress(0);
+    setUploadProgressIndeterminate(false);
     setUploadedMB(0);
     setUploadSpeedMBps(0);
     setShowSlowConnWarning(false);
@@ -718,7 +727,6 @@ export default function PreviewPanel() {
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
     const uploadStart = Date.now();
-    const totalMB = videoFile.size / 1024 / 1024;
     let slowConnStart = null;
 
     const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
@@ -728,7 +736,15 @@ export default function PreviewPanel() {
       setStatusMessage("Upload timed out. Please try on a stronger WiFi connection or reduce your video file size.");
     }, UPLOAD_TIMEOUT_MS);
 
+    // Show pulsing indeterminate bar if no progress event fires within 5 seconds
+    let noProgressTimer = setTimeout(() => {
+      setUploadProgressIndeterminate(true);
+    }, 5000);
+
     xhr.upload.onprogress = (e) => {
+      clearTimeout(noProgressTimer);
+      noProgressTimer = null;
+      setUploadProgressIndeterminate(false);
       if (!e.lengthComputable) return;
       const loaded = e.loaded / 1024 / 1024;
       const elapsedSecs = (Date.now() - uploadStart) / 1000;
@@ -747,12 +763,13 @@ export default function PreviewPanel() {
 
     xhr.onload = () => {
       clearTimeout(timeoutHandle);
+      clearTimeout(noProgressTimer);
       try {
         const data = JSON.parse(xhr.responseText);
         if (data.error) throw new Error(data.error);
         setUploadProgress(100);
-        setJobStatus(data.queuePosition > 0 ? "queued" : "uploading");
-        setQueuePosition(data.queuePosition || 0);
+        setUploadProgressIndeterminate(false);
+        setJobStatus("uploading");
         setJobId(data.jobId);
       } catch (err) {
         setJobStatus("error");
@@ -762,11 +779,15 @@ export default function PreviewPanel() {
 
     xhr.onerror = () => {
       clearTimeout(timeoutHandle);
+      clearTimeout(noProgressTimer);
       setJobStatus("error");
       setStatusMessage("Upload failed. Please check your connection and try again.");
     };
 
-    xhr.onabort = () => clearTimeout(timeoutHandle);
+    xhr.onabort = () => {
+      clearTimeout(timeoutHandle);
+      clearTimeout(noProgressTimer);
+    };
 
     xhr.open("POST", `${API_BASE}/api/analyze`);
     xhr.send(formData);
@@ -782,8 +803,8 @@ export default function PreviewPanel() {
     if (xhrRef.current) { xhrRef.current.abort(); xhrRef.current = null; }
     setStep(1); setJobId(null); setJobStatus(null);
     setJudgeResults({}); setVideoFile(null); setStatusMessage("");
-    setVideoDurationSecs(null); setQueuePosition(0);
-    setUploadProgress(0); setUploadedMB(0); setUploadSpeedMBps(0);
+    setVideoDurationSecs(null);
+    setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
     setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
     notifiedRef.current = false; savedRef.current = false;
   };
@@ -812,6 +833,7 @@ export default function PreviewPanel() {
         @keyframes pp-pulse { 0%,100%{opacity:.2;transform:scale(.75)} 50%{opacity:1;transform:scale(1.2)} }
         @keyframes pp-fade { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
         @keyframes pp-slide { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes pp-indeterminate { 0%{transform:translateX(-250%)} 100%{transform:translateX(600%)} }
         .pp-btn:hover:not(:disabled) { background: ${B.actionHover} !important; transform: translateY(-1px); }
         .pp-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .drop-zone:hover { border-color: ${B.brown} !important; background: ${B.lightBrown} !important; }
@@ -901,10 +923,14 @@ export default function PreviewPanel() {
                   cursor: "pointer", background: videoFile ? B.lightBrown : "#fff",
                   transition: "all 0.2s ease",
                   minHeight: "140px", display: "flex", alignItems: "center", justifyContent: "center",
+                  position: "relative",
                 }}>
                 <input ref={fileInputRef} type="file" accept="video/*"
                   onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
-                  style={{ position: "absolute", opacity: 0, width: 0, height: 0 }}/>
+                  style={videoFile
+                    ? { position: "absolute", opacity: 0, width: 0, height: 0 }
+                    : { position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }
+                  }/>
                 {videoFile ? (
                   <div style={{ padding: "12px 20px" }}>
                     <div style={{ fontSize: "20px", marginBottom: "4px" }}>🎬</div>
@@ -1063,11 +1089,15 @@ export default function PreviewPanel() {
             {isProcessing && !jobId && jobStatus === "uploading" && (
               <div style={{ marginBottom: "16px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#888", marginBottom: "6px" }}>
-                  <span>Uploading… {uploadedMB.toFixed(1)} of {videoFile ? (videoFile.size/1024/1024).toFixed(1) : "?"}  MB</span>
+                  <span>Uploading… {uploadProgressIndeterminate ? "connecting…" : `${uploadedMB.toFixed(1)} of ${videoFile ? (videoFile.size/1024/1024).toFixed(1) : "?"} MB`}</span>
                   <span>{uploadSpeedMBps > 0 ? `${uploadSpeedMBps.toFixed(2)} MB/s` : ""}</span>
                 </div>
                 <div style={{ height: "6px", background: B.border, borderRadius: "99px", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${uploadProgress}%`, background: B.action, borderRadius: "99px", transition: "width 0.5s ease" }}/>
+                  {uploadProgressIndeterminate ? (
+                    <div style={{ height: "100%", width: "30%", background: `linear-gradient(90deg, transparent, ${B.action}, transparent)`, borderRadius: "99px", animation: "pp-indeterminate 1.4s ease-in-out infinite" }}/>
+                  ) : (
+                    <div style={{ height: "100%", width: `${uploadProgress}%`, background: B.action, borderRadius: "99px", transition: "width 0.5s ease" }}/>
+                  )}
                 </div>
               </div>
             )}
@@ -1083,11 +1113,10 @@ export default function PreviewPanel() {
             {isProcessing && (
               <WaitingBanner
                 elapsed={elapsed}
-                statusMessage={statusMessage}
-                queuePosition={queuePosition}
                 judgeResults={judgeResults}
                 selectedJudges={selectedJudges}
                 jobStatus={jobStatus}
+                uploadComplete={jobId !== null}
               />
             )}
 
@@ -1109,6 +1138,28 @@ export default function PreviewPanel() {
                   cursor: "pointer", fontFamily: "Montserrat, sans-serif",
                 }}>
                   ← Try Again
+                </button>
+              </div>
+            )}
+
+            {/* Timeout state — amber, with Try Again */}
+            {jobStatus === "timeout" && (
+              <div style={{
+                background: "#FFF3E0", border: "1.5px solid #FFB74D", borderRadius: "14px",
+                padding: "20px 24px", marginBottom: "18px",
+              }}>
+                <div style={{ fontWeight: "800", fontSize: "15px", color: "#E65100", marginBottom: "6px" }}>
+                  ⏱ Panel timeout
+                </div>
+                <div style={{ fontSize: "13px", color: "#BF360C", lineHeight: "1.6" }}>
+                  {statusMessage || "The panel took too long to reach a verdict — this can happen during busy periods. Your video has been submitted and you can try again for a fresh panel."}
+                </div>
+                <button onClick={reset} style={{
+                  marginTop: "14px", background: "#E65100", color: "#fff", border: "none",
+                  borderRadius: "8px", padding: "10px 20px", fontSize: "13px", fontWeight: "700",
+                  cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+                }}>
+                  Try Again
                 </button>
               </div>
             )}
@@ -1157,6 +1208,20 @@ export default function PreviewPanel() {
                 <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs} platform={platform}/>
               ))}
             </div>
+
+            {/* Partial result explanation */}
+            {jobStatus === "partial" && (
+              <div style={{
+                marginTop: "16px", padding: "12px 16px",
+                background: "#F5F5F5", border: "1px solid #E0E0E0", borderRadius: "10px",
+                display: "flex", gap: "10px", alignItems: "flex-start",
+              }}>
+                <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px", color: "#9E9E9E" }}>ℹ</span>
+                <span style={{ fontSize: "12px", color: "#757575", lineHeight: "1.55" }}>
+                  Note: One or more judges were unable to complete their review for this submission. The verdict reflects only the judges who responded.
+                </span>
+              </div>
+            )}
           </div>
         )}
       </main>

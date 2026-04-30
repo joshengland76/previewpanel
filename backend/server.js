@@ -203,6 +203,8 @@ async function initDb() {
     await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
     await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_name TEXT`);
     await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
+    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
+    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
@@ -219,7 +221,7 @@ async function loadSubmissionLog() {
                total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
                critic_ms, trendsetter_ms, dreamer_ms,
                critic_score, trendsetter_score, dreamer_score, avg_score,
-               file_name
+               file_name, task_creation_ms, queue_wait_ms
         FROM submissions ORDER BY created_at DESC LIMIT 500
       `);
       return rows.map(r => ({
@@ -236,6 +238,8 @@ async function loadSubmissionLog() {
           conversionMs: r.ffmpeg_ms,
           uploadMs: r.upload_ms,
           browserUploadMs: r.browser_upload_ms,
+          taskCreationMs: r.task_creation_ms != null ? parseInt(r.task_creation_ms) : null,
+          queueWaitMs: r.queue_wait_ms != null ? parseInt(r.queue_wait_ms) : null,
           judges: {
             critic: r.critic_ms,
             cool: r.trendsetter_ms,
@@ -270,8 +274,8 @@ async function saveSubmission(entry) {
            total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
            critic_ms, trendsetter_ms, dreamer_ms,
            critic_score, trendsetter_score, dreamer_score, avg_score,
-           file_name)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+           file_name, task_creation_ms, queue_wait_ms)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
       `, [
         entry.jobId,
         entry.ip,
@@ -291,6 +295,8 @@ async function saveSubmission(entry) {
         entry.scores.dreamer ?? null,
         entry.avgScore,
         entry.fileName ?? null,
+        entry.timings.taskCreationMs ?? null,
+        entry.timings.queueWaitMs ?? null,
       ]);
       return;
     } catch (err) {
@@ -887,6 +893,9 @@ app.post("/api/analyze", (req, res, next) => {
 async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges) {
   console.log(`[${jobId}] Pipeline starting — platform: ${platform}, judges: ${selectedJudges.map(j=>j.id).join(", ")}`);
   jobs[jobId].startedAt = Date.now();
+  const queueWaitMs = jobs[jobId].startedAt - (jobs[jobId].createdAt || jobs[jobId].startedAt);
+  jobs[jobId].timings.queueWaitMs = queueWaitMs;
+  console.log(`[${jobId}] Queue wait: ${queueWaitMs}ms (${(queueWaitMs / 1000).toFixed(1)}s)`);
   let convertedPath = null;
 
   try {
@@ -989,6 +998,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     const _videoDuration = videoDuration;
     const _videoContext = videoContext;
     (async () => {
+      const t_tasks_start = Date.now();
       console.log(`[${jobId}] Step 2: creating async TwelveLabs tasks${_videoDuration ? ` — duration: ${_videoDuration.label}` : ""}`);
       try {
         const taskCreations = await Promise.allSettled(
@@ -1003,6 +1013,13 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
           console.log(`[${jobId}] Job was finalized during task creation (timeout?) — discarding`);
           return;
         }
+
+        const taskCreationMs = Date.now() - t_tasks_start;
+        if (jobs[jobId]) {
+          jobs[jobId].timings.taskCreationMs = taskCreationMs;
+          jobs[jobId].tasksCreatedAt = Date.now();
+        }
+        console.log(`[${jobId}] task_creation_ms=${taskCreationMs} — tasks created and saved to Neon`);
 
         let tasksCreated = 0;
         for (let i = 0; i < taskCreations.length; i++) {
@@ -1099,13 +1116,14 @@ async function checkJobCompletion(jobId) {
   const results = job.results || {};
   const judgeIds = Object.keys(results);
   if (judgeIds.length === 0) return;
-  if (!judgeIds.every(id => ["done", "error"].includes(results[id].status))) return;
+  if (!judgeIds.every(id => ["done", "error", "timeout"].includes(results[id].status))) return;
 
   // Use createdAt (job entered queue) as baseline so total includes queue wait.
   // Add browserUploadMs so total covers the full user-facing journey.
   const pipelineMs = Date.now() - (job.createdAt || job.startedAt || Date.now());
   job.timings.totalMs = pipelineMs + (job.timings.browserUploadMs || 0);
   const succeeded = judgeIds.filter(id => results[id].status === "done").length;
+  const timedOut = judgeIds.filter(id => results[id].status === "timeout").length;
   const total = judgeIds.length;
   let finalStatus;
   if (succeeded === total) {
@@ -1114,6 +1132,11 @@ async function checkJobCompletion(jobId) {
   } else if (succeeded > 0) {
     job.status = "partial"; finalStatus = "partial";
     console.log(`[${jobId}] ${succeeded}/${total} judges complete`);
+  } else if (timedOut > 0) {
+    job.status = "timeout";
+    job.error = "The panel took too long to reach a verdict — this can happen during busy periods. Your video has been submitted and you can try again for a fresh panel.";
+    finalStatus = "timeout";
+    console.log(`[${jobId}] All judges timed out — setting job status to 'timeout'`);
   } else {
     const errors = judgeIds.map(id => results[id].error).filter(Boolean);
     job.status = "error";
@@ -1132,8 +1155,9 @@ async function checkJobCompletion(jobId) {
 }
 
 // ── Background poller: checks TwelveLabs every 15s for completed tasks ────────
-const STALE_TASK_MS = 15 * 60 * 1000; // 15 minutes
+const STALE_TASK_MS = 25 * 60 * 1000; // 25 minutes
 let pollerRunning = false;
+const taskStatusCache = {}; // taskId → last known TwelveLabs status, for transition logging
 
 async function pollAnalyzeTasks() {
   if (pollerRunning) return;
@@ -1156,12 +1180,12 @@ async function pollAnalyzeTasks() {
       const ageMs = Date.now() - new Date(row.created_at).getTime();
 
       if (ageMs > STALE_TASK_MS) {
-        console.warn(`[poller] Task ${row.task_id} (${row.judge_id}) stale after ${(ageMs/60000).toFixed(1)}min`);
-        await pgPool.query(`UPDATE analyze_tasks SET status = 'stale' WHERE task_id = $1`, [row.task_id]);
-        const judge = JUDGES.find(j => j.id === row.judge_id);
+        console.warn(`[poller] Task ${row.task_id} (${row.judge_id}) stale after ${(ageMs/60000).toFixed(1)}min — marking as timeout`);
+        await pgPool.query(`UPDATE analyze_tasks SET status = 'stale', error = $1 WHERE task_id = $2`, ['Analysis timed out after 25 minutes', row.task_id]);
+        delete taskStatusCache[row.task_id];
         if (jobs[row.job_id]) {
           jobs[row.job_id].results[row.judge_id] = {
-            status: "error", error: "Analysis timed out after 15 minutes",
+            status: "timeout", error: "Analysis timed out after 25 minutes",
             data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] },
           };
         }
@@ -1173,6 +1197,15 @@ async function pollAnalyzeTasks() {
         const t_judge = Date.now();
         // HttpResponsePromise.then() unwraps to data directly — no { data } destructure needed
         const task = await tl().analyzeAsync.tasks.retrieve(row.task_id);
+
+        // Log task status transitions — specifically queued → processing
+        const prevStatus = taskStatusCache[row.task_id];
+        if (prevStatus !== task.status) {
+          if (prevStatus === "queued" && task.status === "processing") {
+            console.log(`[poller] Task ${row.task_id} (${row.judge_id}, job ${row.job_id}): queued → processing`);
+          }
+          taskStatusCache[row.task_id] = task.status;
+        }
         console.log(`[poller] Task ${row.task_id} (${row.judge_id}): ${task.status}`);
 
         if (task.status === "ready") {
@@ -1199,11 +1232,18 @@ async function pollAnalyzeTasks() {
             parsed = { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] };
           }
           await pgPool.query(`UPDATE analyze_tasks SET status = 'ready', result = $1 WHERE task_id = $2`, [JSON.stringify(parsed), row.task_id]);
+          delete taskStatusCache[row.task_id];
           if (!jobs[row.job_id]) {
             console.warn(`[poller] Task ${row.task_id} result for ${row.judge_id} arrived but job ${row.job_id} not in memory — skipping state update`);
           } else {
             jobs[row.job_id].results[row.judge_id] = { status: "done", data: parsed };
             jobs[row.job_id].timings.judges[row.judge_id] = Date.now() - t_judge;
+            // Log time from all-tasks-created to first judge result
+            if (jobs[row.job_id].tasksCreatedAt && !jobs[row.job_id].firstResultAt) {
+              jobs[row.job_id].firstResultAt = Date.now();
+              const msFromTasksCreated = jobs[row.job_id].firstResultAt - jobs[row.job_id].tasksCreatedAt;
+              console.log(`[${row.job_id}] First judge result received (${row.judge_id}) — ${msFromTasksCreated}ms from all tasks created (TwelveLabs queue + first analysis time)`);
+            }
           }
           console.log(`[poller] Judge ${row.judge_id} complete for job ${row.job_id} in ${Date.now() - t_judge}ms`);
           await checkJobCompletion(row.job_id);
@@ -1212,6 +1252,7 @@ async function pollAnalyzeTasks() {
           const errMsg = task.error?.message || "TwelveLabs analysis task failed";
           console.error(`[poller] Task ${row.task_id} failed: ${errMsg}`);
           await pgPool.query(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2`, [errMsg, row.task_id]);
+          delete taskStatusCache[row.task_id];
           const judge = JUDGES.find(j => j.id === row.judge_id);
           if (jobs[row.job_id]) {
             jobs[row.job_id].results[row.judge_id] = {
@@ -1294,7 +1335,7 @@ app.get("/admin/logs", (req, res) => {
 
   const platColor = p => p === "youtube" ? "#CC0000" : p === "tiktok" ? "#555" : "#C13584";
   const platBg = p => p === "youtube" ? "#CC000018" : p === "tiktok" ? "#55555518" : "#C1358418";
-  const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s.startsWith("rejected_") ? "#795548" : "#C62828";
+  const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s === "timeout" ? "#E65100" : s.startsWith("rejected_") ? "#795548" : "#C62828";
 
   const rows = submissionLog.map(e => {
     const judgeCells = ["critic", "cool", "dreamer"].map(id => {
