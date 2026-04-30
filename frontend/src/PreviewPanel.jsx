@@ -544,8 +544,15 @@ export default function PreviewPanel() {
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState(loadHistory);
   const [queuePosition, setQueuePosition] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadedMB, setUploadedMB] = useState(0);
+  const [uploadSpeedMBps, setUploadSpeedMBps] = useState(0);
+  const [showSlowConnWarning, setShowSlowConnWarning] = useState(false);
+  const [largeFileWarning, setLargeFileWarning] = useState(null);
+  const [largeSizeRiskWarning, setLargeSizeRiskWarning] = useState(false);
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
+  const xhrRef = useRef(null);
   const notifiedRef = useRef(false);
   const savedRef = useRef(false);
   const plat = PLATFORMS.find(p => p.id === platform);
@@ -640,7 +647,25 @@ export default function PreviewPanel() {
     startAnalysis();
   };
 
-  const startAnalysis = async () => {
+  const handleFileSelect = (f) => {
+    setVideoFile(f);
+    setLargeFileWarning(null);
+    setLargeSizeRiskWarning(false);
+    const sizeMB = f.size / 1024 / 1024;
+    if (sizeMB > 150) {
+      setLargeFileWarning(`${sizeMB.toFixed(0)}MB`);
+    }
+    if (sizeMB > 300) {
+      const url = URL.createObjectURL(f);
+      const vid = document.createElement("video");
+      vid.preload = "metadata";
+      vid.onloadedmetadata = () => { URL.revokeObjectURL(url); if (vid.duration > 90) setLargeSizeRiskWarning(true); };
+      vid.onerror = () => URL.revokeObjectURL(url);
+      vid.src = url;
+    }
+  };
+
+  const startAnalysis = () => {
     setShowNotifPrimer(false);
     notifiedRef.current = false;
     savedRef.current = false;
@@ -648,26 +673,76 @@ export default function PreviewPanel() {
     setJudgeResults({});
     setJobStatus("uploading");
     setQueuePosition(0);
+    setUploadProgress(0);
+    setUploadedMB(0);
+    setUploadSpeedMBps(0);
+    setShowSlowConnWarning(false);
     setStatusMessage("Uploading your video…");
     const pending = {};
     selectedJudges.forEach(id => { pending[id] = { status: "pending" }; });
     setJudgeResults(pending);
-    try {
-      const formData = new FormData();
-      formData.append("platform", platform);
-      formData.append("targetAudience", targetAudience);
-      formData.append("judges", JSON.stringify(selectedJudges));
-      formData.append("video", videoFile);
-      const res = await fetch(`${API_BASE}/api/analyze`, { method: "POST", body: formData });
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-      setJobStatus(data.queuePosition > 0 ? "queued" : "uploading");
-      setQueuePosition(data.queuePosition || 0);
-      setJobId(data.jobId);
-    } catch (err) {
+
+    const formData = new FormData();
+    formData.append("platform", platform);
+    formData.append("targetAudience", targetAudience);
+    formData.append("judges", JSON.stringify(selectedJudges));
+    formData.append("video", videoFile);
+
+    const xhr = new XMLHttpRequest();
+    xhrRef.current = xhr;
+    const uploadStart = Date.now();
+    const totalMB = videoFile.size / 1024 / 1024;
+    let slowConnStart = null;
+
+    const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+    const timeoutHandle = setTimeout(() => {
+      xhr.abort();
       setJobStatus("error");
-      setStatusMessage(`Failed: ${err.message}`);
-    }
+      setStatusMessage("Upload timed out. Please try on a stronger WiFi connection or reduce your video file size.");
+    }, UPLOAD_TIMEOUT_MS);
+
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const loaded = e.loaded / 1024 / 1024;
+      const elapsedSecs = (Date.now() - uploadStart) / 1000;
+      const speed = elapsedSecs > 0 ? loaded / elapsedSecs : 0;
+      setUploadedMB(loaded);
+      setUploadProgress((e.loaded / e.total) * 100);
+      setUploadSpeedMBps(speed);
+      if (speed < 0.5 && speed > 0) {
+        if (slowConnStart === null) slowConnStart = Date.now();
+        else if (Date.now() - slowConnStart > 10_000) setShowSlowConnWarning(true);
+      } else {
+        slowConnStart = null;
+        setShowSlowConnWarning(false);
+      }
+    };
+
+    xhr.onload = () => {
+      clearTimeout(timeoutHandle);
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (data.error) throw new Error(data.error);
+        setUploadProgress(100);
+        setJobStatus(data.queuePosition > 0 ? "queued" : "uploading");
+        setQueuePosition(data.queuePosition || 0);
+        setJobId(data.jobId);
+      } catch (err) {
+        setJobStatus("error");
+        setStatusMessage(`Failed: ${err.message}`);
+      }
+    };
+
+    xhr.onerror = () => {
+      clearTimeout(timeoutHandle);
+      setJobStatus("error");
+      setStatusMessage("Upload failed. Please check your connection and try again.");
+    };
+
+    xhr.onabort = () => clearTimeout(timeoutHandle);
+
+    xhr.open("POST", `${API_BASE}/api/analyze`);
+    xhr.send(formData);
   };
 
   const handleAllowNotifications = async () => {
@@ -677,9 +752,12 @@ export default function PreviewPanel() {
 
   const reset = () => {
     clearInterval(pollRef.current);
+    if (xhrRef.current) { xhrRef.current.abort(); xhrRef.current = null; }
     setStep(1); setJobId(null); setJobStatus(null);
     setJudgeResults({}); setVideoFile(null); setStatusMessage("");
     setVideoDurationSecs(null); setQueuePosition(0);
+    setUploadProgress(0); setUploadedMB(0); setUploadSpeedMBps(0);
+    setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false);
     notifiedRef.current = false; savedRef.current = false;
   };
 
@@ -787,7 +865,7 @@ export default function PreviewPanel() {
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
               <div className="drop-zone" onClick={() => fileInputRef.current.click()}
                 onDragOver={e => e.preventDefault()}
-                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) setVideoFile(f); }}
+                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f); }}
                 style={{
                   border: `2px dashed ${videoFile ? B.brown : B.border}`,
                   borderRadius: "12px", textAlign: "center",
@@ -801,7 +879,7 @@ export default function PreviewPanel() {
                     <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
                     <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
                       {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                      <span onClick={e => { e.stopPropagation(); setVideoFile(null); }}
+                      <span onClick={e => { e.stopPropagation(); setVideoFile(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); }}
                         style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
                     </div>
                   </div>
@@ -809,13 +887,23 @@ export default function PreviewPanel() {
                   <div style={{ padding: "12px 20px" }}>
                     <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
                     <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                    {/* Issue #3: Show limit in UI */}
                     <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · 200MB · {plat.hint}</div>
+                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "4px", lineHeight: "1.4" }}>💡 Tip: 1080p gives the best results — 4K adds file size without improving analysis quality.</div>
                   </div>
                 )}
               </div>
+              {largeSizeRiskWarning && (
+                <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "10px", fontSize: "12px", color: "#E65100", lineHeight: "1.5" }}>
+                  ⚠️ <strong>Large file detected ({largeFileWarning})</strong> — this file may be too large after processing. Consider trimming your video to under 90 seconds or compressing before uploading.
+                </div>
+              )}
+              {!largeSizeRiskWarning && largeFileWarning && (
+                <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "10px", fontSize: "12px", color: "#E65100", lineHeight: "1.5" }}>
+                  ⚠️ <strong>Large file detected ({largeFileWarning})</strong> — upload may take several minutes on slower connections. Consider trimming or compressing your video first.
+                </div>
+              )}
               <input ref={fileInputRef} type="file" accept="video/*"
-                onChange={e => { const f = e.target.files[0]; if (f) setVideoFile(f); }}
+                onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
                 style={{ display: "none" }}/>
             </div>
 
@@ -936,6 +1024,26 @@ export default function PreviewPanel() {
                 }}>← New Video</button>
               )}
             </div>
+
+            {/* Upload progress bar — shown while XHR is in flight (before jobId received) */}
+            {isProcessing && !jobId && jobStatus === "uploading" && (
+              <div style={{ marginBottom: "16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#888", marginBottom: "6px" }}>
+                  <span>Uploading… {uploadedMB.toFixed(1)} of {videoFile ? (videoFile.size/1024/1024).toFixed(1) : "?"}  MB</span>
+                  <span>{uploadSpeedMBps > 0 ? `${uploadSpeedMBps.toFixed(2)} MB/s` : ""}</span>
+                </div>
+                <div style={{ height: "6px", background: B.border, borderRadius: "99px", overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${uploadProgress}%`, background: B.action, borderRadius: "99px", transition: "width 0.5s ease" }}/>
+                </div>
+              </div>
+            )}
+
+            {/* Slow connection warning */}
+            {showSlowConnWarning && !jobId && (
+              <div style={{ marginBottom: "16px", padding: "12px 16px", background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "12px", fontSize: "12px", color: "#E65100", lineHeight: "1.6" }}>
+                🐢 <strong>Slow connection detected</strong> — upload may take longer than usual. You can leave this screen and we'll notify you when done.
+              </div>
+            )}
 
             {/* Issue #5 & #6: Prominent waiting banner */}
             {isProcessing && (
