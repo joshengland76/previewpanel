@@ -747,7 +747,7 @@ export default function PreviewPanel() {
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
-              <div style={{ marginTop: "1px" }}>
+              <div style={{ marginTop: "-12px", marginBottom: "12px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
               </div>
               {/* Issue #9: History button */}
@@ -923,7 +923,7 @@ export default function PreviewPanel() {
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
-              <div style={{ marginTop: "1px" }}>
+              <div style={{ marginTop: "-12px", marginBottom: "12px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: "#4E342E", color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
               </div>
               {(isFinished || jobStatus === "error") && (
