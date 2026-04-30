@@ -648,47 +648,43 @@ export default function PreviewPanel() {
     startAnalysis();
   };
 
+  // Runs immediately after the user picks a file — never blocks the file picker opening.
   const handleFileSelect = (f) => {
     setVideoFile(f);
     setLargeFileWarning(null);
     setLargeSizeRiskWarning(false);
     setUploadZoneError(null);
     const sizeMB = f.size / 1024 / 1024;
-    if (sizeMB > 150) {
-      setLargeFileWarning(`${sizeMB.toFixed(0)}MB`);
-    }
-    if (sizeMB > 300) {
-      const url = URL.createObjectURL(f);
-      const vid = document.createElement("video");
-      vid.preload = "metadata";
-      vid.onloadedmetadata = () => { URL.revokeObjectURL(url); if (vid.duration > 90) setLargeSizeRiskWarning(true); };
-      vid.onerror = () => URL.revokeObjectURL(url);
-      vid.src = url;
-    }
-  };
 
-  const startAnalysis = () => {
-    setUploadZoneError(null);
-    // Synchronous size check
-    const sizeMB = videoFile.size / 1024 / 1024;
+    // Hard rejection: file too large to process
     if (sizeMB > 500) {
       setUploadZoneError("File too large. Please use a video under 500MB.");
       return;
     }
-    // Async duration check via browser video element — only start XHR once we know it passes
-    const url = URL.createObjectURL(videoFile);
+
+    // Soft warning: large file, slow upload likely
+    if (sizeMB > 150) setLargeFileWarning(`${sizeMB.toFixed(0)}MB`);
+
+    // Duration check — async, runs after metadata loads, never blocks UI
+    const url = URL.createObjectURL(f);
     const vid = document.createElement("video");
     vid.preload = "metadata";
     vid.onloadedmetadata = () => {
       URL.revokeObjectURL(url);
       if (vid.duration > 180) {
         setUploadZoneError("Video is over 3 minutes long. Please trim it and try again.");
-        return;
+      } else if (sizeMB > 300 && vid.duration > 90) {
+        setLargeSizeRiskWarning(true);
       }
-      doStartAnalysis();
     };
-    vid.onerror = () => { URL.revokeObjectURL(url); doStartAnalysis(); };
+    vid.onerror = () => URL.revokeObjectURL(url);
     vid.src = url;
+  };
+
+  // Validation already completed in handleFileSelect — just check stored state, then go.
+  const startAnalysis = () => {
+    if (uploadZoneError) return;
+    doStartAnalysis();
   };
 
   const doStartAnalysis = () => {
@@ -1004,7 +1000,7 @@ export default function PreviewPanel() {
             {/* 5 — CTA */}
             <div className="pp-sticky-wrap">
               <button className="pp-btn" onClick={handleSubmit}
-                disabled={!videoFile || selectedJudges.length === 0}
+                disabled={!videoFile || selectedJudges.length === 0 || !!uploadZoneError}
                 style={{ width: "100%", height: "56px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "16px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
                 Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
               </button>
