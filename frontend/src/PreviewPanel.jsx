@@ -21,13 +21,13 @@ const PLATFORMS = [
 const JUDGES = [
   { id: "critic", name: "The Critic", color: B.brown, softBg: "#EFEBE9",
     tagline: "Hard to impress. Spots lazy editing immediately.", scoreLabel: "The Critic's Verdict",
-    avatar: "/owl-critic.png?v=2" },
+    avatar: "/owl-critic.png?v=3" },
   { id: "cool", name: "The Trendsetter", color: "#546E7A", softBg: "#ECEFF1",
     tagline: "Platform-native, trend-aware, detached.", scoreLabel: "The Trendsetter's Take",
-    avatar: "/owl-trendsetter.png?v=2" },
+    avatar: "/owl-trendsetter.png?v=3" },
   { id: "dreamer", name: "The Dreamer", color: "#8D6E63", softBg: "#FBF8F7",
     tagline: "Emotionally intelligent. Asks: how does this feel?", scoreLabel: "The Dreamer's Feeling",
-    avatar: "/owl-dreamer.png?v=2" },
+    avatar: "/owl-dreamer.png?v=3" },
 ];
 
 // ── Issue #9: Local history helpers ──────────────────────────
@@ -745,7 +745,7 @@ export default function PreviewPanel() {
 
             {/* Logo + BETA + History button */}
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
-              <img src="/owl-logo.png?v=2" alt="PreviewPanel"
+              <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
               <div style={{ marginTop: "1px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
@@ -921,7 +921,7 @@ export default function PreviewPanel() {
 
             {/* Top bar */}
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
-              <img src="/owl-logo.png?v=2" alt="PreviewPanel"
+              <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
               <div style={{ marginTop: "1px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: "#4E342E", color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
