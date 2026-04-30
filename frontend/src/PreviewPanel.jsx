@@ -885,7 +885,9 @@ export default function PreviewPanel() {
             {/* 1 — Video upload */}
             <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
-              <div className="drop-zone" onClick={() => fileInputRef.current.click()}
+              {/* label+htmlFor is the browser-native way to open a file picker — no JS .click() needed,
+                  works reliably on iOS Safari where programmatic input.click() can silently fail */}
+              <label htmlFor="pp-file-input" className="drop-zone"
                 onDragOver={e => e.preventDefault()}
                 onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f); }}
                 style={{
@@ -901,7 +903,7 @@ export default function PreviewPanel() {
                     <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
                     <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
                       {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                      <span onClick={e => { e.stopPropagation(); setVideoFile(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
+                      <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
                         style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
                     </div>
                   </div>
@@ -913,7 +915,7 @@ export default function PreviewPanel() {
                     <div style={{ fontSize: "11px", color: "#bbb", marginTop: "4px", lineHeight: "1.4" }}>💡 Tip: Film in 1080p for fastest uploads — 4K adds file size without improving results.</div>
                   </div>
                 )}
-              </div>
+              </label>
               {uploadZoneError && (
                 <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>
                   ⛔ {uploadZoneError}
@@ -929,7 +931,7 @@ export default function PreviewPanel() {
                   ⚠️ <strong>Large file detected ({largeFileWarning})</strong> — upload may take several minutes on slower connections. Consider trimming or compressing your video first.
                 </div>
               )}
-              <input ref={fileInputRef} type="file" accept="video/*"
+              <input id="pp-file-input" ref={fileInputRef} type="file" accept="video/*"
                 onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
                 style={{ display: "none" }}/>
             </div>
