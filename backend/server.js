@@ -745,11 +745,29 @@ function applyMomentFilters(parsed, judge, videoDuration) {
 // ── Create an async TwelveLabs analysis task, return taskId ────
 async function createAnalyzeTask(videoContext, judge, platform, targetAudience, videoDuration) {
   const prompt = buildTLPrompt(judge, platform, targetAudience, videoDuration);
-  console.log(`[TwelveLabs] Creating async task — judge: ${judge.id}`);
-  const { data } = await tl().analyzeAsync.tasks.create(
-    { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
-    { timeoutInSeconds: 30 }
-  );
+
+  // Verify the SDK method chain exists before calling
+  const tlClient = tl();
+  console.log(`[TwelveLabs] SDK check — typeof analyzeAsync: ${typeof tlClient.analyzeAsync}, typeof analyzeAsync.tasks: ${typeof tlClient.analyzeAsync?.tasks}, typeof analyzeAsync.tasks.create: ${typeof tlClient.analyzeAsync?.tasks?.create}`);
+  console.log(`[TwelveLabs] Creating async task — judge: ${judge.id}, videoContext: ${JSON.stringify(videoContext)}`);
+
+  let response;
+  try {
+    response = await tlClient.analyzeAsync.tasks.create(
+      { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
+      { timeoutInSeconds: 30 }
+    );
+  } catch (err) {
+    console.error(`[TwelveLabs] analyzeAsync.tasks.create FAILED — judge: ${judge.id}`);
+    console.error(`[TwelveLabs] Error name: ${err.name}, message: ${err.message}`);
+    console.error(`[TwelveLabs] Error status: ${err.statusCode ?? err.status ?? "n/a"}`);
+    console.error(`[TwelveLabs] Error body: ${JSON.stringify(err.body ?? err.error ?? {})}`);
+    console.error(`[TwelveLabs] videoContext passed: ${JSON.stringify(videoContext)}`);
+    console.error(`[TwelveLabs] Full error stack:`, err.stack ?? err);
+    throw err;
+  }
+
+  const { data } = response;
   console.log(`[TwelveLabs] Task created — judge: ${judge.id}, taskId: ${data.taskId}, status: ${data.status}`);
   return data.taskId;
 }
