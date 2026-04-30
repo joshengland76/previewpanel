@@ -656,16 +656,8 @@ export default function PreviewPanel() {
     setUploadZoneError(null);
     const sizeMB = f.size / 1024 / 1024;
 
-    // Hard rejection: file too large to process
-    if (sizeMB > 500) {
-      setUploadZoneError("File too large. Please use a video under 500MB.");
-      return;
-    }
-
-    // Soft warning: large file, slow upload likely
-    if (sizeMB > 150) setLargeFileWarning(`${sizeMB.toFixed(0)}MB`);
-
-    // Duration check — async, runs after metadata loads, never blocks UI
+    // Duration check runs first (async) — size check follows inside the callback
+    // so the user always sees the most actionable error (too long beats too large).
     const url = URL.createObjectURL(f);
     const vid = document.createElement("video");
     vid.preload = "metadata";
@@ -673,11 +665,24 @@ export default function PreviewPanel() {
       URL.revokeObjectURL(url);
       if (vid.duration > 180) {
         setUploadZoneError("Video is over 3 minutes long. Please trim it and try again.");
+      } else if (sizeMB > 500) {
+        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
       } else if (sizeMB > 300 && vid.duration > 90) {
         setLargeSizeRiskWarning(true);
+        if (sizeMB > 150) setLargeFileWarning(`${Math.round(sizeMB)}MB`);
+      } else if (sizeMB > 150) {
+        setLargeFileWarning(`${Math.round(sizeMB)}MB`);
       }
     };
-    vid.onerror = () => URL.revokeObjectURL(url);
+    vid.onerror = () => {
+      // Metadata unreadable — skip duration check, fall back to size-only
+      URL.revokeObjectURL(url);
+      if (sizeMB > 500) {
+        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
+      } else if (sizeMB > 150) {
+        setLargeFileWarning(`${Math.round(sizeMB)}MB`);
+      }
+    };
     vid.src = url;
   };
 
