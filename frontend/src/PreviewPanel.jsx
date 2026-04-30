@@ -885,9 +885,10 @@ export default function PreviewPanel() {
             {/* 1 — Video upload */}
             <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
-              {/* label+htmlFor is the browser-native way to open a file picker — no JS .click() needed,
-                  works reliably on iOS Safari where programmatic input.click() can silently fail */}
-              <label htmlFor="pp-file-input" className="drop-zone"
+              {/* Input is a direct child of the label — the most universally reliable
+                  way to open a file picker. No htmlFor/id linking, no .click() JS,
+                  works on iOS Safari, desktop Chrome, and Firefox. */}
+              <label className="drop-zone"
                 onDragOver={e => e.preventDefault()}
                 onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f); }}
                 style={{
@@ -897,6 +898,9 @@ export default function PreviewPanel() {
                   transition: "all 0.2s ease",
                   minHeight: "140px", display: "flex", alignItems: "center", justifyContent: "center",
                 }}>
+                <input ref={fileInputRef} type="file" accept="video/*"
+                  onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
+                  style={{ display: "none" }}/>
                 {videoFile ? (
                   <div style={{ padding: "12px 20px" }}>
                     <div style={{ fontSize: "20px", marginBottom: "4px" }}>🎬</div>
@@ -931,9 +935,6 @@ export default function PreviewPanel() {
                   ⚠️ <strong>Large file detected ({largeFileWarning})</strong> — upload may take several minutes on slower connections. Consider trimming or compressing your video first.
                 </div>
               )}
-              <input id="pp-file-input" ref={fileInputRef} type="file" accept="video/*"
-                onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
-                style={{ display: "none" }}/>
             </div>
 
             {/* 2 — Platform pills */}
