@@ -205,6 +205,7 @@ async function initDb() {
     await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
+    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
@@ -221,7 +222,7 @@ async function loadSubmissionLog() {
                total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
                critic_ms, trendsetter_ms, dreamer_ms,
                critic_score, trendsetter_score, dreamer_score, avg_score,
-               file_name, task_creation_ms, queue_wait_ms
+               file_name, task_creation_ms, queue_wait_ms, tl_queue_ms
         FROM submissions ORDER BY created_at DESC LIMIT 500
       `);
       return rows.map(r => ({
@@ -240,6 +241,7 @@ async function loadSubmissionLog() {
           browserUploadMs: r.browser_upload_ms,
           taskCreationMs: r.task_creation_ms != null ? parseInt(r.task_creation_ms) : null,
           queueWaitMs: r.queue_wait_ms != null ? parseInt(r.queue_wait_ms) : null,
+          tlQueueMs: r.tl_queue_ms != null ? parseInt(r.tl_queue_ms) : null,
           judges: {
             critic: r.critic_ms,
             cool: r.trendsetter_ms,
@@ -274,8 +276,8 @@ async function saveSubmission(entry) {
            total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
            critic_ms, trendsetter_ms, dreamer_ms,
            critic_score, trendsetter_score, dreamer_score, avg_score,
-           file_name, task_creation_ms, queue_wait_ms)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+           file_name, task_creation_ms, queue_wait_ms, tl_queue_ms)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
       `, [
         entry.jobId,
         entry.ip,
@@ -297,6 +299,7 @@ async function saveSubmission(entry) {
         entry.fileName ?? null,
         entry.timings.taskCreationMs ?? null,
         entry.timings.queueWaitMs ?? null,
+        entry.timings.tlQueueMs ?? null,
       ]);
       return;
     } catch (err) {
@@ -1203,6 +1206,12 @@ async function pollAnalyzeTasks() {
         if (prevStatus !== task.status) {
           if (prevStatus === "queued" && task.status === "processing") {
             console.log(`[poller] Task ${row.task_id} (${row.judge_id}, job ${row.job_id}): queued → processing`);
+            const jobForQueue = jobs[row.job_id];
+            if (jobForQueue && jobForQueue.tasksCreatedAt && !jobForQueue.timings.tlQueueMs) {
+              const tlQueueMs = Date.now() - jobForQueue.tasksCreatedAt;
+              jobForQueue.timings.tlQueueMs = tlQueueMs;
+              console.log(`[poller] TwelveLabs queue time for job ${row.job_id}: ${tlQueueMs}ms`);
+            }
           }
           taskStatusCache[row.task_id] = task.status;
         }
@@ -1419,6 +1428,41 @@ app.get("/admin/logs", (req, res) => {
 // ── Health check ──────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({ ok: true }));
 
+// ── TwelveLabs warm-up — keeps infrastructure warm, prevents cold-start delays ─
+const WARMUP_PATH = path.join(__dirname, "uploads", "warmup.mp4");
+
+async function createWarmupFile() {
+  try {
+    await execFileAsync(FFMPEG, [
+      "-f", "lavfi", "-i", "color=c=black:size=2x2:duration=1",
+      "-c:v", "libx264", "-preset", "ultrafast", "-t", "1",
+      "-y", WARMUP_PATH,
+    ]);
+    const sizeKB = (fs.statSync(WARMUP_PATH).size / 1024).toFixed(1);
+    console.log(`[warmup] Warmup file created: ${WARMUP_PATH} (${sizeKB} KB)`);
+  } catch (err) {
+    console.warn(`[warmup] Failed to create warmup file: ${err.message}`);
+  }
+}
+
+async function runWarmup() {
+  if (!process.env.TWELVELABS_API_KEY) return;
+  if (!fs.existsSync(WARMUP_PATH)) {
+    console.warn("[warmup] Warmup file not found — skipping ping");
+    return;
+  }
+  try {
+    const assetId = await uploadAssetDirect(WARMUP_PATH);
+    await tl().analyzeAsync.tasks.create(
+      { video: { type: "asset_id", assetId }, prompt: "Describe this video in one word.", maxTokens: 10 },
+      { timeoutInSeconds: 30 }
+    );
+    console.log("[warmup] TwelveLabs warm-up ping sent");
+  } catch (err) {
+    console.warn(`[warmup] Warm-up ping failed: ${err.message}`);
+  }
+}
+
 // ── Start ─────────────────────────────────────────────────────
 let server;
 try {
@@ -1429,6 +1473,13 @@ try {
   await resumeInFlightTasks();
   setInterval(pollAnalyzeTasks, 15_000);
   console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
+
+  // Warm-up: generate once at startup, then ping TwelveLabs every 60 minutes
+  await createWarmupFile();
+  if (process.env.TWELVELABS_API_KEY) {
+    setInterval(() => { runWarmup().catch(() => {}); }, 60 * 60 * 1000);
+    console.log("[warmup] TwelveLabs warm-up scheduled every 60 minutes");
+  }
 
   const PORT = process.env.PORT || 3001;
   server = app.listen(PORT, "0.0.0.0", () => {
