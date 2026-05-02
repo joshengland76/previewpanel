@@ -381,13 +381,13 @@ function buildVideoContext(videoDuration) {
     lengthGuidance = `\nVIDEO LENGTH — Very short clip (under 15 seconds). Be brief and proportional. Reaction: 1 sentence. Positives: 1 sentence maximum, only if genuinely present. Delivery: 1 sentence. Content: 1 sentence. Platform fit: 1 sentence. Suggestions: 1–2 maximum, each one sentence. Do not pad. If there is almost nothing in it, say so briefly and score accordingly.`;
   } else if (secs <= 60) {
     videoType = "short";
-    lengthGuidance = `\nVIDEO LENGTH — Short video (under 60 seconds). Keep all feedback tight. Reaction: 1–2 sentences. Positives: 1–2 sentences. Delivery: 2 sentences. Content: 2 sentences. Platform fit: 1–2 sentences. Suggestions: 2–3 maximum, each 1–2 sentences. Do not repeat yourself across fields.`;
+    lengthGuidance = `\nVIDEO LENGTH — Short video (under 60 seconds). Keep all feedback tight. Reaction: 1–2 sentences. Positives: 1–2 sentences. Delivery: 1–2 sentences. Content: 1–2 sentences. Platform fit: 1 sentence. Suggestions: 2–3 maximum, each 1–2 sentences. Do not repeat yourself across fields.`;
   } else if (secs <= 180) {
     videoType = "medium";
-    lengthGuidance = `\nVIDEO LENGTH — Medium video (1–3 minutes). Full feedback is appropriate. Reaction: 2–3 sentences. Positives: 2–3 sentences. Delivery: 2–3 sentences. Content: 2–3 sentences. Platform fit: 2 sentences. Suggestions: 3–4 maximum, each 1–2 sentences. Stay focused — do not repeat the same point across multiple fields.`;
+    lengthGuidance = `\nVIDEO LENGTH — Medium video (1–3 minutes). Full feedback is appropriate. Reaction: 2–3 sentences. Positives: 2–3 sentences. Delivery: 1–2 sentences. Content: 1–2 sentences. Platform fit: 1–2 sentences. Suggestions: 3–4 maximum, each 1–2 sentences. Stay focused — do not repeat the same point across multiple fields.`;
   } else {
     videoType = "long";
-    lengthGuidance = `\nVIDEO LENGTH — Longer video (3–5 minutes). There is more to analyze but be selective — comment only on what genuinely stands out. Reaction: 2–3 sentences. Positives: 2–3 sentences. Delivery: 3 sentences. Content: 3 sentences. Platform fit: 2 sentences. Suggestions: 4–5 maximum, each 1–2 sentences. Prioritize the most impactful observations over comprehensive coverage.`;
+    lengthGuidance = `\nVIDEO LENGTH — Longer video (3–5 minutes). There is more to analyze but be selective — comment only on what genuinely stands out. Reaction: 2–3 sentences. Positives: 2–3 sentences. Delivery: 2 sentences. Content: 2 sentences. Platform fit: 1–2 sentences. Suggestions: 4–5 maximum, each 1–2 sentences. Prioritize the most impactful observations over comprehensive coverage.`;
   }
 
   return { videoType, lengthGuidance };
