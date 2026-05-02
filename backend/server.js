@@ -499,7 +499,7 @@ function buildTLPrompt(judge, platform, targetAudience, videoDuration) {
   const pf = PLATFORM_FOCUS[platform] || PLATFORM_FOCUS.youtube;
   const audience = targetAudience || "a general audience";
   const durationLine = videoDuration
-    ? `\nVIDEO DURATION — This video is ${videoDuration.label} long. You MUST ONLY reference timestamps between 0:00 and ${videoDuration.label}. Do NOT reference any timestamp beyond this duration.`
+    ? `\nVIDEO DURATION — This video is ${videoDuration.label} long. You MUST ONLY reference timestamps between 0:00 and ${videoDuration.label}. Do NOT reference any timestamp beyond this duration.\nTIMESTAMP NOTE — Timestamps are approximate (within 1-2 seconds due to encoding). Reference the general moment, not the exact frame.`
     : "";
 
   const { lengthGuidance } = buildVideoContext(videoDuration);
@@ -599,7 +599,7 @@ async function convertToMp4(inputPath, { preProbed = null, forceReencode = false
 
   const args = ["-i", inputPath];
   if (copyVideo) {
-    args.push("-c:v", "copy");
+    args.push("-fflags", "+genpts", "-c:v", "copy");
   } else {
     args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2");
   }
@@ -884,127 +884,156 @@ app.post("/api/analyze", (req, res, next) => {
     console.log(`[${jobId}] Job created — queue position: ${queuePosition}, browser_upload_ms: ${req.browserUploadMs ?? "null"} — sending jobId to client`);
     res.json({ jobId, queuePosition });
 
-    // Enqueue (don't run immediately if another job is active)
+    // ── Preprocess file outside the queue ─────────────────────────────────────
+    // All ffmpeg work happens here, before enqueueJob, so the queue slot is held
+    // only for the short TwelveLabs upload + task creation phase (~2-3s per job).
+    if (filePath) {
+      let preprocessedPath = null;
+      try {
+        // 1. Raw size check — instant stat, no ffmpeg
+        const rawSizeMB = fs.statSync(filePath).size / 1024 / 1024;
+        console.log(`[${jobId}] Raw file: ${jobs[jobId].fileName || "unknown"} — ${rawSizeMB.toFixed(1)} MB`);
+        if (rawSizeMB > 1024) {
+          jobs[jobId].status = "error";
+          jobs[jobId].error = "File too large to process. Please use a video under 1GB.";
+          console.log(`[${jobId}] Rejected — raw file too large: ${rawSizeMB.toFixed(1)}MB`);
+          fs.unlink(filePath, () => {});
+          await recordSubmissionForJob(jobId, "rejected_too_large");
+          return;
+        }
+
+        // 2. Duration check on raw file — reads headers, no encode
+        const rawDuration = await getVideoDuration(filePath);
+        if (rawDuration && rawDuration.secs > MAX_VIDEO_DURATION_SECS) {
+          jobs[jobId].status = "error";
+          jobs[jobId].error = `Video is ${rawDuration.label} long. PreviewPanel currently supports videos up to 5:00. Please trim your video and try again.`;
+          console.log(`[${jobId}] Rejected — video too long: ${rawDuration.label}`);
+          fs.unlink(filePath, () => {});
+          await recordSubmissionForJob(jobId, "rejected_too_long");
+          return;
+        }
+        if (rawDuration && rawDuration.secs < 4) {
+          jobs[jobId].status = "error";
+          jobs[jobId].error = "Video is too short. Please use a video that is at least 4 seconds long.";
+          console.log(`[${jobId}] Rejected — video too short: ${rawDuration.label}`);
+          fs.unlink(filePath, () => {});
+          await recordSubmissionForJob(jobId, "rejected_too_short");
+          return;
+        }
+
+        // 3. Codec detect + first-pass convert
+        const inputCodecs = await probeCodecs(filePath);
+        const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
+        const t_conv = Date.now();
+        preprocessedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
+        jobs[jobId].timings.conversionMs = Date.now() - t_conv;
+
+        // 4. Second compression pass if over 150MB
+        let convertedSizeMB = fs.statSync(preprocessedPath).size / 1024 / 1024;
+        if (convertedSizeMB > 150) {
+          const inputSizeMB = convertedSizeMB;
+          const pass2Path = preprocessedPath + ".pass2.mp4";
+          const t_conv2 = Date.now();
+          await execFileAsync(FFMPEG, [
+            "-i", preprocessedPath,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-vf", "scale=640:-2",
+            "-c:a", "aac", "-b:a", "96k",
+            "-vsync", "cfr", "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
+          ]);
+          const pass2Ms = Date.now() - t_conv2;
+          jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + pass2Ms;
+          fs.unlink(preprocessedPath, () => {});
+          preprocessedPath = pass2Path;
+          convertedSizeMB = fs.statSync(preprocessedPath).size / 1024 / 1024;
+          console.log(`[ffmpeg] Second pass: ${inputSizeMB.toFixed(1)}MB → ${convertedSizeMB.toFixed(1)}MB in ${(pass2Ms / 1000).toFixed(1)}s (ultrafast, 640p, crf35)`);
+        }
+
+        // 5. Hard reject if still too large after all passes
+        if (convertedSizeMB > 190) {
+          jobs[jobId].status = "error";
+          jobs[jobId].error = "Your video is too large after processing. Please reduce the video quality or length before uploading.";
+          console.log(`[${jobId}] Rejected — converted file too large: ${convertedSizeMB.toFixed(1)}MB`);
+          fs.unlink(filePath, () => {});
+          fs.unlink(preprocessedPath, () => {});
+          await recordSubmissionForJob(jobId, "rejected_too_large");
+          return;
+        }
+
+        // 6. Read converted duration — authoritative for TwelveLabs timestamps
+        const convertedDuration = await getVideoDuration(preprocessedPath);
+        if (convertedDuration) {
+          const origSecs = rawDuration?.secs ?? null;
+          console.log(`[ffmpeg] Duration — original: ${origSecs != null ? origSecs.toFixed(1) + "s" : "unknown"}, converted: ${convertedDuration.secs.toFixed(1)}s`);
+          if (origSecs != null && Math.abs(convertedDuration.secs - origSecs) > 2) {
+            console.warn(`[ffmpeg] Warning: duration mismatch of ${Math.abs(convertedDuration.secs - origSecs).toFixed(1)}s between original and converted file`);
+          }
+          jobs[jobId].videoDuration = convertedDuration;
+        }
+
+        // Store for runPipeline — original file kept until after TwelveLabs upload (HEVC fallback)
+        jobs[jobId].preProcessedPath = preprocessedPath;
+        jobs[jobId].inputCodecs = inputCodecs;
+        jobs[jobId].isHEVC = isHEVC;
+        jobs[jobId].originalFilePath = filePath;
+        jobs[jobId].preprocessedAt = Date.now();
+        console.log(`[${jobId}] Preprocessing complete — enqueuing for TwelveLabs upload`);
+      } catch (err) {
+        jobs[jobId].status = "error";
+        jobs[jobId].error = err.message;
+        console.error(`[${jobId}] Preprocessing error: ${err.message}`, err);
+        fs.unlink(filePath, () => {});
+        if (preprocessedPath) fs.unlink(preprocessedPath, () => {});
+        await recordSubmissionForJob(jobId, "error");
+        return;
+      }
+    }
+
+    // Queue slot held only for TwelveLabs upload + task creation (~2-3s per job)
     enqueueJob(jobId, () =>
-      runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges)
+      runPipeline(jobId, videoUrl, platform, targetAudience, selectedJudges)
     );
   } catch (err) {
     console.error(`[analyze] Unexpected error:`, err.message);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
 // ── Upload phase pipeline (queue slot held only during this) ──────────────────
-async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, selectedJudges) {
+// Preprocessing (ffmpeg) already completed before this is called — this function
+// only handles TwelveLabs upload + async task creation (~2-3s of queue time).
+async function runPipeline(jobId, videoUrl, platform, targetAudience, selectedJudges) {
   console.log(`[${jobId}] Pipeline starting — platform: ${platform}, judges: ${selectedJudges.map(j=>j.id).join(", ")}`);
   jobs[jobId].startedAt = Date.now();
-  const queueWaitMs = jobs[jobId].startedAt - (jobs[jobId].createdAt || jobs[jobId].startedAt);
+  const queueWaitMs = jobs[jobId].preprocessedAt
+    ? jobs[jobId].startedAt - jobs[jobId].preprocessedAt
+    : jobs[jobId].startedAt - (jobs[jobId].createdAt || jobs[jobId].startedAt);
   jobs[jobId].timings.queueWaitMs = queueWaitMs;
-  console.log(`[${jobId}] Queue wait: ${queueWaitMs}ms (${(queueWaitMs / 1000).toFixed(1)}s)`);
-  let convertedPath = null;
+  console.log(`[${jobId}] Queue wait (post-preprocessing): ${queueWaitMs}ms (${(queueWaitMs / 1000).toFixed(1)}s)`);
+
+  // Read preprocessing results stored by the /api/analyze handler
+  let activeConvertedPath = jobs[jobId].preProcessedPath || null;
+  const inputCodecs = jobs[jobId].inputCodecs || null;
+  const isHEVC = jobs[jobId].isHEVC || false;
+  const filePath = jobs[jobId].originalFilePath || null;
+  const videoDuration = jobs[jobId].videoDuration || null;
 
   try {
     jobs[jobId].status = "uploading";
-    console.log(`[${jobId}] Step 1: converting and uploading to TwelveLabs`);
-    let videoDuration = null;
-    if (filePath) {
-      // ── Pre-conversion checks (fast — no ffmpeg encode needed) ──────────────
-
-      // 1. Raw file size — instant stat, no ffmpeg
-      const rawSizeMB = fs.statSync(filePath).size / 1024 / 1024;
-      console.log(`[${jobId}] Raw file: ${jobs[jobId].fileName || "unknown"} — ${rawSizeMB.toFixed(1)} MB`);
-      if (rawSizeMB > 1024) {
-        jobs[jobId].status = "error";
-        jobs[jobId].error = "File too large to process. Please use a video under 1GB.";
-        console.log(`[${jobId}] Rejected — raw file too large: ${rawSizeMB.toFixed(1)}MB`);
-        fs.unlink(filePath, () => {});
-        await recordSubmissionForJob(jobId, "rejected_too_large");
-        return;
-      }
-
-      // 2. Duration check on raw file — just reads headers, no encode
-      videoDuration = await getVideoDuration(filePath);
-      if (videoDuration && videoDuration.secs > MAX_VIDEO_DURATION_SECS) {
-        jobs[jobId].status = "error";
-        jobs[jobId].error = `Video is ${videoDuration.label} long. PreviewPanel currently supports videos up to 5:00. Please trim your video and try again.`;
-        console.log(`[${jobId}] Rejected — video too long: ${videoDuration.label}`);
-        fs.unlink(filePath, () => {});
-        await recordSubmissionForJob(jobId, "rejected_too_long");
-        return;
-      }
-      if (videoDuration && videoDuration.secs < 4) {
-        jobs[jobId].status = "error";
-        jobs[jobId].error = "Video is too short. Please use a video that is at least 4 seconds long.";
-        console.log(`[${jobId}] Rejected — video too short: ${videoDuration.label}`);
-        fs.unlink(filePath, () => {});
-        await recordSubmissionForJob(jobId, "rejected_too_short");
-        return;
-      }
-
-      // 3. Detect codecs and convert — stream copy for H264/HEVC, re-encode otherwise
-      const inputCodecs = await probeCodecs(filePath);
-      const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
-      const t_conv = Date.now();
-      convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
-      jobs[jobId].timings.conversionMs = Date.now() - t_conv;
-
-      // 4. Second compression pass if over 150MB — brings file within TwelveLabs limits
-      let convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
-      if (convertedSizeMB > 150) {
-        const inputSizeMB = convertedSizeMB;
-        const pass2Path = convertedPath + ".pass2.mp4";
-        const t_conv2 = Date.now();
-        await execFileAsync(FFMPEG, [
-          "-i", convertedPath,
-          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-vf", "scale=640:-2",
-          "-c:a", "aac", "-b:a", "96k",
-          "-vsync", "cfr", "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
-        ]);
-        const pass2Ms = Date.now() - t_conv2;
-        jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + pass2Ms;
-        fs.unlink(convertedPath, () => {});
-        convertedPath = pass2Path;
-        convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
-        console.log(`[ffmpeg] Second pass: ${inputSizeMB.toFixed(1)}MB → ${convertedSizeMB.toFixed(1)}MB in ${(pass2Ms / 1000).toFixed(1)}s (ultrafast, 640p, crf35)`);
-      }
-
-      // 5. Hard reject if still too large after all passes
-      if (convertedSizeMB > 190) {
-        jobs[jobId].status = "error";
-        jobs[jobId].error = "Your video is too large after processing. Please reduce the video quality or length before uploading.";
-        console.log(`[${jobId}] Rejected — converted file too large: ${convertedSizeMB.toFixed(1)}MB`);
-        fs.unlink(filePath, () => {});
-        fs.unlink(convertedPath, () => {});
-        await recordSubmissionForJob(jobId, "rejected_too_large");
-        return;
-      }
-
-      // 6. Read converted duration — authoritative for TwelveLabs timestamps
-      const convertedDuration = await getVideoDuration(convertedPath);
-      if (convertedDuration) {
-        const origSecs = videoDuration?.secs ?? null;
-        console.log(`[ffmpeg] Duration — original: ${origSecs != null ? origSecs.toFixed(1) + "s" : "unknown"}, converted: ${convertedDuration.secs.toFixed(1)}s`);
-        if (origSecs != null && Math.abs(convertedDuration.secs - origSecs) > 2) {
-          console.warn(`[ffmpeg] Warning: duration mismatch of ${Math.abs(convertedDuration.secs - origSecs).toFixed(1)}s between original and converted file`);
-        }
-        videoDuration = convertedDuration; // converted file is what TwelveLabs analyzes
-      }
-      if (videoDuration) jobs[jobId].videoDuration = videoDuration;
-    }
+    console.log(`[${jobId}] Step 1: uploading to TwelveLabs`);
 
     const t_upload = Date.now();
     let videoContext;
     try {
-      videoContext = await getVideoContext(videoUrl, convertedPath || filePath);
+      videoContext = await getVideoContext(videoUrl, activeConvertedPath || filePath);
     } catch (uploadErr) {
-      if (isHEVC && convertedPath && filePath) {
+      if (isHEVC && activeConvertedPath && filePath) {
         // HEVC stream copy rejected by TwelveLabs — re-encode to H264
         console.log(`[${jobId}] HEVC upload rejected (${uploadErr.message}) — re-encoding to H264`);
-        fs.unlink(convertedPath, () => {});
+        fs.unlink(activeConvertedPath, () => {});
         const t_conv2 = Date.now();
-        convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs, forceReencode: true });
+        activeConvertedPath = await convertToMp4(filePath, { preProbed: inputCodecs, forceReencode: true });
         jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + (Date.now() - t_conv2);
-        videoContext = await getVideoContext(videoUrl, convertedPath);
+        videoContext = await getVideoContext(videoUrl, activeConvertedPath);
       } else {
         throw uploadErr;
       }
@@ -1013,7 +1042,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
 
     // Local files no longer needed — TwelveLabs holds the asset
     if (filePath) fs.unlink(filePath, () => {});
-    if (convertedPath) fs.unlink(convertedPath, () => {});
+    if (activeConvertedPath) fs.unlink(activeConvertedPath, () => {});
 
     if (jobs[jobId].finalized) {
       // Pipeline timeout fired during upload
@@ -1103,7 +1132,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
     jobs[jobId].error = err.message;
     console.error(`[${jobId}] Pipeline error: ${err.message}`, err);
     if (filePath) fs.unlink(filePath, () => {});
-    if (convertedPath) fs.unlink(convertedPath, () => {});
+    if (activeConvertedPath) fs.unlink(activeConvertedPath, () => {});
     await recordSubmissionForJob(jobId, "error");
   }
 }
@@ -1479,7 +1508,7 @@ async function createWarmupFile() {
 async function runWarmup() {
   if (!process.env.TWELVELABS_API_KEY) return;
   if (!fs.existsSync(WARMUP_PATH)) {
-    console.warn("[warmup] Warmup file not found — skipping ping");
+    console.log("[warmup] Warmup file not found — skipping ping");
     return;
   }
   try {
@@ -1490,7 +1519,7 @@ async function runWarmup() {
     );
     console.log("[warmup] TwelveLabs warm-up ping sent");
   } catch (err) {
-    console.warn(`[warmup] Warm-up ping failed: ${err.message}`);
+    console.log(`[warmup] Warm-up ping failed: ${err.message}`);
   }
 }
 
