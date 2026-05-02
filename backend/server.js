@@ -203,6 +203,7 @@ async function initDb() {
     await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
     await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_name TEXT`);
     await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
+    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS ip TEXT`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
@@ -314,10 +315,11 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
   const job = jobs[jobId];
 
   // Full INSERT including optional columns added in schema migration
-  const fullSql = `INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs, browser_upload_ms, file_name, file_size_mb) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`;
+  const fullSql = `INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs, browser_upload_ms, file_name, file_size_mb, ip) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`;
   const fullValues = [
     jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null,
     job?.timings?.browserUploadMs ?? null, job?.fileName ?? null, job?.fileSizeMB ?? null,
+    job?.ip ?? null,
   ];
 
   // Fallback INSERT using only original columns — works even if migration hasn't run
@@ -347,7 +349,7 @@ async function loadInFlightTasks() {
   try {
     const { rows } = await pgPool.query(`
       SELECT job_id, judge_id, task_id, platform, target_audience, video_duration_secs,
-             browser_upload_ms, file_name, file_size_mb, created_at
+             browser_upload_ms, file_name, file_size_mb, ip, created_at
       FROM analyze_tasks WHERE status = 'pending'
     `);
     return rows;
@@ -873,7 +875,7 @@ app.post("/api/analyze", (req, res, next) => {
       createdAt: Date.now(),
       startedAt: null,
       timings: { conversionMs: null, uploadMs: null, browserUploadMs: req.browserUploadMs ?? null, judges: {} },
-      ip: ((req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "unknown") + "").split(",")[0].trim(),
+      ip: (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map(s => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })(),
       fileSizeMB: req.file ? parseFloat((req.file.size / 1024 / 1024).toFixed(2)) : null,
       fileName: req.file?.originalname ?? null,
       browserUploadMs: req.browserUploadMs ?? null,
@@ -949,20 +951,21 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
       // 4. Second compression pass if over 150MB — brings file within TwelveLabs limits
       let convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
       if (convertedSizeMB > 150) {
-        console.log(`[ffmpeg] Second compression pass — file was ${convertedSizeMB.toFixed(1)}MB, re-encoding to reduce size`);
+        const inputSizeMB = convertedSizeMB;
         const pass2Path = convertedPath + ".pass2.mp4";
         const t_conv2 = Date.now();
         await execFileAsync(FFMPEG, [
           "-i", convertedPath,
-          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2",
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-vf", "scale=854:-2",
           "-c:a", "aac", "-b:a", "96k",
-          "-movflags", "+faststart", "-threads", "1", "-y", pass2Path,
+          "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
         ]);
-        jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + (Date.now() - t_conv2);
+        const pass2Ms = Date.now() - t_conv2;
+        jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + pass2Ms;
         fs.unlink(convertedPath, () => {});
         convertedPath = pass2Path;
         convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
-        console.log(`[ffmpeg] Second pass done — ${convertedSizeMB.toFixed(1)}MB`);
+        console.log(`[ffmpeg] Second pass: ${inputSizeMB.toFixed(1)}MB → ${convertedSizeMB.toFixed(1)}MB in ${(pass2Ms / 1000).toFixed(1)}s`);
       }
 
       // 5. Hard reject if still too large after all passes
@@ -1313,7 +1316,7 @@ async function resumeInFlightTasks() {
         createdAt: new Date(row.created_at).getTime(),
         startedAt: new Date(row.created_at).getTime(),
         timings: { conversionMs: null, uploadMs: null, browserUploadMs, judges: {} },
-        ip: "unknown",
+        ip: row.ip || "unknown",
         fileSizeMB: row.file_size_mb != null ? parseFloat(row.file_size_mb) : null,
         fileName: row.file_name ?? null,
         browserUploadMs,
@@ -1321,7 +1324,7 @@ async function resumeInFlightTasks() {
     }
     jobs[row.job_id].results[row.judge_id] = { status: "pending" };
   }
-  console.log(`[startup] Resumed ${rows.length} in-flight task(s) across ${jobIds.size} job(s) from Neon`);
+  console.log(`[startup] Resumed ${rows.length} in-flight task(s) across ${jobIds.size} job(s) from Neon — ffmpeg/upload timings unavailable for resumed jobs`);
 }
 
 // ── GET /api/status/:jobId ────────────────────────────────────
@@ -1457,7 +1460,7 @@ async function createWarmupFile() {
       "-y", WARMUP_PATH,
     ]);
     const sizeKB = (fs.statSync(WARMUP_PATH).size / 1024).toFixed(1);
-    console.log(`[warmup] Warmup file created: ${WARMUP_PATH} (${sizeKB} KB)`);
+    console.log(`[warmup] Warmup file ready: ${WARMUP_PATH} (${sizeKB} KB)`);
   } catch (err) {
     console.warn(`[warmup] Failed to create warmup file: ${err.message}`);
   }
@@ -1492,9 +1495,11 @@ try {
   setInterval(pollAnalyzeTasks, 15_000);
   console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
 
-  // Warm-up: generate once at startup, then ping TwelveLabs every 60 minutes
+  // Warm-up: generate file once at startup, ping immediately, then every 60 minutes
+  console.log("[warmup] Warmup initialized on startup");
   await createWarmupFile();
   if (process.env.TWELVELABS_API_KEY) {
+    runWarmup().catch(() => {}); // fire immediately so first post-deploy user gets warm infrastructure
     setInterval(() => { runWarmup().catch(() => {}); }, 60 * 60 * 1000);
     console.log("[warmup] TwelveLabs warm-up scheduled every 60 minutes");
   }
