@@ -19,8 +19,8 @@ const PLATFORMS = [
 ];
 
 const JUDGES = [
-  { id: "critic", name: "The Critic", color: B.brown, softBg: "#EFEBE9",
-    tagline: "Hard to impress. Spots lazy editing immediately.", scoreLabel: "The Critic's Verdict",
+  { id: "critic", name: "The Editor", color: B.brown, softBg: "#EFEBE9",
+    tagline: "Sharp-eyed. Focused on craft, cuts, and execution.", scoreLabel: "The Editor's Cut",
     avatar: "/owl-critic.png?v=3" },
   { id: "cool", name: "The Trendsetter", color: "#546E7A", softBg: "#ECEFF1",
     tagline: "Platform-native, trend-aware, detached.", scoreLabel: "The Trendsetter's Take",
@@ -539,11 +539,13 @@ export default function PreviewPanel() {
   const [largeFileWarning, setLargeFileWarning] = useState(null);
   const [largeSizeRiskWarning, setLargeSizeRiskWarning] = useState(false);
   const [uploadZoneError, setUploadZoneError] = useState(null);
+  const [judgeArrivalOrder, setJudgeArrivalOrder] = useState([]);
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
   const xhrRef = useRef(null);
   const notifiedRef = useRef(false);
   const savedRef = useRef(false);
+  const prevResultsRef = useRef({});
   const plat = PLATFORMS.find(p => p.id === platform);
   const isFinished = jobStatus === "done" || jobStatus === "partial";
   const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== "timeout" && jobStatus !== null;
@@ -576,7 +578,18 @@ export default function PreviewPanel() {
           return;
         }
         setJobStatus(data.status);
-        setJudgeResults(data.results || {});
+        const newResults = data.results || {};
+        const newArrivals = Object.entries(newResults)
+          .filter(([id, r]) => r.status === "done" && prevResultsRef.current[id]?.status !== "done")
+          .map(([id]) => id);
+        if (newArrivals.length > 0) {
+          setJudgeArrivalOrder(prev => {
+            const toAdd = newArrivals.filter(id => !prev.includes(id));
+            return toAdd.length ? [...prev, ...toAdd] : prev;
+          });
+        }
+        prevResultsRef.current = newResults;
+        setJudgeResults(newResults);
         if (data.duration) setVideoDurationSecs(data.duration);
 
         if (data.status === "done" || data.status === "partial" || data.status === "error" || data.status === "timeout") {
@@ -716,6 +729,8 @@ export default function PreviewPanel() {
     setShowNotifPrimer(false);
     notifiedRef.current = false;
     savedRef.current = false;
+    prevResultsRef.current = {};
+    setJudgeArrivalOrder([]);
     setStep(2);
     setJudgeResults({});
     setJobStatus("uploading");
@@ -813,7 +828,8 @@ export default function PreviewPanel() {
     clearInterval(pollRef.current);
     if (xhrRef.current) { xhrRef.current.abort(); xhrRef.current = null; }
     setStep(1); setJobId(null); setJobStatus(null);
-    setJudgeResults({}); setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
+    setJudgeResults({}); setJudgeArrivalOrder([]); prevResultsRef.current = {};
+    setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
     setVideoDurationSecs(null);
     setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
     setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
@@ -1217,7 +1233,10 @@ export default function PreviewPanel() {
             )}
 
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              {selectedJudges.map(jid => (
+              {[
+                ...judgeArrivalOrder.filter(id => selectedJudges.includes(id)),
+                ...selectedJudges.filter(id => !judgeArrivalOrder.includes(id)),
+              ].map(jid => (
                 <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs} platform={platform}/>
               ))}
             </div>
