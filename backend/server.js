@@ -38,7 +38,7 @@ const FFMPEG = fs.existsSync("/opt/homebrew/bin/ffmpeg")
   : "ffmpeg";
 
 // ── Issue #3: 3-minute video limit ───────────────────────────
-const MAX_VIDEO_DURATION_SECS = 180; // 3 minutes
+const MAX_VIDEO_DURATION_SECS = 300; // 5 minutes
 
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException] Unhandled exception — server will exit:", err);
@@ -911,9 +911,9 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
       // 1. Raw file size — instant stat, no ffmpeg
       const rawSizeMB = fs.statSync(filePath).size / 1024 / 1024;
       console.log(`[${jobId}] Raw file: ${jobs[jobId].fileName || "unknown"} — ${rawSizeMB.toFixed(1)} MB`);
-      if (rawSizeMB > 500) {
+      if (rawSizeMB > 1024) {
         jobs[jobId].status = "error";
-        jobs[jobId].error = "File too large to process. Please use a video under 500MB.";
+        jobs[jobId].error = "File too large to process. Please use a video under 1GB.";
         console.log(`[${jobId}] Rejected — raw file too large: ${rawSizeMB.toFixed(1)}MB`);
         fs.unlink(filePath, () => {});
         await recordSubmissionForJob(jobId, "rejected_too_large");
@@ -924,7 +924,7 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
       videoDuration = await getVideoDuration(filePath);
       if (videoDuration && videoDuration.secs > MAX_VIDEO_DURATION_SECS) {
         jobs[jobId].status = "error";
-        jobs[jobId].error = `Video is ${videoDuration.label} long. PreviewPanel currently supports videos up to 3:00. Please trim your video and try again.`;
+        jobs[jobId].error = `Video is ${videoDuration.label} long. PreviewPanel currently supports videos up to 5:00. Please trim your video and try again.`;
         console.log(`[${jobId}] Rejected — video too long: ${videoDuration.label}`);
         fs.unlink(filePath, () => {});
         await recordSubmissionForJob(jobId, "rejected_too_long");
@@ -946,8 +946,26 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
       convertedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
       jobs[jobId].timings.conversionMs = Date.now() - t_conv;
 
-      // 4. Post-conversion size check — must pass before attempting TwelveLabs upload
-      const convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
+      // 4. Second compression pass if over 150MB — brings file within TwelveLabs limits
+      let convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
+      if (convertedSizeMB > 150) {
+        console.log(`[ffmpeg] Second compression pass — file was ${convertedSizeMB.toFixed(1)}MB, re-encoding to reduce size`);
+        const pass2Path = convertedPath + ".pass2.mp4";
+        const t_conv2 = Date.now();
+        await execFileAsync(FFMPEG, [
+          "-i", convertedPath,
+          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2",
+          "-c:a", "aac", "-b:a", "96k",
+          "-movflags", "+faststart", "-threads", "1", "-y", pass2Path,
+        ]);
+        jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + (Date.now() - t_conv2);
+        fs.unlink(convertedPath, () => {});
+        convertedPath = pass2Path;
+        convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
+        console.log(`[ffmpeg] Second pass done — ${convertedSizeMB.toFixed(1)}MB`);
+      }
+
+      // 5. Hard reject if still too large after all passes
       if (convertedSizeMB > 190) {
         jobs[jobId].status = "error";
         jobs[jobId].error = "Your video is too large after processing. Please reduce the video quality or length before uploading.";

@@ -198,7 +198,7 @@ function useWaitingMessage(isWaiting) {
 }
 
 // ── Issue #4: Notification permission priming modal ───────────
-function NotificationPrimer({ onAllow, onSkip }) {
+function NotificationPrimer({ onAllow, onSkip, timeEstimate }) {
   return (
     <div style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)",
@@ -216,7 +216,7 @@ function NotificationPrimer({ onAllow, onSkip }) {
           Don't miss your results
         </div>
         <div style={{ fontSize: "14px", color: "#666", lineHeight: "1.6", marginBottom: "20px" }}>
-          AI analysis takes <strong>5–10 minutes</strong>. Since you probably won't stare at the screen the whole time, enable notifications so we can tell you the moment your panel is ready.
+          Analysis typically takes <strong>{timeEstimate}</strong> for a file this size. Enable notifications so we can tell you the moment your panel is ready.
         </div>
         <button onClick={onAllow} style={{
           width: "100%", height: "50px", background: B.action, border: "none",
@@ -434,7 +434,7 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
 }
 
 // ── Issue #5 & #6: Big waiting banner ────────────────────────
-function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploadComplete }) {
+function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploadComplete, timeEstimate }) {
   const isWaiting = jobStatus === "analyzing" || jobStatus === "uploading" || jobStatus === "queued";
   const waitingMsg = useWaitingMessage(isWaiting);
 
@@ -509,7 +509,7 @@ function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploa
       </div>
 
       <div style={{ marginTop: "10px", fontSize: "11px", color: "#aaa" }}>
-        Analysis typically takes 5–10 minutes. You can leave this screen — we'll notify you when it's ready.
+        Analysis typically takes {timeEstimate} for a file this size. You can leave this screen — we'll notify you when it's ready.
       </div>
     </div>
   );
@@ -518,6 +518,7 @@ function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploa
 export default function PreviewPanel() {
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
+  const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
   const [targetAudience, setTargetAudience] = useState("");
   const [selectedJudges, setSelectedJudges] = useState(["critic","cool","dreamer"]);
   const [step, setStep] = useState(1);
@@ -548,6 +549,11 @@ export default function PreviewPanel() {
   const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== "timeout" && jobStatus !== null;
 
   const elapsed = useElapsed(isProcessing);
+
+  const fileSizeMBForEstimate = videoFile ? videoFile.size / 1024 / 1024 : null;
+  const timeEstimate = fileSizeMBForEstimate !== null && fileSizeMBForEstimate < 100 && detectedFileDurationSecs !== null && detectedFileDurationSecs < 120
+    ? "1–2 minutes"
+    : "2–4 minutes";
 
   useEffect(() => {
     const handler = e => { e.preventDefault(); setDeferredPrompt(e); };
@@ -631,6 +637,7 @@ export default function PreviewPanel() {
   // Runs immediately after the user picks a file — never blocks the file picker opening.
   const handleFileSelect = (f) => {
     setVideoFile(f);
+    setDetectedFileDurationSecs(null);
     setLargeFileWarning(null);
     setLargeSizeRiskWarning(false);
     setUploadZoneError(null);
@@ -638,6 +645,7 @@ export default function PreviewPanel() {
 
     const clearFile = () => {
       setVideoFile(null);
+      setDetectedFileDurationSecs(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
     };
 
@@ -652,9 +660,9 @@ export default function PreviewPanel() {
       settled = true;
       URL.revokeObjectURL(url);
       console.log(`[PreviewPanel] Metadata load timed out — file: "${f.name}", size: ${sizeMB.toFixed(1)}MB`);
-      if (sizeMB > 400) {
+      if (sizeMB > 1024) {
         clearFile();
-        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
+        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 1GB.`);
       } else if (sizeMB > 150) {
         setLargeFileWarning(`${Math.round(sizeMB)}MB`);
       }
@@ -665,17 +673,20 @@ export default function PreviewPanel() {
       settled = true;
       clearTimeout(metadataTimeout);
       URL.revokeObjectURL(url);
-      if (vid.duration > 180) {
+      if (vid.duration > 300) {
         clearFile();
-        setUploadZoneError("Video is over 3 minutes long. Please trim it and try again.");
-      } else if (sizeMB > 500) {
+        setUploadZoneError("Video is over 5 minutes long. Please trim it and try again.");
+      } else if (sizeMB > 1024) {
         clearFile();
-        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
-      } else if (sizeMB > 300 && vid.duration > 90) {
-        setLargeSizeRiskWarning(true);
-        if (sizeMB > 150) setLargeFileWarning(`${Math.round(sizeMB)}MB`);
-      } else if (sizeMB > 150) {
-        setLargeFileWarning(`${Math.round(sizeMB)}MB`);
+        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 1GB.`);
+      } else {
+        setDetectedFileDurationSecs(vid.duration);
+        if (sizeMB > 300 && vid.duration > 90) {
+          setLargeSizeRiskWarning(true);
+          if (sizeMB > 150) setLargeFileWarning(`${Math.round(sizeMB)}MB`);
+        } else if (sizeMB > 150) {
+          setLargeFileWarning(`${Math.round(sizeMB)}MB`);
+        }
       }
     };
 
@@ -684,9 +695,9 @@ export default function PreviewPanel() {
       settled = true;
       clearTimeout(metadataTimeout);
       URL.revokeObjectURL(url);
-      if (sizeMB > 500) {
+      if (sizeMB > 1024) {
         clearFile();
-        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 500MB.`);
+        setUploadZoneError(`File too large (${Math.round(sizeMB)}MB). Please use a video under 1GB.`);
       } else if (sizeMB > 150) {
         setLargeFileWarning(`${Math.round(sizeMB)}MB`);
       }
@@ -802,7 +813,7 @@ export default function PreviewPanel() {
     clearInterval(pollRef.current);
     if (xhrRef.current) { xhrRef.current.abort(); xhrRef.current = null; }
     setStep(1); setJobId(null); setJobStatus(null);
-    setJudgeResults({}); setVideoFile(null); setStatusMessage("");
+    setJudgeResults({}); setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
     setVideoDurationSecs(null);
     setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
     setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
@@ -863,6 +874,7 @@ export default function PreviewPanel() {
         <NotificationPrimer
           onAllow={handleAllowNotifications}
           onSkip={startAnalysis}
+          timeEstimate={timeEstimate}
         />
       )}
 
@@ -937,7 +949,7 @@ export default function PreviewPanel() {
                     <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
                     <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
                       {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                      <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
+                      <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setDetectedFileDurationSecs(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
                         style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
                     </div>
                   </div>
@@ -945,7 +957,7 @@ export default function PreviewPanel() {
                   <div style={{ padding: "12px 20px" }}>
                     <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
                     <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 3 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
+                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 5 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
                     <div style={{ fontSize: "11px", color: "#bbb", marginTop: "4px", lineHeight: "1.4" }}>💡 Tip: Film in 1080p for fastest uploads — 4K adds file size without improving results.</div>
                   </div>
                 )}
@@ -1039,7 +1051,7 @@ export default function PreviewPanel() {
               </button>
               {videoFile && (
                 <div style={{ textAlign: "center", marginTop: "8px", fontSize: "11px", color: "#aaa" }}>
-                  ⏱ Analysis takes 5–10 minutes — we'll notify you when it's ready
+                  ⏱ Analysis typically takes {timeEstimate} — we'll notify you when it's ready
                 </div>
               )}
             </div>
@@ -1117,6 +1129,7 @@ export default function PreviewPanel() {
                 selectedJudges={selectedJudges}
                 jobStatus={jobStatus}
                 uploadComplete={jobId !== null}
+                timeEstimate={timeEstimate}
               />
             )}
 
