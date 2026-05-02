@@ -598,8 +598,14 @@ async function convertToMp4(inputPath, { preProbed = null, forceReencode = false
   const copyAudio = acodec === "aac";
 
   const args = ["-i", inputPath];
+  // -fflags +genpts regenerates presentation timestamps — only needed when re-encoding
+  // (CFR normalization changes timing). Pure stream copy preserves original PTS and is
+  // much faster without it (140-400ms vs 1000-3600ms).
+  if (!copyVideo || !copyAudio) {
+    args.push("-fflags", "+genpts");
+  }
   if (copyVideo) {
-    args.push("-fflags", "+genpts", "-c:v", "copy");
+    args.push("-c:v", "copy");
   } else {
     args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", "-vf", "scale=854:-2");
   }
@@ -622,8 +628,11 @@ async function convertToMp4(inputPath, { preProbed = null, forceReencode = false
   console.log(`[ffmpeg] ${path.basename(inputPath)} — detected video=${vcodec ?? "null"} audio=${acodec ?? "null"} → ${mode} (${why})`);
 
   await execFileAsync(FFMPEG, args);
+  const elapsed = Date.now() - t0;
+  const timeStr = elapsed < 2000 ? `${elapsed}ms` : `${(elapsed / 1000).toFixed(1)}s`;
   const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(2);
-  console.log(`[ffmpeg] Done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${sizeMB} MB — mode: ${mode}`);
+  const isStreamCopy = copyVideo && copyAudio && !forceReencode;
+  console.log(`[ffmpeg] ${isStreamCopy ? "Stream copy" : "Re-encode"}: ${timeStr} — ${sizeMB} MB — mode: ${mode}`);
   return outputPath;
 }
 
