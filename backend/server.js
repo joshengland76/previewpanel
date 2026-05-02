@@ -608,7 +608,7 @@ async function convertToMp4(inputPath, { preProbed = null, forceReencode = false
   } else {
     args.push("-c:a", "aac", "-b:a", "96k");
   }
-  args.push("-movflags", "+faststart", "-threads", "1", "-y", outputPath);
+  args.push("-vsync", "cfr", "-movflags", "+faststart", "-threads", "1", "-y", outputPath);
 
   const mode = forceReencode ? "H264 re-encode (HEVC fallback)"
     : copyVideo && copyAudio ? "stream copy"
@@ -956,16 +956,16 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
         const t_conv2 = Date.now();
         await execFileAsync(FFMPEG, [
           "-i", convertedPath,
-          "-c:v", "libx264", "-preset", "veryfast", "-crf", "32", "-vf", "scale=854:-2",
+          "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-vf", "scale=640:-2",
           "-c:a", "aac", "-b:a", "96k",
-          "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
+          "-vsync", "cfr", "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
         ]);
         const pass2Ms = Date.now() - t_conv2;
         jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + pass2Ms;
         fs.unlink(convertedPath, () => {});
         convertedPath = pass2Path;
         convertedSizeMB = fs.statSync(convertedPath).size / 1024 / 1024;
-        console.log(`[ffmpeg] Second pass: ${inputSizeMB.toFixed(1)}MB → ${convertedSizeMB.toFixed(1)}MB in ${(pass2Ms / 1000).toFixed(1)}s`);
+        console.log(`[ffmpeg] Second pass: ${inputSizeMB.toFixed(1)}MB → ${convertedSizeMB.toFixed(1)}MB in ${(pass2Ms / 1000).toFixed(1)}s (ultrafast, 640p, crf35)`);
       }
 
       // 5. Hard reject if still too large after all passes
@@ -979,6 +979,16 @@ async function runPipeline(jobId, videoUrl, filePath, platform, targetAudience, 
         return;
       }
 
+      // 6. Read converted duration — authoritative for TwelveLabs timestamps
+      const convertedDuration = await getVideoDuration(convertedPath);
+      if (convertedDuration) {
+        const origSecs = videoDuration?.secs ?? null;
+        console.log(`[ffmpeg] Duration — original: ${origSecs != null ? origSecs.toFixed(1) + "s" : "unknown"}, converted: ${convertedDuration.secs.toFixed(1)}s`);
+        if (origSecs != null && Math.abs(convertedDuration.secs - origSecs) > 2) {
+          console.warn(`[ffmpeg] Warning: duration mismatch of ${Math.abs(convertedDuration.secs - origSecs).toFixed(1)}s between original and converted file`);
+        }
+        videoDuration = convertedDuration; // converted file is what TwelveLabs analyzes
+      }
       if (videoDuration) jobs[jobId].videoDuration = videoDuration;
     }
 
@@ -1459,10 +1469,10 @@ async function createWarmupFile() {
       "-c:v", "libx264", "-preset", "ultrafast", "-t", "1",
       "-y", WARMUP_PATH,
     ]);
-    const sizeKB = (fs.statSync(WARMUP_PATH).size / 1024).toFixed(1);
-    console.log(`[warmup] Warmup file ready: ${WARMUP_PATH} (${sizeKB} KB)`);
+    const sizeBytes = fs.statSync(WARMUP_PATH).size;
+    console.log(`[warmup] Warmup file ready: ${sizeBytes} bytes`);
   } catch (err) {
-    console.warn(`[warmup] Failed to create warmup file: ${err.message}`);
+    console.error(`[warmup] Failed to create warmup file: ${err.message}\n${err.stack}`);
   }
 }
 
@@ -1497,11 +1507,23 @@ try {
 
   // Warm-up: generate file once at startup, ping immediately, then every 60 minutes
   console.log("[warmup] Warmup initialized on startup");
-  await createWarmupFile();
+  try {
+    await createWarmupFile();
+  } catch (err) {
+    console.error(`[warmup] createWarmupFile threw unexpectedly: ${err.message}`);
+  }
   if (process.env.TWELVELABS_API_KEY) {
-    runWarmup().catch(() => {}); // fire immediately so first post-deploy user gets warm infrastructure
-    setInterval(() => { runWarmup().catch(() => {}); }, 60 * 60 * 1000);
+    try {
+      await runWarmup(); // awaited so all three log lines appear sequentially
+    } catch (err) {
+      console.error(`[warmup] Initial warmup failed: ${err.message}\n${err.stack}`);
+    }
+    setInterval(() => {
+      runWarmup().catch(err => console.error(`[warmup] Scheduled warmup failed: ${err.message}`));
+    }, 60 * 60 * 1000);
     console.log("[warmup] TwelveLabs warm-up scheduled every 60 minutes");
+  } else {
+    console.warn("[warmup] TWELVELABS_API_KEY not set — warmup ping skipped");
   }
 
   const PORT = process.env.PORT || 3001;
