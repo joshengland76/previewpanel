@@ -1503,12 +1503,12 @@ const WARMUP_PATH = path.join(__dirname, "uploads", "warmup.mp4");
 async function createWarmupFile() {
   try {
     await execFileAsync(FFMPEG, [
-      "-f", "lavfi", "-i", "color=c=black:size=2x2:duration=1",
-      "-c:v", "libx264", "-preset", "ultrafast", "-t", "1",
+      "-f", "lavfi", "-i", "color=c=black:size=640x360:duration=5",
+      "-c:v", "libx264", "-preset", "ultrafast", "-t", "5",
       "-y", WARMUP_PATH,
     ]);
     const sizeBytes = fs.statSync(WARMUP_PATH).size;
-    console.log(`[warmup] Warmup file ready: ${sizeBytes} bytes`);
+    console.log(`[warmup] Warmup file created: 640x360, 5s, ${sizeBytes} bytes`);
   } catch (err) {
     console.error(`[warmup] Failed to create warmup file: ${err.message}\n${err.stack}`);
   }
@@ -1543,7 +1543,7 @@ try {
   setInterval(pollAnalyzeTasks, 15_000);
   console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
 
-  // Warm-up: generate file once at startup, ping immediately, then every 60 minutes
+  // Warm-up: generate file once at startup, ping immediately, then every 30 minutes
   console.log("[warmup] Warmup initialized on startup");
   try {
     await createWarmupFile();
@@ -1558,8 +1558,8 @@ try {
     }
     setInterval(() => {
       runWarmup().catch(err => console.error(`[warmup] Scheduled warmup failed: ${err.message}`));
-    }, 60 * 60 * 1000);
-    console.log("[warmup] TwelveLabs warm-up scheduled every 60 minutes");
+    }, 30 * 60 * 1000);
+    console.log("[warmup] TwelveLabs warm-up scheduled every 30 minutes");
   } else {
     console.warn("[warmup] TWELVELABS_API_KEY not set — warmup ping skipped");
   }
