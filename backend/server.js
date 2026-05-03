@@ -1543,7 +1543,7 @@ try {
   setInterval(pollAnalyzeTasks, 15_000);
   console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
 
-  // Warm-up: generate file once at startup, ping immediately, then every 30 minutes
+  // Warm-up: generate file once at startup, ping immediately, then every 14 minutes
   console.log("[warmup] Warmup initialized on startup");
   try {
     await createWarmupFile();
@@ -1558,8 +1558,8 @@ try {
     }
     setInterval(() => {
       runWarmup().catch(err => console.error(`[warmup] Scheduled warmup failed: ${err.message}`));
-    }, 30 * 60 * 1000);
-    console.log("[warmup] TwelveLabs warm-up scheduled every 30 minutes");
+    }, 14 * 60 * 1000);
+    console.log("[warmup] TwelveLabs warm-up scheduled every 14 minutes");
   } else {
     console.warn("[warmup] TWELVELABS_API_KEY not set — warmup ping skipped");
   }
