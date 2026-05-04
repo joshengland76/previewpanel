@@ -207,11 +207,22 @@ async function initDb() {
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
-    // Dimension score columns — universal (per judge)
-    for (const judge of ["critic", "cool", "dreamer"]) {
+    // Dimension score columns — universal (per judge, using display names)
+    for (const judge of ["critic", "trendsetter", "dreamer"]) {
       for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
         await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_${dim} NUMERIC`);
       }
+    }
+    // Rename legacy cool_* columns to trendsetter_* if they exist
+    for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
+      await pgPool.query(`
+        DO $$ BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='submissions' AND column_name='cool_${dim}') THEN
+            ALTER TABLE submissions RENAME COLUMN cool_${dim} TO trendsetter_${dim};
+          END IF;
+        END $$
+      `);
     }
     // Dimension score columns — platform-specific
     for (const col of [
@@ -294,7 +305,7 @@ async function saveSubmission(entry) {
            critic_score, trendsetter_score, dreamer_score, avg_score,
            file_name, task_creation_ms, queue_wait_ms, tl_queue_ms,
            critic_hook_strength, critic_completion_likelihood, critic_share_save_worthiness,
-           cool_hook_strength, cool_completion_likelihood, cool_share_save_worthiness,
+           trendsetter_hook_strength, trendsetter_completion_likelihood, trendsetter_share_save_worthiness,
            dreamer_hook_strength, dreamer_completion_likelihood, dreamer_share_save_worthiness,
            tiktok_rewatch_potential, tiktok_seo_strength,
            instagram_dm_share_potential, instagram_originality,
@@ -326,9 +337,9 @@ async function saveSubmission(entry) {
         d.critic_hook_strength ?? null,
         d.critic_completion_likelihood ?? null,
         d.critic_share_save_worthiness ?? null,
-        d.cool_hook_strength ?? null,
-        d.cool_completion_likelihood ?? null,
-        d.cool_share_save_worthiness ?? null,
+        d.trendsetter_hook_strength ?? null,
+        d.trendsetter_completion_likelihood ?? null,
+        d.trendsetter_share_save_worthiness ?? null,
         d.dreamer_hook_strength ?? null,
         d.dreamer_completion_likelihood ?? null,
         d.dreamer_share_save_worthiness ?? null,
@@ -516,8 +527,8 @@ const PLATFORM_FOCUS = {
 function buildBottomSection(judge, platform) {
   if (judge.id === "critic") {
     return {
-      instruction: `\nCLIPPING — If the video is over 45 seconds and contains a strong standalone moment, identify the single best clip. Think like a film editor — which moment has a clear in-point and out-point, works without context, has a visual hook in its first 2 seconds, and would perform well as a standalone short? Describe the moment visually in 2-3 words in addition to the timestamp so the creator can find it even if the timestamp is approximate. If no moment clearly meets this bar, omit the clip field entirely.`,
-      format: `,\n  "clip": { "start": "<M:SS>", "end": "<M:SS>", "label": "<2-3 word visual description>", "reason": "<1 sentence on why this moment works as a standalone short>" }`,
+      instruction: `\nCLIPPING — If the video is over 45 seconds and contains strong standalone moments, suggest up to two clip candidates if two genuinely strong options exist. Only suggest a second clip if it is meaningfully different from the first — different moment, different emotional tone, or targets a different audience. If only one strong clip exists, suggest one. If none exist, omit entirely. Think like a film editor — each clip must have a clear in-point and out-point, work without context, have a visual hook in its first 2 seconds, and perform well as a standalone short. Describe each moment visually in 2-3 words so the creator can find it even if the timestamp is approximate. Return as an array: "clips": [{ "start": "M:SS", "end": "M:SS", "label": "2-3 word visual description", "reason": "1 sentence on why this moment works as a standalone short" }] with 1 or 2 items.`,
+      format: `,\n  "clips": [{ "start": "<M:SS>", "end": "<M:SS>", "label": "<2-3 word visual description>", "reason": "<1 sentence>" }]`,
     };
   }
   if (judge.id === "cool") {
@@ -531,7 +542,7 @@ function buildBottomSection(judge, platform) {
   }
   // dreamer — caption suggestions
   return {
-    instruction: `\nCAPTIONS — Instead of hashtags, suggest 2-3 caption options for this post. Each caption should be distinct in tone. Label them: Emotional (speaks to feeling and human connection), Conversational (sounds like how the creator naturally talks), Curiosity (makes someone want to click, comment, or share). Each caption should be under 150 characters. These are post captions, not video titles.`,
+    instruction: `\nCAPTIONS — Suggest 2-3 post caption options — the text the creator would write when posting this video to their platform. Each should be distinct in tone: Emotional (speaks to feeling and human connection), Conversational (sounds like how the creator naturally talks), Curiosity (makes someone want to click, comment, or share). Each caption should be under 150 characters and feel native to the platform. These are not on-screen text overlays — they are the post description that accompanies the video when published.`,
     format: `,\n  "captions": [{ "tone": "Emotional", "text": "<caption text>" }, { "tone": "Conversational", "text": "<caption text>" }, { "tone": "Curiosity", "text": "<caption text>" }]`,
   };
 }
@@ -1312,8 +1323,10 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     }
     if (r.status === "done" && r.data?.dimensions) {
       const d = r.data.dimensions;
+      // Map internal judge id "cool" → display column name "trendsetter"
+      const colPrefix = id === "cool" ? "trendsetter" : id;
       for (const key of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
-        if (d[key] != null) dimensions[`${id}_${key}`] = Number(d[key]);
+        if (d[key] != null) dimensions[`${colPrefix}_${key}`] = Number(d[key]);
       }
       for (const [key, prefix] of Object.entries(PLAT_DIM_PREFIX)) {
         if (d[key] != null) {
@@ -1327,6 +1340,11 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     if (platDimCounts[key]) {
       dimensions[`${prefix}_${key}`] = parseFloat((platDimSums[key] / platDimCounts[key]).toFixed(1));
     }
+  }
+  if (Object.keys(dimensions).length > 0) {
+    console.log(`[${jobId}] [db] Saving dimensions — critic_hook=${dimensions.critic_hook_strength ?? "—"}, critic_completion=${dimensions.critic_completion_likelihood ?? "—"}, critic_share=${dimensions.critic_share_save_worthiness ?? "—"}, trendsetter_hook=${dimensions.trendsetter_hook_strength ?? "—"}, trendsetter_completion=${dimensions.trendsetter_completion_likelihood ?? "—"}, dreamer_hook=${dimensions.dreamer_hook_strength ?? "—"}, dreamer_completion=${dimensions.dreamer_completion_likelihood ?? "—"}`);
+  } else {
+    console.log(`[${jobId}] [db] No dimensions found in judge results — dimensions object will be empty`);
   }
   const browserUploadMs = job.timings?.browserUploadMs ?? null;
   console.log(`[${jobId}] [log] browser_upload_ms=${browserUploadMs} timings.browserUploadMs=${job.timings?.browserUploadMs} job.browserUploadMs=${job.browserUploadMs}`);

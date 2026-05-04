@@ -282,6 +282,10 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
   const loading = judgeResult?.status === "pending";
   const result = judgeResult?.data;
   const has = !!result && judgeResult?.status === "done";
+  // Normalise clip format: new API returns clips[] array; old API returned clip{}
+  const editorClips = result
+    ? (result.clips?.length > 0 ? result.clips : result.clip?.start ? [result.clip] : [])
+    : [];
   return (
     <div style={{
       border: `1.5px solid ${has ? judge.color+"45" : B.border}`,
@@ -363,27 +367,34 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
             </div>
           )}
 
-          {/* Editor — Clip Suggestion only */}
-          {judge.id === "critic" && result?.clip?.start && (
+          {/* Editor — Clip Suggestion(s) only */}
+          {judge.id === "critic" && editorClips.length > 0 && (
             <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Clip Suggestion</div>
-              <div style={{
-                background: judge.color + "10", border: `1px solid ${judge.color}25`,
-                borderRadius: "8px", padding: "10px 12px",
-                display: "flex", gap: "8px", alignItems: "flex-start",
-              }}>
-                <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px" }}>✂️</span>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px", flexWrap: "wrap" }}>
-                    <span style={{ fontSize: "13px", fontWeight: "800", color: judge.color, fontFamily: "monospace" }}>
-                      {result.clip.start} — {result.clip.end}
-                    </span>
-                    <span style={{ fontSize: "12px", fontWeight: "700", color: B.body }}>{result.clip.label}</span>
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#666", lineHeight: "1.4" }}>{result.clip.reason}</div>
-                  <div style={{ fontSize: "10px", color: "#bbb", marginTop: "5px" }}>(timestamps are approximate)</div>
-                </div>
+              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>
+                Clip Suggestion{editorClips.length > 1 ? "s" : ""}
               </div>
+              {editorClips.map((clip, idx) => (
+                <div key={idx}>
+                  {idx > 0 && <div style={{ height: "1px", background: B.border, margin: "8px 0" }} />}
+                  <div style={{
+                    background: judge.color + "10", border: `1px solid ${judge.color}25`,
+                    borderRadius: "8px", padding: "10px 12px",
+                    display: "flex", gap: "8px", alignItems: "flex-start",
+                  }}>
+                    <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px" }}>✂️</span>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: "13px", fontWeight: "800", color: judge.color, fontFamily: "monospace" }}>
+                          {clip.start} — {clip.end}
+                        </span>
+                        <span style={{ fontSize: "12px", fontWeight: "700", color: B.body }}>{clip.label}</span>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#666", lineHeight: "1.4" }}>{clip.reason}</div>
+                      <div style={{ fontSize: "10px", color: "#bbb", marginTop: "5px" }}>(timestamps are approximate)</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 
