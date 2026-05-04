@@ -363,39 +363,65 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
             </div>
           )}
 
-          {/* Hashtags & Clips */}
-          {(result?.hashtags?.length > 0 || result?.clip) && (
+          {/* Editor — Clip Suggestion only */}
+          {judge.id === "critic" && result?.clip?.start && (
             <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Hashtags & Clips</div>
-              {result.hashtags?.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: result.clip ? "10px" : "0" }}>
-                  {result.hashtags.map((tag, i) => (
-                    <span key={i} style={{
-                      background: judge.color + "15", color: judge.color,
-                      border: `1px solid ${judge.color}35`, borderRadius: "99px",
-                      padding: "4px 12px", fontSize: "12px", fontWeight: "700",
-                    }}>#{tag}</span>
-                  ))}
-                </div>
-              )}
-              {result.clip && (
-                <div style={{
-                  background: judge.color + "10", border: `1px solid ${judge.color}25`,
-                  borderRadius: "8px", padding: "10px 12px",
-                  display: "flex", gap: "8px", alignItems: "flex-start",
-                }}>
-                  <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px" }}>✂️</span>
-                  <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: "13px", fontWeight: "800", color: judge.color, fontFamily: "monospace" }}>
-                        {result.clip.start} — {result.clip.end}
-                      </span>
-                      <span style={{ fontSize: "12px", fontWeight: "700", color: B.body }}>{result.clip.label}</span>
-                    </div>
-                    <div style={{ fontSize: "11px", color: "#666", lineHeight: "1.4" }}>{result.clip.reason}</div>
+              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Clip Suggestion</div>
+              <div style={{
+                background: judge.color + "10", border: `1px solid ${judge.color}25`,
+                borderRadius: "8px", padding: "10px 12px",
+                display: "flex", gap: "8px", alignItems: "flex-start",
+              }}>
+                <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px" }}>✂️</span>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: "13px", fontWeight: "800", color: judge.color, fontFamily: "monospace" }}>
+                      {result.clip.start} — {result.clip.end}
+                    </span>
+                    <span style={{ fontSize: "12px", fontWeight: "700", color: B.body }}>{result.clip.label}</span>
                   </div>
+                  <div style={{ fontSize: "11px", color: "#666", lineHeight: "1.4" }}>{result.clip.reason}</div>
+                  <div style={{ fontSize: "10px", color: "#bbb", marginTop: "5px" }}>(timestamps are approximate)</div>
                 </div>
-              )}
+              </div>
+            </div>
+          )}
+
+          {/* Trendsetter — Hashtags only */}
+          {judge.id === "cool" && result?.hashtags?.length > 0 && (
+            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
+              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Hashtags</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                {result.hashtags.map((tag, i) => (
+                  <span key={i} style={{
+                    background: judge.color + "15", color: judge.color,
+                    border: `1px solid ${judge.color}35`, borderRadius: "99px",
+                    padding: "4px 12px", fontSize: "12px", fontWeight: "700",
+                  }}>#{tag}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Dreamer — Caption Ideas only */}
+          {judge.id === "dreamer" && result?.captions?.length > 0 && (
+            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
+              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Caption Ideas</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {result.captions.map((cap, i) => (
+                  <div key={i} style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "8px", padding: "10px 12px" }}>
+                    <div style={{ fontSize: "10px", color: "#bbb", fontWeight: "700", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: "5px" }}>{cap.tone}</div>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
+                      <span style={{ fontSize: "12px", color: B.body, lineHeight: "1.5", flex: 1 }}>{cap.text}</span>
+                      <button
+                        onClick={() => navigator.clipboard?.writeText(cap.text)}
+                        title="Copy caption"
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", flexShrink: 0, color: "#bbb", fontSize: "15px", lineHeight: 1 }}
+                      >⧉</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1235,168 +1261,4 @@ export default function PreviewPanel() {
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
               <div style={{ marginTop: "-12px", marginBottom: "12px" }}>
-                <span style={{ fontSize: "10px", fontWeight: "700", background: "#4E342E", color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
-              </div>
-              {(isFinished || jobStatus === "error") && (
-                <button onClick={reset} style={{
-                  position: "absolute", top: "10px", right: "0",
-                  background: "transparent",
-                  border: `1.5px solid ${B.border}`, borderRadius: "8px",
-                  padding: "6px 12px", fontSize: "12px", fontWeight: "700",
-                  color: B.brown, cursor: "pointer", fontFamily: "Montserrat, sans-serif",
-                }}>← New Video</button>
-              )}
-            </div>
-
-            {/* Upload progress bar — shown while XHR is in flight (before jobId received) */}
-            {isProcessing && !jobId && jobStatus === "uploading" && (
-              <div style={{ marginBottom: "16px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "#888", marginBottom: "6px" }}>
-                  <span>Uploading… {uploadProgressIndeterminate ? "connecting…" : `${uploadedMB.toFixed(1)} of ${videoFile ? (videoFile.size/1024/1024).toFixed(1) : "?"} MB`}</span>
-                  <span>{uploadSpeedMBps > 0 ? `${uploadSpeedMBps.toFixed(2)} MB/s` : ""}</span>
-                </div>
-                <div style={{ height: "6px", background: B.border, borderRadius: "99px", overflow: "hidden" }}>
-                  {uploadProgressIndeterminate ? (
-                    <div style={{ height: "100%", width: "30%", background: `linear-gradient(90deg, transparent, ${B.action}, transparent)`, borderRadius: "99px", animation: "pp-indeterminate 1.4s ease-in-out infinite" }}/>
-                  ) : (
-                    <div style={{ height: "100%", width: `${uploadProgress}%`, background: B.action, borderRadius: "99px", transition: "width 0.5s ease" }}/>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Slow connection warning */}
-            {showSlowConnWarning && !jobId && (
-              <div style={{ marginBottom: "16px", padding: "12px 16px", background: "#FFF8E1", border: "1.5px solid #FFD54F", borderRadius: "12px", fontSize: "12px", color: "#E65100", lineHeight: "1.6" }}>
-                🐢 <strong>Slow connection detected</strong> — upload may take longer than usual. You can leave this screen and we'll notify you when done.
-              </div>
-            )}
-
-            {/* Issue #5 & #6: Prominent waiting banner */}
-            {isProcessing && (
-              <WaitingBanner
-                elapsed={elapsed}
-                judgeResults={judgeResults}
-                selectedJudges={selectedJudges}
-                jobStatus={jobStatus}
-                uploadComplete={jobId !== null}
-                timeEstimate={timeEstimate}
-              />
-            )}
-
-            {/* Issue #6: Error state — clear message */}
-            {jobStatus === "error" && (
-              <div style={{
-                background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "14px",
-                padding: "20px 24px", marginBottom: "18px",
-              }}>
-                <div style={{ fontWeight: "800", fontSize: "15px", color: "#C62828", marginBottom: "6px" }}>
-                  ⚠️ Something went wrong
-                </div>
-                <div style={{ fontSize: "13px", color: "#B71C1C", lineHeight: "1.6" }}>
-                  {statusMessage.replace("Error: ", "")}
-                </div>
-                <button onClick={reset} style={{
-                  marginTop: "14px", background: "#C62828", color: "#fff", border: "none",
-                  borderRadius: "8px", padding: "10px 20px", fontSize: "13px", fontWeight: "700",
-                  cursor: "pointer", fontFamily: "Montserrat, sans-serif",
-                }}>
-                  ← Try Again
-                </button>
-              </div>
-            )}
-
-            {/* Timeout state — amber, with Try Again */}
-            {jobStatus === "timeout" && (
-              <div style={{
-                background: "#FFF3E0", border: "1.5px solid #FFB74D", borderRadius: "14px",
-                padding: "20px 24px", marginBottom: "18px",
-              }}>
-                <div style={{ fontWeight: "800", fontSize: "15px", color: "#E65100", marginBottom: "6px" }}>
-                  ⏱ Panel timeout
-                </div>
-                <div style={{ fontSize: "13px", color: "#BF360C", lineHeight: "1.6" }}>
-                  {statusMessage || "The panel took too long to reach a verdict — this can happen during busy periods. Your video has been submitted and you can try again for a fresh panel."}
-                </div>
-                <button onClick={reset} style={{
-                  marginTop: "14px", background: "#E65100", color: "#fff", border: "none",
-                  borderRadius: "8px", padding: "10px 20px", fontSize: "13px", fontWeight: "700",
-                  cursor: "pointer", fontFamily: "Montserrat, sans-serif",
-                }}>
-                  Try Again
-                </button>
-              </div>
-            )}
-
-            {/* Platform + file tags (only when finished) */}
-            {isFinished && (
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
-                <div style={{ padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", color: plat.color, flexShrink: 0 }}>
-                  {plat.icon} {plat.label}
-                </div>
-                {objective && (
-                  <div style={{ padding: "5px 13px", background: B.lightBrown, border: `1.5px solid ${B.beige}`, borderRadius: "99px", fontSize: "12px", fontWeight: "600", color: B.action, flexShrink: 0 }}>
-                    🎯 {objective}
-                  </div>
-                )}
-                {videoFile && (
-                  <div style={{ padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: "#888", fontFamily: "'Courier New', monospace" }}>
-                    {videoFile.name}
-                  </div>
-                )}
-                <span style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}>{statusMessage}</span>
-              </div>
-            )}
-
-            {/* TwelveLabs attribution */}
-            <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "8px", padding: "10px 16px", fontSize: "11px", color: "#aaa", display: "flex", alignItems: "center", gap: "8px", marginBottom: "18px" }}>
-              <span style={{ fontSize: "16px" }}>👁</span>
-              <span>Powered by <strong style={{ color: B.body }}>TwelveLabs Pegasus</strong> — the AI watches your full video, analyzing visuals, delivery, audio, and pacing together.</span>
-            </div>
-
-            {/* Panel Verdict */}
-            {avgScore !== null && (
-              <div style={{ background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "14px", padding: "20px 24px", marginBottom: "18px", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 2px 14px rgba(0,0,0,0.04)" }}>
-                <div>
-                  <div style={{ fontWeight: "800", fontSize: "15px", color: B.black }}>Panel Verdict</div>
-                  <div style={{ fontSize: "12px", color: "#bbb", marginTop: "3px" }}>{doneResults.length} of {selectedJudges.length} judges complete</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  {JUDGES.filter(j => selectedJudges.includes(j.id) && judgeResults[j.id]?.status==="done").map(j => (
-                    <ScoreRing key={j.id} score={judgeResults[j.id].data.overall} color={j.color} size={44}/>
-                  ))}
-                  <div style={{ fontSize: "50px", fontWeight: "800", letterSpacing: "-0.03em", lineHeight: 1, color: avgScore >= 7 ? "#43A047" : avgScore >= 5 ? "#FB8C00" : "#E53935" }}>
-                    {avgScore}<span style={{ fontSize: "20px", color: "#ccc", fontWeight: "400" }}>/10</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              {[
-                ...judgeArrivalOrder.filter(id => selectedJudges.includes(id)),
-                ...selectedJudges.filter(id => !judgeArrivalOrder.includes(id)),
-              ].map(jid => (
-                <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs} platform={platform}/>
-              ))}
-            </div>
-
-            {/* Partial result explanation */}
-            {jobStatus === "partial" && (
-              <div style={{
-                marginTop: "16px", padding: "12px 16px",
-                background: "#F5F5F5", border: "1px solid #E0E0E0", borderRadius: "10px",
-                display: "flex", gap: "10px", alignItems: "flex-start",
-              }}>
-                <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px", color: "#9E9E9E" }}>ℹ</span>
-                <span style={{ fontSize: "12px", color: "#757575", lineHeight: "1.55" }}>
-                  Note: One or more judges were unable to complete their review for this submission. The verdict reflects only the judges who responded.
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
+                <span style={{ fontSize: "10px", fontWeight: "700", background:

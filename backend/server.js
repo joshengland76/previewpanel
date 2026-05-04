@@ -475,26 +475,28 @@ const PLATFORM_FOCUS = {
   },
 };
 
-// ── Issue #7: Hashtag instruction for TikTok and Instagram ───
-function buildHashtagInstruction(platform, judgeId) {
-  if (platform === "tiktok" || platform === "instagram") {
-    if (judgeId === "cool") {
-      return `\nHASHTAGS — Suggest exactly 5 hashtags ranging from obvious/high-volume to creative/niche. Strategy:
-- Start with the most searchable tags that match what this video is obviously about
-- If the video features a specific brand, product, sports team, athlete, city, neighborhood, landmark, or recognizable scene — include that as one hashtag
-- End with 2 more creative or unexpected tags that could help the video find a unique audience — the last 2 should not be the obvious choice but would attract exactly the right viewer
-- Choose hashtags people actually search, not generic ones like "video" or "content"
-- Base them entirely on what you actually observe in the video — do not invent content
-Include them in the JSON as a "hashtags" array of exactly 5 strings (without the # symbol).`;
-    }
-    return `\nHASHTAGS — Suggest exactly 3 hashtags to maximize reach and views on ${platform.toUpperCase()}. Strategy:
-- If the video features a specific brand, product, sports team, athlete, city, neighborhood, landmark, or recognizable scene — include that as one hashtag (these are high-intent, specific searches that attract exactly the right viewers)
-- Mix specificity: one niche/specific tag (smaller but highly targeted), one mid-size community tag, one broader discovery tag
-- Choose hashtags people actually search, not generic ones like "video" or "content"
-- Base them entirely on what you actually observe in the video — do not invent content
-Include them in the JSON as a "hashtags" array of strings (without the # symbol).`;
+// ── Per-judge bottom section: clip (Editor) / hashtags (Trendsetter) / captions (Dreamer) ──
+function buildBottomSection(judge, platform) {
+  if (judge.id === "critic") {
+    return {
+      instruction: `\nCLIPPING — If the video is over 45 seconds and contains a strong standalone moment, identify the single best clip. Think like a film editor — which moment has a clear in-point and out-point, works without context, has a visual hook in its first 2 seconds, and would perform well as a standalone short? Describe the moment visually in 2-3 words in addition to the timestamp so the creator can find it even if the timestamp is approximate. If no moment clearly meets this bar, omit the clip field entirely.`,
+      format: `,\n  "clip": { "start": "<M:SS>", "end": "<M:SS>", "label": "<2-3 word visual description>", "reason": "<1 sentence on why this moment works as a standalone short>" }`,
+    };
   }
-  return "";
+  if (judge.id === "cool") {
+    if (platform === "tiktok" || platform === "instagram") {
+      return {
+        instruction: `\nHASHTAGS — Suggest exactly 5 hashtags ranging from obvious/high-volume to creative/niche. Strategy:\n- Start with the most searchable tags that match what this video is obviously about\n- If the video features a specific brand, product, sports team, athlete, city, neighborhood, landmark, or recognizable scene — include that as one hashtag\n- End with 2 more creative or unexpected tags that could help the video find a unique audience — the last 2 should not be the obvious choice but would attract exactly the right viewer\n- Choose hashtags people actually search, not generic ones like "video" or "content"\n- Base them entirely on what you actually observe in the video — do not invent content\nInclude them in the JSON as a "hashtags" array of exactly 5 strings (without the # symbol).`,
+        format: `,\n  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>", "<hashtag4>", "<hashtag5>"]`,
+      };
+    }
+    return { instruction: "", format: "" };
+  }
+  // dreamer — caption suggestions
+  return {
+    instruction: `\nCAPTIONS — Instead of hashtags, suggest 2-3 caption options for this post. Each caption should be distinct in tone. Label them: Emotional (speaks to feeling and human connection), Conversational (sounds like how the creator naturally talks), Curiosity (makes someone want to click, comment, or share). Each caption should be under 150 characters. These are post captions, not video titles.`,
+    format: `,\n  "captions": [{ "tone": "Emotional", "text": "<caption text>" }, { "tone": "Conversational", "text": "<caption text>" }, { "tone": "Curiosity", "text": "<caption text>" }]`,
+  };
 }
 
 // ── Build per-judge prompt sent to TwelveLabs Pegasus ────────
@@ -511,14 +513,55 @@ function buildTLPrompt(judge, platform, objective, videoDuration) {
     : "";
 
   const { lengthGuidance } = buildVideoContext(videoDuration);
-  const hashtagInstruction = buildHashtagInstruction(platform, judge.id);
-  const needsHashtags = platform === "tiktok" || platform === "instagram";
-  const hashtagsFormat = needsHashtags
-    ? judge.id === "cool"
-      ? `,\n  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>", "<hashtag4>", "<hashtag5>"]`
-      : `,\n  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>"]`
-    : "";
-  const clippingInstruction = `\nCLIPPING — If this video is over 45 seconds long and contains a moment that would work well as a standalone short-form clip (under 60 seconds), suggest one clip. A good clip candidate has: a clear beginning and end, works without context, has a strong hook in the first 3 seconds, and follows current short-form trends (transformation reveals, reactions, how-to moments, emotional peaks, surprising facts, humor beats, or satisfying conclusions). If no moment meets this bar, do not suggest a clip. Include in the JSON as a "clip" object: { "start": "M:SS", "end": "M:SS", "label": "1-3 word description", "reason": "1 sentence on why this moment works as a clip" }. If no clip is recommended, omit the field entirely.`;
+  const { instruction: bottomInstruction, format: bottomFormat } = buildBottomSection(judge, platform);
+
+  // Platform-specific dimension definitions
+  let platformDimensionDefs = "";
+  let platformDimensionFormat = "";
+  if (platform === "tiktok") {
+    platformDimensionDefs = `\n- rewatch_potential (1-10): Does the video loop well or reward rewatching?\n- seo_strength (1-10): Are keywords present in captions, on-screen text, or spoken audio?`;
+    platformDimensionFormat = `,\n    "rewatch_potential": <1-10>,\n    "seo_strength": <1-10>`;
+  } else if (platform === "instagram") {
+    platformDimensionDefs = `\n- dm_share_potential (1-10): Specifically, would someone DM this to a friend?\n- originality (1-10): Does this feel like fresh original content?`;
+    platformDimensionFormat = `,\n    "dm_share_potential": <1-10>,\n    "originality": <1-10>`;
+  } else {
+    platformDimensionDefs = `\n- watch_time_potential (1-10): Would viewers watch this for significant absolute time?\n- thumbnail_hook (1-10): Does the first frame work as an effective thumbnail?`;
+    platformDimensionFormat = `,\n    "watch_time_potential": <1-10>,\n    "thumbnail_hook": <1-10>`;
+  }
+
+  // Judge-specific dimension feedback instructions
+  let dimensionFeedback = "";
+  if (judge.id === "critic") {
+    dimensionFeedback = `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must explicitly address: (1) the hook — what works or doesn't in the first 3 seconds, and what specific edit would strengthen it; (2) pacing — identify specific moments where energy drops or value-per-second is low, and suggest concrete edits; (3) share-worthiness — is there a moment in this video someone would DM to a friend, and if not, what edit would create one. These three must appear in your suggestions with specific, actionable editing recommendations tied to the research above.`;
+  } else if (judge.id === "cool") {
+    dimensionFeedback = `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must explicitly address: (1) the hook against platform norms — does it meet the bar for this platform's scroll speed? (2) completion signals — does the pacing match what performs on this platform (TikTok: tight 5-8s blocks; Instagram: strong story arc under 90s; YouTube: compelling value delivery over 2+ minutes)? (3) the share/save trigger — is there a clear moment that would make someone hit save or DM it? Name the specific moment if it exists, or suggest what would create one. Reference specific platform algorithm factors when relevant — e.g. TikTok SEO keywords, Instagram DM share signals, YouTube watch time.`;
+  } else {
+    dimensionFeedback = `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must address: (1) emotional hook — does the first 3 seconds create an emotional reason to keep watching, beyond just information? (2) the moment someone would share — emotional content gets DM-shared when it makes someone think of another person. Is there a moment of genuine connection, humor, vulnerability, or surprise that would trigger that? (3) completion pull — does the emotional arc make viewers want to see how it ends? Name the specific emotional beats that help or hurt completion.`;
+  }
+
+  // Objective performance lens (conditional)
+  const objectiveLens = objective ? `
+CONTENT OBJECTIVE PERFORMANCE LENS — The creator has identified this video's objective as: ${objective}. This changes what predicts performance for this specific category. Apply the following lens throughout all your feedback and scoring:
+If objective is 'ASMR': Audio quality and sensory immersion replace fast pacing as the primary completion signal. Hook is about immediate sensory reward, not pattern interrupt. Share-worthiness comes from creating a 'this is so relaxing' reaction. Harsh cuts, loud sounds, or abrupt transitions are significant negatives. Score audio quality heavily.
+If objective is 'Funny Videos/Comedy': Hook score should heavily weight the speed of setup. Completion likelihood depends entirely on whether the punchline lands and lands fast. Share-worthiness is the primary signal — comedy is the most DM-shared content type. Timing precision matters more than any other category. A joke that takes 10 seconds to set up when it could take 3 is a critical pacing failure.
+If objective is 'Food & Drinks/Cooking': Close-up shots and satisfying reveals are the visual hook. Save rate is extremely high in this category so save-worthiness should be weighted higher than average. Completion is driven by whether the recipe payoff is clearly promised and delivered. Appetite appeal in the visuals is a primary quality signal.
+If objective is 'Dancing': The first movement IS the hook — score it accordingly. Audio sync is a primary quality signal; any drift between movement and beat is a significant negative. Loop-ability is especially valuable. Energy and precision in the movement are the completion drivers.
+If objective is 'Fitness/Wellness': Transformation framing and energy in the hook predict performance. Before/after structure maximizes completion pull. Clear, achievable-looking results in the hook are the strongest signal. Motivation and relatability of the creator's energy matter heavily.
+If objective is 'Educational/How-To': The hook must clearly promise the answer or solution — viewers click for information, not entertainment. Completion is almost entirely driven by whether that promise is kept. Saves are very high in this category — content that is reference-worthy scores higher. Clarity of explanation is a primary quality signal.
+If objective is 'Travel': Visual wonder in the first frame is the hook — a stunning location shot outperforms a talking head opener in this category. Destination reveal moments are the peak share triggers. Pacing should build to visual payoffs. Audio and music choice matter more than average.
+If objective is 'Fashion': Visual aesthetic consistency is a primary quality signal. Hook should establish the look immediately — outfit reveal moments are the strongest share triggers. Styling transitions and outfit changes are high-completion drivers. On-screen text naming brands or items significantly boosts saves.
+If objective is 'Makeup/Beauty': Tutorial clarity and transformation reveal are the completion drivers. Hook should tease the final look. Saves are extremely high in this category. Product clarity (what products are used, shown clearly) is a save trigger. Before/after structure performs best.
+If objective is 'Pets/Animals': The hook should feature the animal immediately — delayed animal appearances lose viewers fast. Surprise, cuteness, and unexpected behavior are the primary share triggers. Short clips (under 30 seconds) often outperform longer ones in this category. Emotional reaction (from creator or implied) amplifies shareability.
+If objective is 'Gaming': Hook should feature the most impressive or surprising gameplay moment — not setup or menu screens. Commentary clarity and energy match to gameplay intensity are completion drivers. Clip-ability within the video is valuable — strong standalone moments for clipping.
+If objective is 'Storytelling': Narrative tension in the first 3 seconds is the hook — open loops and cliffhangers are the primary completion driver. The payoff must feel earned. Emotional authenticity is the share trigger. Pacing should build — unlike other categories, a slow build can work if tension is maintained.
+If objective is 'Life Hacks': Hook must immediately demonstrate the problem being solved — viewers must self-identify as having the problem within 3 seconds. Wow factor of the solution is the share trigger. Saves are extremely high — weight save-worthiness heavily. Clarity and speed of demonstration drive completion.
+If objective is 'Fun Facts': Hook must deliver the fact immediately or tease it with a curiosity gap. Re-watch potential is high if the fact is surprising enough. Share-worthiness is the primary signal. On-screen text reinforcing the fact significantly improves retention and saves.
+If objective is 'Shopping': Product reveal and visual appeal in the first frame are the hook. Try-on moments and reaction shots are the strongest share triggers. Saves indicate purchase intent — weight save-worthiness heavily. Clear product display and pricing signals drive completion.
+If objective is 'Cars/Automotive': Visual drama of the vehicle in motion is the hook. Sound design and engine audio are quality signals specific to this category. Spec moments and performance reveals are the share triggers. Enthusiast authenticity matters — overly produced content can feel inauthentic to this audience.
+If objective is 'Myth Busting': Hook must state the myth immediately and clearly — viewers must recognize the myth within 3 seconds. The reveal/result is the completion driver — tease it but don't give it away. Share-worthiness comes from the surprise of the result. Evidence clarity and credibility of the debunk are primary quality signals.
+If objective is 'Aesthetic/Vibes': Visual cohesion and color palette are primary quality signals. Music choice is critical — it sets the emotional tone immediately. Hook is about creating an immediate mood, not information. Loop-ability is high-value in this category. Share-worthiness comes from aspirational or mood-matching reactions.
+If objective is 'Business/Finance': Hook must immediately quantify the value — a dollar amount, percentage, or specific result in the first 3 seconds performs best. Saves are extremely high — weight save-worthiness heavily as this is reference content. Credibility signals (specific numbers, evidence, credentials) drive completion. Relatability of the financial situation described determines self-identification in the hook.
+For any custom objective not listed above, apply equivalent category-specific logic based on what would make that type of content perform well — what is the hook signal, what drives completion, what triggers shares and saves.` : "";
 
   const editingCraftBlock = `
 EDITING CRAFT — Pay attention to the editing of this video. Note specific editing choices that help or hurt the video's performance: cuts, pacing, transitions, caption style and placement, on-screen text, background music choice and volume, sound effects, zoom-ins, speed changes (fast-forward or slow-mo), overlays, stickers, animations, and effects. Where editing works well, name the specific moment and technique. Where editing could be improved, give a concrete actionable suggestion — for example: 'Cut the 8-second pause at 0:23', 'Add a zoom-in at 0:15 when the product is revealed', 'Lower the background music volume during the spoken section', 'Add captions in bold white text with a subtle drop shadow for accessibility and retention', 'Speed up the setup section to 1.5x', 'Add a sound effect at the transition at 0:10'. Suggest specific caption text where relevant. Focus on editing changes that would meaningfully improve watchability and audience retention, not editing for its own sake.${judge.id === "critic" ? "\nEditing craft is your primary lens. Use at least half your suggestions field for specific editing improvements. Lead with editing observations in your delivery field before covering other aspects of presentation." : ""}`;
@@ -528,11 +571,51 @@ ${GUARDRAILS}${durationLine}${lengthGuidance}
 
 ${CONTENT_TYPE_GUIDANCE}
 
+EVIDENCE-BASED PERFORMANCE RESEARCH — Your scoring and feedback must be grounded in what research and platform data show actually predicts video performance. Key findings you must incorporate:
+
+UNIVERSAL ACROSS PLATFORMS:
+- The first 3 seconds are the single most critical factor. 65-71% of viewers decide here whether to continue. A strong hook uses one of: pattern interrupt (something unexpected), curiosity gap (tease without revealing), bold claim, direct question to viewer, or immediate visual movement/action. No slow builds, no intros, no logos — get to the point instantly.
+- Pacing and value-per-second: edit with a 'value-per-second' mindset. Think in 5-8 second content blocks, each delivering new information, emotional payoff, or visual novelty. Dead air and slow sections are retention killers.
+- Share/save worthiness: the strongest algorithmic signals are shares (especially DM shares on Instagram) and saves — not likes. Ask yourself: would someone DM this to a friend? Would someone save it to rewatch? Content that answers this yes gets distributed. Content that only gets passive likes does not.
+- Completion rate: all platforms reward videos people watch to the end. TikTok's viral threshold is now ~70% completion. Anything that causes early drop-off — weak hook, slow middle, unclear payoff — is algorithmically penalized regardless of other quality.
+
+TIKTOK-SPECIFIC:
+- Completion rate and watch time account for 40-50% of TikTok's algorithm weight.
+- Saves and shares now outweigh likes as engagement signals.
+- Re-watch potential is highly valued — loop-ability (seamless end-to-start) is a meaningful advantage.
+- TikTok SEO: keywords in captions, on-screen text, and spoken audio are all scanned. Captions with searchable keywords dramatically improve discovery.
+- Optimal length: 42-60 seconds has the best combined engagement and views. 2-minute videos also perform well for the right content. Very short clips under 10 seconds underperform.
+- Niche consistency matters more than ever in 2026 — videos are first tested with followers before reaching new audiences.
+
+INSTAGRAM REELS-SPECIFIC:
+- Top 3 ranking factors (confirmed by Adam Mosseri, Instagram head): watch time, likes per reach, and DM shares. DM shares are weighted 3-5x higher than likes.
+- 94% of Instagram distribution comes from AI recommendations — content that gets skipped in the first 3 seconds gets buried regardless of follower count.
+- Optimal length: 30-90 seconds for discovery. Under 30 seconds has highest completion. Over 3 minutes is ineligible for recommendations.
+- Original content received 40-60% reach increases in late 2025. Watermarked or reposted content is suppressed.
+- Your last 9-12 posts determine topic categorization — niche consistency is algorithmically penalized if broken.
+- Saves signal 'content worth revisiting' and are a strong distribution trigger.
+
+YOUTUBE-SPECIFIC:
+- Watch time is the primary signal — both relative (percentage watched) and absolute (minutes watched).
+- Best combined performance: 2-3 minute videos for Shorts. Viewers stick with longer content if the value is clear from the start.
+- The hook determines click-through and initial retention. Thumbnails and first frame matter before a viewer even clicks.
+- Re-watch and session depth (viewer watches multiple videos in a session) are strong signals.
+${objectiveLens}
+
+DIMENSION SCORING — Score the following dimensions (1-10 each), then compute your overall score as a weighted average:
+UNIVERSAL DIMENSIONS:
+- hook_strength (1-10): How well does the first 3 seconds grab attention and prevent scrolling?
+- completion_likelihood (1-10): How likely is a viewer to watch to the end based on pacing, value-per-second, and structure?
+- share_save_worthiness (1-10): How likely is someone to share via DM or save to rewatch?
+PLATFORM-SPECIFIC DIMENSIONS for ${platform.toUpperCase()}:${platformDimensionDefs}
+OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 35%, share_save_worthiness ≈ 25%, platform-specific dimensions share the remaining ≈ 40%. When the objective lens above applies, adjust these weights per the category guidance.
+
 You are reviewing this video BEFORE it is published on ${platform.toUpperCase()}.
-${objective ? `CONTENT OBJECTIVE — The creator has identified this video's category as: ${objective}. Tailor ALL your feedback specifically to what makes ${objective} content perform well on ${platform.toUpperCase()}. Consider: what editing styles, pacing, hooks, formats, and trends work best for this category. What do top-performing ${objective} creators do differently? What does this audience specifically respond to? For example — comedy content rewards tight timing and quick cuts; ASMR rewards stillness and audio quality; fitness content rewards transformation and energy; food content rewards close-up shots and satisfying reveals. Apply the equivalent category-specific lens throughout your entire review.` : ""}
 For ${platform.toUpperCase()}, pay special attention to: ${pf.signals}.
 
-Your score and feedback must explicitly connect to the platform metrics that matter most here: ${pf.metrics}. For each piece of feedback, ask yourself: does this change directly improve one of those metrics? If not, it is not worth mentioning.
+Your score and feedback must explicitly connect to the platform metrics that matter most here: ${pf.metrics}.
+
+${dimensionFeedback}
 
 Analyze BOTH:
 1. DELIVERY — how the video is presented: energy, pacing, body language, eye contact,
@@ -542,16 +625,24 @@ Analyze BOTH:
 ${editingCraftBlock}
 
 ${judge.momentsInstruction}
-${hashtagInstruction}
-${clippingInstruction}
+${bottomInstruction}
+
+SUGGESTIONS — Give 3-5 specific actionable suggestions. Each suggestion must: (1) reference a specific timestamp or moment, (2) explain WHY it matters for performance based on the platform's algorithm signals (completion, shares, hook strength, etc.), and (3) give the specific edit — not just 'improve the hook' but 'cut the first 4 seconds and open instead with the moment at 0:08 when X happens, which immediately establishes Y.' At least one suggestion must address hook strength. At least one must address completion/pacing. At least one must address share or save potential. Editing suggestions should use CapCut-compatible techniques where relevant.
+
+POSITIVES — When identifying positives, connect them to performance signals where possible — not just 'good energy' but 'the energy in the first 3 seconds creates a strong hook that should clear the 70% completion threshold on TikTok' or 'the payoff at 0:45 is exactly the kind of moment people DM to friends, which is Instagram's strongest algorithmic signal.' Be specific about WHY the positive matters for this video's actual performance.
 
 You are one of three judges reviewing this video. Each judge must identify a DIFFERENT genuine strength — focus on an aspect the other judges are less likely to notice given your unique lens. Do not manufacture praise; only include positives that are genuinely present in the video.
 
 Provide your analysis in this exact JSON format (no markdown, no backticks):
 {
-  "overall": <integer 1-10>,
+  "overall": <integer 1-10 — weighted average of your dimension scores>,
+  "dimensions": {
+    "hook_strength": <1-10>,
+    "completion_likelihood": <1-10>,
+    "share_save_worthiness": <1-10>${platformDimensionFormat}
+  },
   "reaction": "<gut reaction in first person — 1 sentence for short/empty videos, 2-3 for longer ones>",
-  "positives": "<genuine praise in your authentic voice — specific, content-focused, never about appearance. Omit this field entirely if there is nothing genuine to praise>",
+  "positives": "<genuine praise connected to performance signals — specific, content-focused, never about appearance. Omit this field entirely if there is nothing genuine to praise>",
   "delivery": "<how the video is delivered — scale length to video richness>",
   "content": "<what is said or shown — scale length to video richness>",
   "platformFit": "<fit for ${platform} specifically, referencing ${pf.metrics}>",
@@ -559,9 +650,8 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
     { "timestamp": "<exact timestamp you observed>", "type": "peak|drop|note", "note": "<your observation>" }
   ],
   "suggestions": [
-    "<specific actionable improvement tied to ${pf.metrics}, with timestamp reference if relevant>"
-  ]${hashtagsFormat},
-  "clip": { "start": "<M:SS>", "end": "<M:SS>", "label": "<1-3 word description>", "reason": "<1 sentence on why this moment works as a clip>" }
+    "<specific actionable improvement — timestamp, why it matters for algorithm signals, and the exact edit>"
+  ]${bottomFormat}
 }`;
 }
 
@@ -1330,283 +1420,4 @@ async function pollAnalyzeTasks() {
           if (!jobs[row.job_id]) {
             console.warn(`[poller] Task ${row.task_id} result for ${row.judge_id} arrived but job ${row.job_id} not in memory — skipping state update`);
           } else {
-            jobs[row.job_id].results[row.judge_id] = { status: "done", data: parsed };
-            jobs[row.job_id].timings.judges[row.judge_id] = Date.now() - t_judge;
-            // Log time from all-tasks-created to first judge result
-            if (jobs[row.job_id].tasksCreatedAt && !jobs[row.job_id].firstResultAt) {
-              jobs[row.job_id].firstResultAt = Date.now();
-              const msFromTasksCreated = jobs[row.job_id].firstResultAt - jobs[row.job_id].tasksCreatedAt;
-              console.log(`[${row.job_id}] First judge result received (${row.judge_id}) — ${msFromTasksCreated}ms from all tasks created (TwelveLabs queue + first analysis time)`);
-            }
-          }
-          console.log(`[poller] Judge ${row.judge_id} complete for job ${row.job_id} in ${Date.now() - t_judge}ms`);
-          await checkJobCompletion(row.job_id);
-
-        } else if (task.status === "failed") {
-          const errMsg = task.error?.message || "TwelveLabs analysis task failed";
-          console.error(`[poller] Task ${row.task_id} failed: ${errMsg}`);
-          await pgPool.query(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2`, [errMsg, row.task_id]);
-          delete taskStatusCache[row.task_id];
-          const judge = JUDGES.find(j => j.id === row.judge_id);
-          if (jobs[row.job_id]) {
-            jobs[row.job_id].results[row.judge_id] = {
-              status: "error", error: errMsg,
-              data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] },
-            };
-          }
-          await checkJobCompletion(row.job_id);
-        }
-        // queued/pending/processing — check again next poll
-      } catch (err) {
-        console.error(`[poller] Error checking task ${row.task_id}: ${err.message}`);
-      }
-    }));
-  } finally {
-    pollerRunning = false;
-  }
-}
-
-// ── Restore in-flight jobs into memory after server restart ───────────────────
-async function resumeInFlightTasks() {
-  const rows = await loadInFlightTasks();
-  if (rows.length === 0) return;
-  const jobIds = new Set(rows.map(r => r.job_id));
-  for (const row of rows) {
-    if (!jobs[row.job_id]) {
-      const browserUploadMs = row.browser_upload_ms != null ? parseInt(row.browser_upload_ms) : null;
-      jobs[row.job_id] = {
-        status: "analyzing", results: {}, error: null,
-        platform: row.platform, objective: row.target_audience,
-        createdAt: new Date(row.created_at).getTime(),
-        startedAt: new Date(row.created_at).getTime(),
-        timings: { conversionMs: null, uploadMs: null, browserUploadMs, judges: {} },
-        ip: row.ip || "unknown",
-        fileSizeMB: row.file_size_mb != null ? parseFloat(row.file_size_mb) : null,
-        fileName: row.file_name ?? null,
-        browserUploadMs,
-      };
-    }
-    jobs[row.job_id].results[row.judge_id] = { status: "pending" };
-  }
-  console.log(`[startup] Resumed ${rows.length} in-flight task(s) across ${jobIds.size} job(s) from Neon — ffmpeg/upload timings unavailable for resumed jobs`);
-}
-
-// ── GET /api/status/:jobId ────────────────────────────────────
-app.get("/api/status/:jobId", (req, res) => {
-  const job = jobs[req.params.jobId];
-  if (!job) return res.status(404).json({ error: "Job not found" });
-
-  // Report live queue position
-  const queuePos = jobQueue.findIndex(q => q.jobId === req.params.jobId);
-  const currentQueuePosition = queuePos >= 0 ? queuePos + 1 : (activeJob === req.params.jobId ? 0 : -1);
-
-  res.json({
-    status: job.status,
-    results: job.results,
-    error: job.error,
-    duration: job.videoDuration?.secs || null,
-    queuePosition: currentQueuePosition,
-  });
-});
-
-// ── GET /admin/logs — submission dashboard ────────────────────
-app.get("/admin/logs", (req, res) => {
-  const secret = process.env.ADMIN_SECRET;
-  if (secret && req.query.secret !== secret) {
-    return res.status(401).send("Unauthorized — add ?secret=YOUR_ADMIN_SECRET to the URL");
-  }
-
-  const fmt = ms => ms != null ? `${(ms / 1000).toFixed(1)}s` : "—";
-  const fmtDur = secs => secs != null
-    ? `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, "0")}`
-    : "—";
-
-  const totalSubmissions = submissionLog.length;
-  const completed = submissionLog.filter(e => e.status === "done" || e.status === "partial").length;
-  const avgTotal = submissionLog.filter(e => e.timings.totalMs).reduce((s, e, _, a) => s + e.timings.totalMs / a.length, 0);
-  const allScores = submissionLog.flatMap(e => Object.values(e.scores));
-  const overallAvg = allScores.length ? (allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(1) : "—";
-
-  const platColor = p => p === "youtube" ? "#CC0000" : p === "tiktok" ? "#555" : "#C13584";
-  const platBg = p => p === "youtube" ? "#CC000018" : p === "tiktok" ? "#55555518" : "#C1358418";
-  const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s === "timeout" ? "#E65100" : s.startsWith("rejected_") ? "#795548" : "#C62828";
-
-  const rows = submissionLog.map(e => {
-    const judgeCells = ["critic", "cool", "dreamer"].map(id => {
-      const score = e.scores[id];
-      const t = e.timings.judges[id];
-      return `<td style="text-align:center;white-space:nowrap">${score != null ? `<strong>${score}</strong>` : "—"}${t != null ? `<br><span style="color:#bbb;font-size:10px">${fmt(t)}</span>` : ""}</td>`;
-    }).join("");
-
-    const scoreColor = e.avgScore >= 7 ? "#43A047" : e.avgScore >= 5 ? "#FB8C00" : "#E53935";
-    const date = new Date(e.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-
-    const safeFileName = e.fileName ? e.fileName.replace(/</g, "&lt;").replace(/>/g, "&gt;") : "—";
-    return `<tr>
-      <td style="color:#999;font-size:11px;white-space:nowrap">${date}</td>
-      <td style="font-family:monospace;font-size:11px;color:#666">${e.ip}</td>
-      <td><span style="background:${platBg(e.platform)};color:${platColor(e.platform)};padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap">${e.platform}</span></td>
-      <td style="font-size:11px;color:#555;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safeFileName}">${safeFileName}</td>
-      <td style="text-align:right;white-space:nowrap">${e.fileSizeMB != null ? e.fileSizeMB + " MB" : "—"}</td>
-      <td style="text-align:right;font-family:monospace">${fmtDur(e.videoDurationSecs)}</td>
-      <td><strong style="color:${statusColor(e.status)}">${e.status}</strong></td>
-      <td style="text-align:right;font-family:monospace;font-weight:700">${fmt(e.timings.totalMs)}</td>
-      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.browserUploadMs)}</td>
-      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.conversionMs)}</td>
-      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.uploadMs)}</td>
-      ${judgeCells}
-      <td style="text-align:center;font-size:18px;font-weight:800;color:${scoreColor}">${e.avgScore ?? "—"}</td>
-    </tr>`;
-  }).join("\n");
-
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PreviewPanel — Submission Log</title>
-  <meta http-equiv="refresh" content="30">
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #FAFAFA; color: #212121; margin: 0; padding: 24px; }
-    h1 { font-size: 20px; margin: 0 0 4px; color: #4E342E; }
-    .meta { font-size: 12px; color: #999; margin-bottom: 16px; }
-    .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
-    .stat { background: #fff; border: 1px solid #E0D6D3; border-radius: 10px; padding: 12px 18px; min-width: 120px; }
-    .stat-val { font-size: 22px; font-weight: 800; color: #4E342E; }
-    .stat-label { font-size: 11px; color: #999; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.06em; }
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 8px rgba(0,0,0,0.07); font-size: 13px; min-width: 900px; }
-    th { background: #EFEBE9; padding: 10px 12px; text-align: left; font-size: 10px; font-weight: 700; color: #795548; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
-    td { padding: 9px 12px; border-top: 1px solid #F5F0EE; vertical-align: middle; }
-    tr:hover td { background: #FDFAF9; }
-    .empty { text-align: center; padding: 48px; color: #bbb; font-size: 14px; }
-  </style>
-</head>
-<body>
-  <h1>🦉 PreviewPanel — Submission Log</h1>
-  <div class="meta">${totalSubmissions} submission${totalSubmissions !== 1 ? "s" : ""} · auto-refreshes every 30s · resets on server restart</div>
-  <div class="stats">
-    <div class="stat"><div class="stat-val">${totalSubmissions}</div><div class="stat-label">Total</div></div>
-    <div class="stat"><div class="stat-val">${completed}</div><div class="stat-label">Completed</div></div>
-    <div class="stat"><div class="stat-val">${totalSubmissions ? Math.round((completed / totalSubmissions) * 100) + "%" : "—"}</div><div class="stat-label">Success Rate</div></div>
-    <div class="stat"><div class="stat-val">${avgTotal ? fmt(avgTotal) : "—"}</div><div class="stat-label">Avg Total Time</div></div>
-    <div class="stat"><div class="stat-val">${overallAvg}</div><div class="stat-label">Avg Score</div></div>
-  </div>
-  <div class="table-wrap">
-  <table>
-    <thead>
-      <tr>
-        <th>Time</th><th>IP</th><th>Platform</th><th>Filename</th><th>File</th><th>Duration</th>
-        <th>Status</th><th>Total</th><th>Br Upload</th><th>ffmpeg</th><th>TL Upload</th>
-        <th>Critic</th><th>Trend</th><th>Dream</th><th>Avg</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows || `<tr><td colspan="15" class="empty">No submissions yet</td></tr>`}
-    </tbody>
-  </table>
-  </div>
-</body>
-</html>`);
-});
-
-// ── Health check ──────────────────────────────────────────────
-app.get("/health", (_, res) => res.json({ ok: true }));
-
-// ── TwelveLabs warm-up — keeps infrastructure warm, prevents cold-start delays ─
-const WARMUP_PATH = path.join(__dirname, "uploads", "warmup.mp4");
-
-async function createWarmupFile() {
-  try {
-    await execFileAsync(FFMPEG, [
-      "-f", "lavfi", "-i", "color=c=black:size=640x360:duration=5",
-      "-c:v", "libx264", "-preset", "ultrafast", "-t", "5",
-      "-y", WARMUP_PATH,
-    ]);
-    const sizeBytes = fs.statSync(WARMUP_PATH).size;
-    console.log(`[warmup] Warmup file created: 640x360, 5s, ${sizeBytes} bytes`);
-  } catch (err) {
-    console.error(`[warmup] Failed to create warmup file: ${err.message}\n${err.stack}`);
-  }
-}
-
-async function runWarmup() {
-  if (!process.env.TWELVELABS_API_KEY) return;
-  if (!fs.existsSync(WARMUP_PATH)) {
-    console.log("[warmup] Warmup file not found — skipping ping");
-    return;
-  }
-  try {
-    const assetId = await uploadAssetDirect(WARMUP_PATH);
-    await tl().analyzeAsync.tasks.create(
-      { video: { type: "asset_id", assetId }, prompt: "Describe this video in one word.", maxTokens: 10 },
-      { timeoutInSeconds: 30 }
-    );
-    console.log("[warmup] TwelveLabs warm-up ping sent");
-  } catch (err) {
-    console.log(`[warmup] Warm-up ping failed: ${err.message}`);
-  }
-}
-
-// ── Start ─────────────────────────────────────────────────────
-let server;
-try {
-  await initDb();
-  const saved = await loadSubmissionLog();
-  submissionLog.push(...saved);
-  console.log(`[startup] Submission log loaded — ${submissionLog.length} entries`);
-  await resumeInFlightTasks();
-  setInterval(pollAnalyzeTasks, 15_000);
-  console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
-
-  // Warm-up: generate file once at startup, ping immediately, then every 14 minutes
-  console.log("[warmup] Warmup initialized on startup");
-  try {
-    await createWarmupFile();
-  } catch (err) {
-    console.error(`[warmup] createWarmupFile threw unexpectedly: ${err.message}`);
-  }
-  if (process.env.TWELVELABS_API_KEY) {
-    try {
-      await runWarmup(); // awaited so all three log lines appear sequentially
-    } catch (err) {
-      console.error(`[warmup] Initial warmup failed: ${err.message}\n${err.stack}`);
-    }
-    setInterval(() => {
-      runWarmup().catch(err => console.error(`[warmup] Scheduled warmup failed: ${err.message}`));
-    }, 14 * 60 * 1000);
-    console.log("[warmup] TwelveLabs warm-up scheduled every 14 minutes");
-  } else {
-    console.warn("[warmup] TWELVELABS_API_KEY not set — warmup ping skipped");
-  }
-
-  const PORT = process.env.PORT || 3001;
-  server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
-    console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
-    console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
-  });
-
-  server.on("error", (err) => {
-    console.error("[server] Listen error:", err);
-    process.exit(1);
-  });
-
-  server.timeout = 0;
-  server.headersTimeout = 600_000;
-  server.requestTimeout = 0;
-  server.keepAliveTimeout = 30000;
-
-  if (process.env.RENDER_EXTERNAL_URL) {
-    const pingUrl = process.env.RENDER_EXTERNAL_URL + "/health";
-    setInterval(() => {
-      fetch(pingUrl)
-        .then(() => console.log("[keep-warm] ping ok"))
-        .catch((err) => console.warn("[keep-warm] ping failed:", err.message));
-    }, 14 * 60 * 1000);
-    console.log(`[keep-warm] self-ping enabled → ${pingUrl} every 14 min`);
-  }
-} catch (err) {
-  console.error("[startup] Fatal error during server initialization:", err);
-  process.exit(1);
-}
+            jobs[row.job_id].results[row.judge_id] = { status: "done", data: parse
