@@ -3,7 +3,7 @@ services:
     name: previewpanel-backend
     runtime: node
     rootDir: backend
-    buildCommand: apt-get install -y ffmpeg && npm install
+    buildCommand: apt-get update -y && apt-get install -y ffmpeg && npm install
     startCommand: node server.js
     envVars:
       - key: NODE_VERSION

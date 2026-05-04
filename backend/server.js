@@ -1544,4 +1544,69 @@ async function runWarmup() {
     );
     console.log("[warmup] TwelveLabs warm-up ping sent");
   } catch (err) {
-    console.log(`[warmup] Warm-up ping f
+    console.log(`[warmup] Warm-up ping failed: ${err.message}`);
+  }
+}
+
+// ── Start ─────────────────────────────────────────────────────
+let server;
+try {
+  await initDb();
+  const saved = await loadSubmissionLog();
+  submissionLog.push(...saved);
+  console.log(`[startup] Submission log loaded — ${submissionLog.length} entries`);
+  await resumeInFlightTasks();
+  setInterval(pollAnalyzeTasks, 15_000);
+  console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
+
+  // Warm-up: generate file once at startup, ping immediately, then every 14 minutes
+  console.log("[warmup] Warmup initialized on startup");
+  try {
+    await createWarmupFile();
+  } catch (err) {
+    console.error(`[warmup] createWarmupFile threw unexpectedly: ${err.message}`);
+  }
+  if (process.env.TWELVELABS_API_KEY) {
+    try {
+      await runWarmup(); // awaited so all three log lines appear sequentially
+    } catch (err) {
+      console.error(`[warmup] Initial warmup failed: ${err.message}\n${err.stack}`);
+    }
+    setInterval(() => {
+      runWarmup().catch(err => console.error(`[warmup] Scheduled warmup failed: ${err.message}`));
+    }, 14 * 60 * 1000);
+    console.log("[warmup] TwelveLabs warm-up scheduled every 14 minutes");
+  } else {
+    console.warn("[warmup] TWELVELABS_API_KEY not set — warmup ping skipped");
+  }
+
+  const PORT = process.env.PORT || 3001;
+  server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
+    console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
+    console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
+  });
+
+  server.on("error", (err) => {
+    console.error("[server] Listen error:", err);
+    process.exit(1);
+  });
+
+  server.timeout = 0;
+  server.headersTimeout = 600_000;
+  server.requestTimeout = 0;
+  server.keepAliveTimeout = 30000;
+
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const pingUrl = process.env.RENDER_EXTERNAL_URL + "/health";
+    setInterval(() => {
+      fetch(pingUrl)
+        .then(() => console.log("[keep-warm] ping ok"))
+        .catch((err) => console.warn("[keep-warm] ping failed:", err.message));
+    }, 14 * 60 * 1000);
+    console.log(`[keep-warm] self-ping enabled → ${pingUrl} every 14 min`);
+  }
+} catch (err) {
+  console.error("[startup] Fatal error during server initialization:", err);
+  process.exit(1);
+}
