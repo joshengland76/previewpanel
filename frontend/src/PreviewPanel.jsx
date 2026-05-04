@@ -277,8 +277,28 @@ function HistoryPanel({ history, onRestore, onClose }) {
   );
 }
 
+const DIMENSION_META = {
+  hook_strength:        { label: "Hook Strength", tooltip: "Research across TikTok, Instagram, and YouTube consistently identifies the first 3 seconds as the single most predictive factor for video performance. Platform algorithms measure what percentage of viewers continue past this threshold — on TikTok, videos need ~70% of viewers to pass the 3-second mark to receive broad distribution. A strong hook uses a pattern interrupt, curiosity gap, bold claim, direct question, or immediate visual action to prevent the scroll reflex. Videos that open with slow builds, logos, or greetings are algorithmically penalized before the content even begins." },
+  completion_likelihood:{ label: "Completion",    tooltip: "Completion rate — the percentage of viewers who watch to the end — is weighted at 40-50% of TikTok's ranking algorithm and is the #1 confirmed factor for Instagram Reels distribution. Platforms use completion as a proxy for content quality: if people finish watching, the content delivered on its promise. Completion is driven by consistent pacing (no dead air or slow sections), a clear value proposition established in the hook, and an ending that feels earned rather than abrupt. Editing with a \"value-per-second\" mindset — ensuring each 5-8 second block delivers new information, emotion, or visual novelty — is the most reliable method for improving completion." },
+  share_save_worthiness:{ label: "Share & Save",  tooltip: "Shares and saves are the deepest engagement signals available to platform algorithms — they indicate that content delivered enough value for a viewer to act beyond passive watching. On Instagram, DM shares (sending a Reel to a friend) are weighted 3-5x higher than likes by the ranking algorithm, confirmed by Instagram head Adam Mosseri in 2025. On TikTok, saves and shares now outrank likes as distribution signals following a 2025 algorithm update. Content gets shared when it triggers a \"I need to send this to someone\" reaction — usually through humor, surprise, emotional resonance, or highly practical value. Content gets saved when it is reference-worthy — a tutorial, a recipe, an insight someone wants to return to." },
+  rewatch_potential:    { label: "Rewatch",        tooltip: "TikTok's algorithm heavily weights re-watch events — when a user watches a video multiple times in succession, it registers as one of the strongest possible signals of genuine engagement. The platform interprets re-watches as evidence that the content is either entertaining enough to experience again or complex enough to require a second viewing. Videos that loop seamlessly (where the end connects naturally back to the beginning, making the restart unnoticeable) capture re-watches passively without requiring the viewer to consciously choose to replay. Re-watch rate is particularly impactful because it is a subconscious behavior that the algorithm treats as a high-confidence quality signal." },
+  seo_strength:         { label: "SEO",            tooltip: "TikTok has functioned increasingly as a search engine since 2024, with approximately 40% of Gen Z preferring TikTok over Google for certain searches. The platform's algorithm scans captions, on-screen text overlays, and spoken audio (via automatic transcription) for keyword relevance, matching content to user search queries. Videos optimized for TikTok SEO — using searchable keywords naturally in all three locations — receive both algorithmic distribution via the For You Page and direct search traffic. This dual distribution channel makes keyword presence a compounding advantage: the same video benefits from recommendation and search simultaneously." },
+  dm_share_potential:   { label: "DM Share",       tooltip: "Direct message shares — when a viewer sends a Reel to someone via Instagram DM — are the single strongest signal in Instagram's ranking algorithm for reaching new audiences, confirmed by Adam Mosseri (head of Instagram) in January 2025. The algorithm weights DM shares at 3-5x the value of a like because they represent a deliberate, high-intent action: the viewer saw enough value in the content to personally recommend it to someone they know. 694,000 Instagram Reels are sent via DM every minute (Metricool, 2024). Content that triggers the \"I need to send this to [specific person]\" reaction — through humor, relatability, practical value, or emotional resonance — consistently outperforms content that earns passive likes." },
+  originality:          { label: "Originality",    tooltip: "In December 2025, Instagram made its largest algorithmic shift in years: original content creators saw 40-60% increases in reach while accounts reposting or aggregating content from other platforms saw 60-80% reach collapses. The platform's AI now actively identifies and penalizes watermarked content (videos downloaded from TikTok or other platforms and re-uploaded) and rewards content that appears to be filmed and produced natively. Beyond watermarks, the algorithm uses visual and audio fingerprinting to identify repurposed content. Originality is scored here based on visual and production cues that suggest native creation versus content that appears derivative or recycled." },
+  watch_time_potential: { label: "Watch Time",     tooltip: "YouTube's algorithm prioritizes two distinct watch time metrics: relative watch time (the percentage of a video watched) and absolute watch time (the total minutes spent watching). Both are used because they capture different quality signals — relative watch time rewards content that retains viewers proportionally, while absolute watch time rewards content that keeps viewers engaged for longer total durations. Research shows that 2-3 minute YouTube Shorts achieve the strongest combined performance across both metrics. The algorithm also measures session depth — whether a viewer continues watching additional videos after yours — rewarding content that creates momentum rather than ending a viewing session." },
+  thumbnail_hook:       { label: "Thumbnail",      tooltip: "On YouTube, the first frame of a video functions as its default thumbnail in many placements, making it a pre-click conversion signal that determines whether a viewer clicks to watch at all. A strong first frame is visually distinct at small sizes (YouTube thumbnails display at approximately 168x94px in most placements), communicates the video's topic or value immediately, features a human face with clear expression where relevant (face thumbnails consistently outperform non-face thumbnails in click-through rate studies), and avoids text-heavy compositions that become unreadable at thumbnail size. Click-through rate from thumbnail is a direct input into YouTube's recommendation algorithm — underperforming thumbnails suppress distribution regardless of content quality." },
+};
+const DIMENSION_ORDER = [
+  "hook_strength", "completion_likelihood", "share_save_worthiness",
+  "rewatch_potential", "seo_strength",
+  "dm_share_potential", "originality",
+  "watch_time_potential", "thumbnail_hook",
+];
+
 function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
   const [open, setOpen] = useState(false);
+  const [tooltipDim, setTooltipDim] = useState(null);
+  const [tooltipPos, setTooltipPos] = useState(null); // null = bottom sheet, {top,left} = desktop popover
   const loading = judgeResult?.status === "pending";
   const result = judgeResult?.data;
   const has = !!result && judgeResult?.status === "done";
@@ -286,7 +306,31 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
   const editorClips = result
     ? (result.clips?.length > 0 ? result.clips : result.clip?.start ? [result.clip] : [])
     : [];
+  // Dimension rows — filter to only keys with non-null values
+  const dims = has
+    ? DIMENSION_ORDER
+        .map(key => ({ key, meta: DIMENSION_META[key], score: result.dimensions?.[key] ?? null }))
+        .filter(d => d.score != null)
+    : [];
+
+  function handleInfoClick(e, dimKey) {
+    e.stopPropagation();
+    if (window.innerWidth < 640) {
+      setTooltipPos(null); // bottom sheet on mobile
+    } else {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const pw = 300, ph = 260;
+      let top = rect.bottom + 8;
+      if (top + ph > window.innerHeight - 16) top = rect.top - ph - 8;
+      let left = rect.left - pw / 2 + 8;
+      if (left < 16) left = 16;
+      if (left + pw > window.innerWidth - 16) left = window.innerWidth - pw - 16;
+      setTooltipPos({ top, left });
+    }
+    setTooltipDim(dimKey);
+  }
   return (
+    <>
     <div style={{
       border: `1.5px solid ${has ? judge.color+"45" : B.border}`,
       borderRadius: "14px", background: "#fff", overflow: "hidden",
@@ -364,6 +408,36 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
             <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
               <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px", fontWeight: "700" }}>Platform Fit</div>
               <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.platformFit}</div>
+            </div>
+          )}
+
+          {/* Performance Signals */}
+          {dims.length > 0 && (
+            <div style={{ marginBottom: "16px" }}>
+              <div style={{ height: "1px", background: judge.softBg, marginBottom: "12px" }} />
+              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "10px", fontWeight: "700" }}>
+                Performance Signals
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                {dims.map(({ key, meta, score }) => (
+                  <div key={key} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "3px", width: "88px", flexShrink: 0 }}>
+                      <span style={{ fontSize: "11px", color: "#999", lineHeight: 1 }}>{meta.label}</span>
+                      <button
+                        onClick={e => handleInfoClick(e, key)}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "0 2px", color: "#ccc", fontSize: "10px", lineHeight: 1, flexShrink: 0 }}
+                      >ⓘ</button>
+                    </div>
+                    <div style={{ flex: 1, height: "8px", background: judge.softBg, borderRadius: "4px", overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", width: `${(score / 10) * 100}%`,
+                        background: judge.color, opacity: 0.7, borderRadius: "4px",
+                      }} />
+                    </div>
+                    <span style={{ fontSize: "11px", fontWeight: "700", color: judge.color, width: "20px", textAlign: "right", flexShrink: 0 }}>{score}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -485,6 +559,41 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
         </div>
       )}
     </div>
+    {tooltipDim && (
+      <div
+        onClick={() => { setTooltipDim(null); setTooltipPos(null); }}
+        style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(0,0,0,0.28)" }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={tooltipPos ? {
+            position: "fixed", top: tooltipPos.top, left: tooltipPos.left,
+            width: "300px", background: "#fff", borderRadius: "14px",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.18)", padding: "18px", zIndex: 9999,
+          } : {
+            position: "fixed", bottom: 0, left: 0, right: 0,
+            background: "#fff", borderRadius: "16px 16px 0 0",
+            boxShadow: "0 -4px 24px rgba(0,0,0,0.15)",
+            padding: "24px 20px 40px", zIndex: 9999,
+            maxHeight: "65vh", overflowY: "auto",
+          }}
+        >
+          {!tooltipPos && (
+            <div style={{ width: "36px", height: "4px", background: B.border, borderRadius: "2px", margin: "0 auto 18px" }} />
+          )}
+          <div style={{ fontSize: "10px", color: "#bbb", fontWeight: "700", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "8px" }}>
+            Why judges use this signal
+          </div>
+          <div style={{ fontSize: "14px", fontWeight: "800", color: judge.color, marginBottom: "12px" }}>
+            {DIMENSION_META[tooltipDim]?.label}
+          </div>
+          <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.65" }}>
+            {DIMENSION_META[tooltipDim]?.tooltip}
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
