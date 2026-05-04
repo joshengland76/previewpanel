@@ -504,9 +504,8 @@ function formatTimestamp(secs) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function buildTLPrompt(judge, platform, targetAudience, videoDuration) {
+function buildTLPrompt(judge, platform, objective, videoDuration) {
   const pf = PLATFORM_FOCUS[platform] || PLATFORM_FOCUS.youtube;
-  const audience = targetAudience || "a general audience";
   const durationLine = videoDuration
     ? `\nVIDEO DURATION — This video is ${videoDuration.label} long. You MUST ONLY reference timestamps between 0:00 and ${videoDuration.label}. Do NOT reference any timestamp beyond this duration.\nTIMESTAMP NOTE — Timestamps are approximate (within 1-2 seconds due to encoding). Reference the general moment, not the exact frame.`
     : "";
@@ -530,7 +529,7 @@ ${GUARDRAILS}${durationLine}${lengthGuidance}
 ${CONTENT_TYPE_GUIDANCE}
 
 You are reviewing this video BEFORE it is published on ${platform.toUpperCase()}.
-The creator's target audience is: ${audience}.
+${objective ? `CONTENT OBJECTIVE — The creator has identified this video's category as: ${objective}. Tailor ALL your feedback specifically to what makes ${objective} content perform well on ${platform.toUpperCase()}. Consider: what editing styles, pacing, hooks, formats, and trends work best for this category. What do top-performing ${objective} creators do differently? What does this audience specifically respond to? For example — comedy content rewards tight timing and quick cuts; ASMR rewards stillness and audio quality; fitness content rewards transformation and energy; food content rewards close-up shots and satisfying reveals. Apply the equivalent category-specific lens throughout your entire review.` : ""}
 For ${platform.toUpperCase()}, pay special attention to: ${pf.signals}.
 
 Your score and feedback must explicitly connect to the platform metrics that matter most here: ${pf.metrics}. For each piece of feedback, ask yourself: does this change directly improve one of those metrics? If not, it is not worth mentioning.
@@ -727,7 +726,7 @@ async function uploadAssetDirect(filePath) {
 }
 
 // ── Parse raw TwelveLabs text into structured judge result ─────
-async function processAnalyzeResult(rawText, judge, platform, targetAudience, videoDuration) {
+async function processAnalyzeResult(rawText, judge, platform, objective, videoDuration) {
   // If the SDK already deserialized the result into an object, use it directly
   if (rawText !== null && typeof rawText === "object") {
     console.log(`[TwelveLabs][${judge.id}] result already deserialized — keys:`, Object.keys(rawText));
@@ -780,8 +779,8 @@ function applyMomentFilters(parsed, judge, videoDuration) {
 }
 
 // ── Create an async TwelveLabs analysis task, return taskId ────
-async function createAnalyzeTask(videoContext, judge, platform, targetAudience, videoDuration) {
-  const prompt = buildTLPrompt(judge, platform, targetAudience, videoDuration);
+async function createAnalyzeTask(videoContext, judge, platform, objective, videoDuration) {
+  const prompt = buildTLPrompt(judge, platform, objective, videoDuration);
 
   // Verify the SDK method chain exists before calling
   const tlClient = tl();
@@ -871,7 +870,7 @@ app.post("/api/analyze", (req, res, next) => {
     const {
       videoUrl,
       platform = "youtube",
-      targetAudience = "",
+      objective = "",
       judges: judgesParam,
     } = req.body;
 
@@ -895,7 +894,7 @@ app.post("/api/analyze", (req, res, next) => {
       status: queuePosition > 0 ? "queued" : "uploading",
       queuePosition,
       platform,
-      targetAudience,
+      objective,
       results: {},
       error: null,
       createdAt: Date.now(),
@@ -1016,7 +1015,7 @@ app.post("/api/analyze", (req, res, next) => {
 
     // Queue slot held only for TwelveLabs upload + task creation (~2-3s per job)
     enqueueJob(jobId, () =>
-      runPipeline(jobId, videoUrl, platform, targetAudience, selectedJudges)
+      runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     );
   } catch (err) {
     console.error(`[analyze] Unexpected error:`, err.message);
@@ -1027,7 +1026,7 @@ app.post("/api/analyze", (req, res, next) => {
 // ── Upload phase pipeline (queue slot held only during this) ──────────────────
 // Preprocessing (ffmpeg) already completed before this is called — this function
 // only handles TwelveLabs upload + async task creation (~2-3s of queue time).
-async function runPipeline(jobId, videoUrl, platform, targetAudience, selectedJudges) {
+async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges) {
   console.log(`[${jobId}] Pipeline starting — platform: ${platform}, judges: ${selectedJudges.map(j=>j.id).join(", ")}`);
   jobs[jobId].startedAt = Date.now();
   const queueWaitMs = jobs[jobId].preprocessedAt
@@ -1092,8 +1091,8 @@ async function runPipeline(jobId, videoUrl, platform, targetAudience, selectedJu
       try {
         const taskCreations = await Promise.allSettled(
           selectedJudges.map(async judge => {
-            const taskId = await createAnalyzeTask(_videoContext, judge, platform, targetAudience, _videoDuration);
-            await saveAnalyzeTask(jobId, judge.id, taskId, platform, targetAudience, _videoDuration?.secs ?? null);
+            const taskId = await createAnalyzeTask(_videoContext, judge, platform, objective, _videoDuration);
+            await saveAnalyzeTask(jobId, judge.id, taskId, platform, objective, _videoDuration?.secs ?? null);
             return { judgeId: judge.id, taskId };
           })
         );
@@ -1377,7 +1376,7 @@ async function resumeInFlightTasks() {
       const browserUploadMs = row.browser_upload_ms != null ? parseInt(row.browser_upload_ms) : null;
       jobs[row.job_id] = {
         status: "analyzing", results: {}, error: null,
-        platform: row.platform, targetAudience: row.target_audience,
+        platform: row.platform, objective: row.target_audience,
         createdAt: new Date(row.created_at).getTime(),
         startedAt: new Date(row.created_at).getTime(),
         timings: { conversionMs: null, uploadMs: null, browserUploadMs, judges: {} },
@@ -1545,19 +1544,4 @@ async function runWarmup() {
     );
     console.log("[warmup] TwelveLabs warm-up ping sent");
   } catch (err) {
-    console.log(`[warmup] Warm-up ping failed: ${err.message}`);
-  }
-}
-
-// ── Start ─────────────────────────────────────────────────────
-let server;
-try {
-  await initDb();
-  const saved = await loadSubmissionLog();
-  submissionLog.push(...saved);
-  console.log(`[startup] Submission log loaded — ${submissionLog.length} entries`);
-  await resumeInFlightTasks();
-  setInterval(pollAnalyzeTasks, 15_000);
-  console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
-
- 
+    console.log(`[warmup] Warm-up ping f

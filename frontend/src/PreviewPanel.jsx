@@ -537,7 +537,7 @@ export default function PreviewPanel() {
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
   const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
-  const [targetAudience, setTargetAudience] = useState("");
+  const [objective, setObjective] = useState("");
   const [selectedJudges, setSelectedJudges] = useState(["critic","cool","dreamer"]);
   const [step, setStep] = useState(1);
   const [jobId, setJobId] = useState(null);
@@ -764,7 +764,7 @@ export default function PreviewPanel() {
 
     const formData = new FormData();
     formData.append("platform", platform);
-    formData.append("targetAudience", targetAudience);
+    formData.append("objective", objective);
     formData.append("judges", JSON.stringify(selectedJudges));
     formData.append("video", videoFile);
 
@@ -1035,14 +1035,39 @@ export default function PreviewPanel() {
               </div>
             </div>
 
-            {/* 3 — Target audience */}
+            {/* 3 — Objective */}
             <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>
-                Audience <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(optional)</span>
+                Objective <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(optional)</span>
               </div>
-              <input value={targetAudience} onChange={e => setTargetAudience(e.target.value)}
-                placeholder="e.g. First-time investors, 25–35, financially curious"
-                style={{ width: "100%", padding: "13px", height: "48px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "14px", fontFamily: "Montserrat, sans-serif" }}/>
+              <input
+                list="objective-options"
+                value={objective}
+                onChange={e => setObjective(e.target.value)}
+                placeholder="Select a content category (optional)"
+                style={{ width: "100%", padding: "13px", height: "48px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "14px", fontFamily: "Montserrat, sans-serif" }}
+              />
+              <datalist id="objective-options">
+                <option value="Funny Videos/Comedy" />
+                <option value="Food & Drinks/Cooking" />
+                <option value="Travel" />
+                <option value="Fashion" />
+                <option value="Makeup/Beauty" />
+                <option value="Pets/Animals" />
+                <option value="Fitness/Wellness" />
+                <option value="Dancing" />
+                <option value="Gaming" />
+                <option value="Storytelling" />
+                <option value="Life Hacks" />
+                <option value="Fun Facts" />
+                <option value="Shopping" />
+                <option value="Cars/Automotive" />
+                <option value="ASMR" />
+                <option value="Myth Busting" />
+                <option value="Educational/How-To" />
+                <option value="Aesthetic/Vibes" />
+                <option value="Business/Finance" />
+              </datalist>
             </div>
 
             {/* 4 — Judge selector */}
@@ -1237,19 +1262,4 @@ export default function PreviewPanel() {
               <div style={{ background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "14px", padding: "20px 24px", marginBottom: "18px", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 2px 14px rgba(0,0,0,0.04)" }}>
                 <div>
                   <div style={{ fontWeight: "800", fontSize: "15px", color: B.black }}>Panel Verdict</div>
-                  <div style={{ fontSize: "12px", color: "#bbb", marginTop: "3px" }}>{doneResults.length} of {selectedJudges.length} judges complete</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  {JUDGES.filter(j => selectedJudges.includes(j.id) && judgeResults[j.id]?.status==="done").map(j => (
-                    <ScoreRing key={j.id} score={judgeResults[j.id].data.overall} color={j.color} size={44}/>
-                  ))}
-                  <div style={{ fontSize: "50px", fontWeight: "800", letterSpacing: "-0.03em", lineHeight: 1, color: avgScore >= 7 ? "#43A047" : avgScore >= 5 ? "#FB8C00" : "#E53935" }}>
-                    {avgScore}<span style={{ fontSize: "20px", color: "#ccc", fontWeight: "400" }}>/10</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              {[
-                ...judgeArrivalOrder.filter(id => selectedJudge
+                  <div style={{ fontSize: 
