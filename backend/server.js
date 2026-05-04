@@ -1420,4 +1420,283 @@ async function pollAnalyzeTasks() {
           if (!jobs[row.job_id]) {
             console.warn(`[poller] Task ${row.task_id} result for ${row.judge_id} arrived but job ${row.job_id} not in memory — skipping state update`);
           } else {
-            jobs[row.job_id].results[row.judge_id] = { status: "done", data: parse
+            jobs[row.job_id].results[row.judge_id] = { status: "done", data: parsed };
+            jobs[row.job_id].timings.judges[row.judge_id] = Date.now() - t_judge;
+            // Log time from all-tasks-created to first judge result
+            if (jobs[row.job_id].tasksCreatedAt && !jobs[row.job_id].firstResultAt) {
+              jobs[row.job_id].firstResultAt = Date.now();
+              const msFromTasksCreated = jobs[row.job_id].firstResultAt - jobs[row.job_id].tasksCreatedAt;
+              console.log(`[${row.job_id}] First judge result received (${row.judge_id}) — ${msFromTasksCreated}ms from all tasks created (TwelveLabs queue + first analysis time)`);
+            }
+          }
+          console.log(`[poller] Judge ${row.judge_id} complete for job ${row.job_id} in ${Date.now() - t_judge}ms`);
+          await checkJobCompletion(row.job_id);
+
+        } else if (task.status === "failed") {
+          const errMsg = task.error?.message || "TwelveLabs analysis task failed";
+          console.error(`[poller] Task ${row.task_id} failed: ${errMsg}`);
+          await pgPool.query(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2`, [errMsg, row.task_id]);
+          delete taskStatusCache[row.task_id];
+          const judge = JUDGES.find(j => j.id === row.judge_id);
+          if (jobs[row.job_id]) {
+            jobs[row.job_id].results[row.judge_id] = {
+              status: "error", error: errMsg,
+              data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] },
+            };
+          }
+          await checkJobCompletion(row.job_id);
+        }
+        // queued/pending/processing — check again next poll
+      } catch (err) {
+        console.error(`[poller] Error checking task ${row.task_id}: ${err.message}`);
+      }
+    }));
+  } finally {
+    pollerRunning = false;
+  }
+}
+
+// ── Restore in-flight jobs into memory after server restart ───────────────────
+async function resumeInFlightTasks() {
+  const rows = await loadInFlightTasks();
+  if (rows.length === 0) return;
+  const jobIds = new Set(rows.map(r => r.job_id));
+  for (const row of rows) {
+    if (!jobs[row.job_id]) {
+      const browserUploadMs = row.browser_upload_ms != null ? parseInt(row.browser_upload_ms) : null;
+      jobs[row.job_id] = {
+        status: "analyzing", results: {}, error: null,
+        platform: row.platform, objective: row.target_audience,
+        createdAt: new Date(row.created_at).getTime(),
+        startedAt: new Date(row.created_at).getTime(),
+        timings: { conversionMs: null, uploadMs: null, browserUploadMs, judges: {} },
+        ip: row.ip || "unknown",
+        fileSizeMB: row.file_size_mb != null ? parseFloat(row.file_size_mb) : null,
+        fileName: row.file_name ?? null,
+        browserUploadMs,
+      };
+    }
+    jobs[row.job_id].results[row.judge_id] = { status: "pending" };
+  }
+  console.log(`[startup] Resumed ${rows.length} in-flight task(s) across ${jobIds.size} job(s) from Neon — ffmpeg/upload timings unavailable for resumed jobs`);
+}
+
+// ── GET /api/status/:jobId ────────────────────────────────────
+app.get("/api/status/:jobId", (req, res) => {
+  const job = jobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: "Job not found" });
+
+  // Report live queue position
+  const queuePos = jobQueue.findIndex(q => q.jobId === req.params.jobId);
+  const currentQueuePosition = queuePos >= 0 ? queuePos + 1 : (activeJob === req.params.jobId ? 0 : -1);
+
+  res.json({
+    status: job.status,
+    results: job.results,
+    error: job.error,
+    duration: job.videoDuration?.secs || null,
+    queuePosition: currentQueuePosition,
+  });
+});
+
+// ── GET /admin/logs — submission dashboard ────────────────────
+app.get("/admin/logs", (req, res) => {
+  const secret = process.env.ADMIN_SECRET;
+  if (secret && req.query.secret !== secret) {
+    return res.status(401).send("Unauthorized — add ?secret=YOUR_ADMIN_SECRET to the URL");
+  }
+
+  const fmt = ms => ms != null ? `${(ms / 1000).toFixed(1)}s` : "—";
+  const fmtDur = secs => secs != null
+    ? `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, "0")}`
+    : "—";
+
+  const totalSubmissions = submissionLog.length;
+  const completed = submissionLog.filter(e => e.status === "done" || e.status === "partial").length;
+  const avgTotal = submissionLog.filter(e => e.timings.totalMs).reduce((s, e, _, a) => s + e.timings.totalMs / a.length, 0);
+  const allScores = submissionLog.flatMap(e => Object.values(e.scores));
+  const overallAvg = allScores.length ? (allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(1) : "—";
+
+  const platColor = p => p === "youtube" ? "#CC0000" : p === "tiktok" ? "#555" : "#C13584";
+  const platBg = p => p === "youtube" ? "#CC000018" : p === "tiktok" ? "#55555518" : "#C1358418";
+  const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s === "timeout" ? "#E65100" : s.startsWith("rejected_") ? "#795548" : "#C62828";
+
+  const rows = submissionLog.map(e => {
+    const judgeCells = ["critic", "cool", "dreamer"].map(id => {
+      const score = e.scores[id];
+      const t = e.timings.judges[id];
+      return `<td style="text-align:center;white-space:nowrap">${score != null ? `<strong>${score}</strong>` : "—"}${t != null ? `<br><span style="color:#bbb;font-size:10px">${fmt(t)}</span>` : ""}</td>`;
+    }).join("");
+
+    const scoreColor = e.avgScore >= 7 ? "#43A047" : e.avgScore >= 5 ? "#FB8C00" : "#E53935";
+    const date = new Date(e.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+
+    const safeFileName = e.fileName ? e.fileName.replace(/</g, "&lt;").replace(/>/g, "&gt;") : "—";
+    return `<tr>
+      <td style="color:#999;font-size:11px;white-space:nowrap">${date}</td>
+      <td style="font-family:monospace;font-size:11px;color:#666">${e.ip}</td>
+      <td><span style="background:${platBg(e.platform)};color:${platColor(e.platform)};padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;white-space:nowrap">${e.platform}</span></td>
+      <td style="font-size:11px;color:#555;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${safeFileName}">${safeFileName}</td>
+      <td style="text-align:right;white-space:nowrap">${e.fileSizeMB != null ? e.fileSizeMB + " MB" : "—"}</td>
+      <td style="text-align:right;font-family:monospace">${fmtDur(e.videoDurationSecs)}</td>
+      <td><strong style="color:${statusColor(e.status)}">${e.status}</strong></td>
+      <td style="text-align:right;font-family:monospace;font-weight:700">${fmt(e.timings.totalMs)}</td>
+      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.browserUploadMs)}</td>
+      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.conversionMs)}</td>
+      <td style="text-align:right;font-family:monospace;color:#888">${fmt(e.timings.uploadMs)}</td>
+      ${judgeCells}
+      <td style="text-align:center;font-size:18px;font-weight:800;color:${scoreColor}">${e.avgScore ?? "—"}</td>
+    </tr>`;
+  }).join("\n");
+
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PreviewPanel — Submission Log</title>
+  <meta http-equiv="refresh" content="30">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #FAFAFA; color: #212121; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 4px; color: #4E342E; }
+    .meta { font-size: 12px; color: #999; margin-bottom: 16px; }
+    .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+    .stat { background: #fff; border: 1px solid #E0D6D3; border-radius: 10px; padding: 12px 18px; min-width: 120px; }
+    .stat-val { font-size: 22px; font-weight: 800; color: #4E342E; }
+    .stat-label { font-size: 11px; color: #999; margin-top: 2px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 8px rgba(0,0,0,0.07); font-size: 13px; min-width: 900px; }
+    th { background: #EFEBE9; padding: 10px 12px; text-align: left; font-size: 10px; font-weight: 700; color: #795548; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+    td { padding: 9px 12px; border-top: 1px solid #F5F0EE; vertical-align: middle; }
+    tr:hover td { background: #FDFAF9; }
+    .empty { text-align: center; padding: 48px; color: #bbb; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>🦉 PreviewPanel — Submission Log</h1>
+  <div class="meta">${totalSubmissions} submission${totalSubmissions !== 1 ? "s" : ""} · auto-refreshes every 30s · resets on server restart</div>
+  <div class="stats">
+    <div class="stat"><div class="stat-val">${totalSubmissions}</div><div class="stat-label">Total</div></div>
+    <div class="stat"><div class="stat-val">${completed}</div><div class="stat-label">Completed</div></div>
+    <div class="stat"><div class="stat-val">${totalSubmissions ? Math.round((completed / totalSubmissions) * 100) + "%" : "—"}</div><div class="stat-label">Success Rate</div></div>
+    <div class="stat"><div class="stat-val">${avgTotal ? fmt(avgTotal) : "—"}</div><div class="stat-label">Avg Total Time</div></div>
+    <div class="stat"><div class="stat-val">${overallAvg}</div><div class="stat-label">Avg Score</div></div>
+  </div>
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>IP</th><th>Platform</th><th>Filename</th><th>File</th><th>Duration</th>
+        <th>Status</th><th>Total</th><th>Br Upload</th><th>ffmpeg</th><th>TL Upload</th>
+        <th>Critic</th><th>Trend</th><th>Dream</th><th>Avg</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows || `<tr><td colspan="15" class="empty">No submissions yet</td></tr>`}
+    </tbody>
+  </table>
+  </div>
+</body>
+</html>`);
+});
+
+// ── Health check ──────────────────────────────────────────────
+app.get("/health", (_, res) => res.json({ ok: true }));
+
+// ── TwelveLabs warm-up — keeps infrastructure warm, prevents cold-start delays ─
+const WARMUP_PATH = path.join(__dirname, "uploads", "warmup.mp4");
+
+async function createWarmupFile() {
+  try {
+    await execFileAsync(FFMPEG, [
+      "-f", "lavfi", "-i", "color=c=black:size=640x360:duration=5",
+      "-c:v", "libx264", "-preset", "ultrafast", "-t", "5",
+      "-y", WARMUP_PATH,
+    ]);
+    const sizeBytes = fs.statSync(WARMUP_PATH).size;
+    console.log(`[warmup] Warmup file created: 640x360, 5s, ${sizeBytes} bytes`);
+  } catch (err) {
+    console.error(`[warmup] Failed to create warmup file: ${err.message}\n${err.stack}`);
+  }
+}
+
+async function runWarmup() {
+  if (!process.env.TWELVELABS_API_KEY) return;
+  if (!fs.existsSync(WARMUP_PATH)) {
+    console.log("[warmup] Warmup file not found — skipping ping");
+    return;
+  }
+  try {
+    const assetId = await uploadAssetDirect(WARMUP_PATH);
+    await tl().analyzeAsync.tasks.create(
+      { video: { type: "asset_id", assetId }, prompt: "Describe this video in one word.", maxTokens: 10 },
+      { timeoutInSeconds: 30 }
+    );
+    console.log("[warmup] TwelveLabs warm-up ping sent");
+  } catch (err) {
+    console.log(`[warmup] Warm-up ping failed: ${err.message}`);
+  }
+}
+
+// ── Start ─────────────────────────────────────────────────────
+let server;
+try {
+  await initDb();
+  const saved = await loadSubmissionLog();
+  submissionLog.push(...saved);
+  console.log(`[startup] Submission log loaded — ${submissionLog.length} entries`);
+  await resumeInFlightTasks();
+  setInterval(pollAnalyzeTasks, 15_000);
+  console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
+
+  // Warm-up: generate file once at startup, ping immediately, then every 14 minutes
+  console.log("[warmup] Warmup initialized on startup");
+  try {
+    await createWarmupFile();
+  } catch (err) {
+    console.error(`[warmup] createWarmupFile threw unexpectedly: ${err.message}`);
+  }
+  if (process.env.TWELVELABS_API_KEY) {
+    try {
+      await runWarmup(); // awaited so all three log lines appear sequentially
+    } catch (err) {
+      console.error(`[warmup] Initial warmup failed: ${err.message}\n${err.stack}`);
+    }
+    setInterval(() => {
+      runWarmup().catch(err => console.error(`[warmup] Scheduled warmup failed: ${err.message}`));
+    }, 14 * 60 * 1000);
+    console.log("[warmup] TwelveLabs warm-up scheduled every 14 minutes");
+  } else {
+    console.warn("[warmup] TWELVELABS_API_KEY not set — warmup ping skipped");
+  }
+
+  const PORT = process.env.PORT || 3001;
+  server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
+    console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
+    console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
+  });
+
+  server.on("error", (err) => {
+    console.error("[server] Listen error:", err);
+    process.exit(1);
+  });
+
+  server.timeout = 0;
+  server.headersTimeout = 600_000;
+  server.requestTimeout = 0;
+  server.keepAliveTimeout = 30000;
+
+  if (process.env.RENDER_EXTERNAL_URL) {
+    const pingUrl = process.env.RENDER_EXTERNAL_URL + "/health";
+    setInterval(() => {
+      fetch(pingUrl)
+        .then(() => console.log("[keep-warm] ping ok"))
+        .catch((err) => console.warn("[keep-warm] ping failed:", err.message));
+    }, 14 * 60 * 1000);
+    console.log(`[keep-warm] self-ping enabled → ${pingUrl} every 14 min`);
+  }
+} catch (err) {
+  console.error("[startup] Fatal error during server initialization:", err);
+  process.exit(1);
+}
