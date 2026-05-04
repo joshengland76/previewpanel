@@ -207,6 +207,20 @@ async function initDb() {
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
+    // Dimension score columns — universal (per judge)
+    for (const judge of ["critic", "cool", "dreamer"]) {
+      for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
+        await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_${dim} NUMERIC`);
+      }
+    }
+    // Dimension score columns — platform-specific
+    for (const col of [
+      "tiktok_rewatch_potential", "tiktok_seo_strength",
+      "instagram_dm_share_potential", "instagram_originality",
+      "youtube_watch_time_potential", "youtube_thumbnail_hook",
+    ]) {
+      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col} NUMERIC`);
+    }
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
@@ -271,14 +285,22 @@ async function saveSubmission(entry) {
   if (pgPool) {
     try {
       console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs} ffmpeg_ms=${entry.timings.conversionMs} upload_ms=${entry.timings.uploadMs}`);
+      const d = entry.dimensions || {};
       await pgPool.query(`
         INSERT INTO submissions
           (job_id, ip, platform, file_size_mb, duration_secs, status,
            total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
            critic_ms, trendsetter_ms, dreamer_ms,
            critic_score, trendsetter_score, dreamer_score, avg_score,
-           file_name, task_creation_ms, queue_wait_ms, tl_queue_ms)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+           file_name, task_creation_ms, queue_wait_ms, tl_queue_ms,
+           critic_hook_strength, critic_completion_likelihood, critic_share_save_worthiness,
+           cool_hook_strength, cool_completion_likelihood, cool_share_save_worthiness,
+           dreamer_hook_strength, dreamer_completion_likelihood, dreamer_share_save_worthiness,
+           tiktok_rewatch_potential, tiktok_seo_strength,
+           instagram_dm_share_potential, instagram_originality,
+           youtube_watch_time_potential, youtube_thumbnail_hook)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+                $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
       `, [
         entry.jobId,
         entry.ip,
@@ -301,6 +323,21 @@ async function saveSubmission(entry) {
         entry.timings.taskCreationMs ?? null,
         entry.timings.queueWaitMs ?? null,
         entry.timings.tlQueueMs ?? null,
+        d.critic_hook_strength ?? null,
+        d.critic_completion_likelihood ?? null,
+        d.critic_share_save_worthiness ?? null,
+        d.cool_hook_strength ?? null,
+        d.cool_completion_likelihood ?? null,
+        d.cool_share_save_worthiness ?? null,
+        d.dreamer_hook_strength ?? null,
+        d.dreamer_completion_likelihood ?? null,
+        d.dreamer_share_save_worthiness ?? null,
+        d.tiktok_rewatch_potential ?? null,
+        d.tiktok_seo_strength ?? null,
+        d.instagram_dm_share_potential ?? null,
+        d.instagram_originality ?? null,
+        d.youtube_watch_time_potential ?? null,
+        d.youtube_thumbnail_hook ?? null,
       ]);
       return;
     } catch (err) {
@@ -1259,11 +1296,36 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   job.finalized = true;
   const scores = {};
   let scoreSum = 0, scoreCount = 0;
+  const dimensions = {};
+  const platDimSums = {};
+  const platDimCounts = {};
+  const PLAT_DIM_PREFIX = {
+    rewatch_potential: "tiktok", seo_strength: "tiktok",
+    dm_share_potential: "instagram", originality: "instagram",
+    watch_time_potential: "youtube", thumbnail_hook: "youtube",
+  };
   for (const [id, r] of Object.entries(job.results || {})) {
     if (r.status === "done" && r.data?.overall) {
       scores[id] = r.data.overall;
       scoreSum += r.data.overall;
       scoreCount++;
+    }
+    if (r.status === "done" && r.data?.dimensions) {
+      const d = r.data.dimensions;
+      for (const key of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
+        if (d[key] != null) dimensions[`${id}_${key}`] = Number(d[key]);
+      }
+      for (const [key, prefix] of Object.entries(PLAT_DIM_PREFIX)) {
+        if (d[key] != null) {
+          platDimSums[key] = (platDimSums[key] || 0) + Number(d[key]);
+          platDimCounts[key] = (platDimCounts[key] || 0) + 1;
+        }
+      }
+    }
+  }
+  for (const [key, prefix] of Object.entries(PLAT_DIM_PREFIX)) {
+    if (platDimCounts[key]) {
+      dimensions[`${prefix}_${key}`] = parseFloat((platDimSums[key] / platDimCounts[key]).toFixed(1));
     }
   }
   const browserUploadMs = job.timings?.browserUploadMs ?? null;
@@ -1279,6 +1341,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     status: finalStatus,
     timings: { ...(job.timings || {}), browserUploadMs },
     scores,
+    dimensions,
     avgScore: scoreCount > 0 ? parseFloat((scoreSum / scoreCount).toFixed(1)) : null,
   };
   submissionLog.unshift(entry);
