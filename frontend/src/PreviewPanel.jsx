@@ -593,7 +593,10 @@ export default function PreviewPanel() {
   }, []);
 
   useEffect(() => {
-    if (!objDropOpen) return;
+    if (!objDropOpen) {
+      document.activeElement?.blur();
+      return;
+    }
     function handleOutside(e) {
       if (objDropRef.current && !objDropRef.current.contains(e.target)) {
         setObjDropOpen(false);
@@ -1112,7 +1115,7 @@ export default function PreviewPanel() {
                       value={objFilter}
                       onChange={e => setObjFilter(e.target.value)}
                       placeholder="Search or type custom..."
-                      style={{ width: "100%", border: "none", outline: "none", fontSize: "14px", fontFamily: "Montserrat, sans-serif", color: B.body, background: "transparent" }}
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: "16px", fontFamily: "Montserrat, sans-serif", color: B.body, background: "transparent", touchAction: "manipulation" }}
                     />
                   </div>
                   {/* Options */}
@@ -1331,6 +1334,11 @@ export default function PreviewPanel() {
                 <div style={{ padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", color: plat.color, flexShrink: 0 }}>
                   {plat.icon} {plat.label}
                 </div>
+                {objective && (
+                  <div style={{ padding: "5px 13px", background: B.lightBrown, border: `1.5px solid ${B.beige}`, borderRadius: "99px", fontSize: "12px", fontWeight: "600", color: B.action, flexShrink: 0 }}>
+                    🎯 {objective}
+                  </div>
+                )}
                 {videoFile && (
                   <div style={{ padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: "#888", fontFamily: "'Courier New', monospace" }}>
                     {videoFile.name}
