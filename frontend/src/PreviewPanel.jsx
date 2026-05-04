@@ -282,8 +282,6 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
   const loading = judgeResult?.status === "pending";
   const result = judgeResult?.data;
   const has = !!result && judgeResult?.status === "done";
-  const showHashtags = (platform === "tiktok" || platform === "instagram") && result?.hashtags?.length > 0;
-
   return (
     <div style={{
       border: `1.5px solid ${has ? judge.color+"45" : B.border}`,
@@ -365,19 +363,39 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
             </div>
           )}
 
-          {/* Issue #7: Hashtags */}
-          {showHashtags && (
+          {/* Hashtags & Clips */}
+          {(result?.hashtags?.length > 0 || result?.clip) && (
             <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Suggested Hashtags</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                {result.hashtags.map((tag, i) => (
-                  <span key={i} style={{
-                    background: judge.color + "15", color: judge.color,
-                    border: `1px solid ${judge.color}35`, borderRadius: "99px",
-                    padding: "4px 12px", fontSize: "12px", fontWeight: "700",
-                  }}>#{tag}</span>
-                ))}
-              </div>
+              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Hashtags & Clips</div>
+              {result.hashtags?.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: result.clip ? "10px" : "0" }}>
+                  {result.hashtags.map((tag, i) => (
+                    <span key={i} style={{
+                      background: judge.color + "15", color: judge.color,
+                      border: `1px solid ${judge.color}35`, borderRadius: "99px",
+                      padding: "4px 12px", fontSize: "12px", fontWeight: "700",
+                    }}>#{tag}</span>
+                  ))}
+                </div>
+              )}
+              {result.clip && (
+                <div style={{
+                  background: judge.color + "10", border: `1px solid ${judge.color}25`,
+                  borderRadius: "8px", padding: "10px 12px",
+                  display: "flex", gap: "8px", alignItems: "flex-start",
+                }}>
+                  <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px" }}>✂️</span>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: "13px", fontWeight: "800", color: judge.color, fontFamily: "monospace" }}>
+                        {result.clip.start} — {result.clip.end}
+                      </span>
+                      <span style={{ fontSize: "12px", fontWeight: "700", color: B.body }}>{result.clip.label}</span>
+                    </div>
+                    <div style={{ fontSize: "11px", color: "#666", lineHeight: "1.4" }}>{result.clip.reason}</div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1234,29 +1252,4 @@ export default function PreviewPanel() {
 
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               {[
-                ...judgeArrivalOrder.filter(id => selectedJudges.includes(id)),
-                ...selectedJudges.filter(id => !judgeArrivalOrder.includes(id)),
-              ].map(jid => (
-                <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs} platform={platform}/>
-              ))}
-            </div>
-
-            {/* Partial result explanation */}
-            {jobStatus === "partial" && (
-              <div style={{
-                marginTop: "16px", padding: "12px 16px",
-                background: "#F5F5F5", border: "1px solid #E0E0E0", borderRadius: "10px",
-                display: "flex", gap: "10px", alignItems: "flex-start",
-              }}>
-                <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px", color: "#9E9E9E" }}>ℹ</span>
-                <span style={{ fontSize: "12px", color: "#757575", lineHeight: "1.55" }}>
-                  Note: One or more judges were unable to complete their review for this submission. The verdict reflects only the judges who responded.
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
+                ...judgeArrivalOrder.filter(id => selectedJudge

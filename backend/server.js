@@ -476,8 +476,17 @@ const PLATFORM_FOCUS = {
 };
 
 // ── Issue #7: Hashtag instruction for TikTok and Instagram ───
-function buildHashtagInstruction(platform) {
+function buildHashtagInstruction(platform, judgeId) {
   if (platform === "tiktok" || platform === "instagram") {
+    if (judgeId === "cool") {
+      return `\nHASHTAGS — Suggest exactly 5 hashtags ranging from obvious/high-volume to creative/niche. Strategy:
+- Start with the most searchable tags that match what this video is obviously about
+- If the video features a specific brand, product, sports team, athlete, city, neighborhood, landmark, or recognizable scene — include that as one hashtag
+- End with 2 more creative or unexpected tags that could help the video find a unique audience — the last 2 should not be the obvious choice but would attract exactly the right viewer
+- Choose hashtags people actually search, not generic ones like "video" or "content"
+- Base them entirely on what you actually observe in the video — do not invent content
+Include them in the JSON as a "hashtags" array of exactly 5 strings (without the # symbol).`;
+    }
     return `\nHASHTAGS — Suggest exactly 3 hashtags to maximize reach and views on ${platform.toUpperCase()}. Strategy:
 - If the video features a specific brand, product, sports team, athlete, city, neighborhood, landmark, or recognizable scene — include that as one hashtag (these are high-intent, specific searches that attract exactly the right viewers)
 - Mix specificity: one niche/specific tag (smaller but highly targeted), one mid-size community tag, one broader discovery tag
@@ -503,8 +512,14 @@ function buildTLPrompt(judge, platform, targetAudience, videoDuration) {
     : "";
 
   const { lengthGuidance } = buildVideoContext(videoDuration);
-  const hashtagInstruction = buildHashtagInstruction(platform);
+  const hashtagInstruction = buildHashtagInstruction(platform, judge.id);
   const needsHashtags = platform === "tiktok" || platform === "instagram";
+  const hashtagsFormat = needsHashtags
+    ? judge.id === "cool"
+      ? `,\n  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>", "<hashtag4>", "<hashtag5>"]`
+      : `,\n  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>"]`
+    : "";
+  const clippingInstruction = `\nCLIPPING — If this video is over 45 seconds long and contains a moment that would work well as a standalone short-form clip (under 60 seconds), suggest one clip. A good clip candidate has: a clear beginning and end, works without context, has a strong hook in the first 3 seconds, and follows current short-form trends (transformation reveals, reactions, how-to moments, emotional peaks, surprising facts, humor beats, or satisfying conclusions). If no moment meets this bar, do not suggest a clip. Include in the JSON as a "clip" object: { "start": "M:SS", "end": "M:SS", "label": "1-3 word description", "reason": "1 sentence on why this moment works as a clip" }. If no clip is recommended, omit the field entirely.`;
 
   const editingCraftBlock = `
 EDITING CRAFT — Pay attention to the editing of this video. Note specific editing choices that help or hurt the video's performance: cuts, pacing, transitions, caption style and placement, on-screen text, background music choice and volume, sound effects, zoom-ins, speed changes (fast-forward or slow-mo), overlays, stickers, animations, and effects. Where editing works well, name the specific moment and technique. Where editing could be improved, give a concrete actionable suggestion — for example: 'Cut the 8-second pause at 0:23', 'Add a zoom-in at 0:15 when the product is revealed', 'Lower the background music volume during the spoken section', 'Add captions in bold white text with a subtle drop shadow for accessibility and retention', 'Speed up the setup section to 1.5x', 'Add a sound effect at the transition at 0:10'. Suggest specific caption text where relevant. Focus on editing changes that would meaningfully improve watchability and audience retention, not editing for its own sake.${judge.id === "critic" ? "\nEditing craft is your primary lens. Use at least half your suggestions field for specific editing improvements. Lead with editing observations in your delivery field before covering other aspects of presentation." : ""}`;
@@ -529,6 +544,7 @@ ${editingCraftBlock}
 
 ${judge.momentsInstruction}
 ${hashtagInstruction}
+${clippingInstruction}
 
 You are one of three judges reviewing this video. Each judge must identify a DIFFERENT genuine strength — focus on an aspect the other judges are less likely to notice given your unique lens. Do not manufacture praise; only include positives that are genuinely present in the video.
 
@@ -545,7 +561,8 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
   ],
   "suggestions": [
     "<specific actionable improvement tied to ${pf.metrics}, with timestamp reference if relevant>"
-  ]${needsHashtags ? `,\n  "hashtags": ["<hashtag1>", "<hashtag2>", "<hashtag3>"]` : ""}
+  ]${hashtagsFormat},
+  "clip": { "start": "<M:SS>", "end": "<M:SS>", "label": "<1-3 word description>", "reason": "<1 sentence on why this moment works as a clip>" }
 }`;
 }
 
@@ -1543,54 +1560,4 @@ try {
   setInterval(pollAnalyzeTasks, 15_000);
   console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
 
-  // Warm-up: generate file once at startup, ping immediately, then every 14 minutes
-  console.log("[warmup] Warmup initialized on startup");
-  try {
-    await createWarmupFile();
-  } catch (err) {
-    console.error(`[warmup] createWarmupFile threw unexpectedly: ${err.message}`);
-  }
-  if (process.env.TWELVELABS_API_KEY) {
-    try {
-      await runWarmup(); // awaited so all three log lines appear sequentially
-    } catch (err) {
-      console.error(`[warmup] Initial warmup failed: ${err.message}\n${err.stack}`);
-    }
-    setInterval(() => {
-      runWarmup().catch(err => console.error(`[warmup] Scheduled warmup failed: ${err.message}`));
-    }, 14 * 60 * 1000);
-    console.log("[warmup] TwelveLabs warm-up scheduled every 14 minutes");
-  } else {
-    console.warn("[warmup] TWELVELABS_API_KEY not set — warmup ping skipped");
-  }
-
-  const PORT = process.env.PORT || 3001;
-  server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
-    console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
-    console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
-  });
-
-  server.on("error", (err) => {
-    console.error("[server] Listen error:", err);
-    process.exit(1);
-  });
-
-  server.timeout = 0;
-  server.headersTimeout = 600_000;
-  server.requestTimeout = 0;
-  server.keepAliveTimeout = 30000;
-
-  if (process.env.RENDER_EXTERNAL_URL) {
-    const pingUrl = process.env.RENDER_EXTERNAL_URL + "/health";
-    setInterval(() => {
-      fetch(pingUrl)
-        .then(() => console.log("[keep-warm] ping ok"))
-        .catch((err) => console.warn("[keep-warm] ping failed:", err.message));
-    }, 14 * 60 * 1000);
-    console.log(`[keep-warm] self-ping enabled → ${pingUrl} every 14 min`);
-  }
-} catch (err) {
-  console.error("[startup] Fatal error during server initialization:", err);
-  process.exit(1);
-}
+ 
