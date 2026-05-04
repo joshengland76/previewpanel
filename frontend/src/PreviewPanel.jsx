@@ -1262,4 +1262,44 @@ export default function PreviewPanel() {
               <div style={{ background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "14px", padding: "20px 24px", marginBottom: "18px", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 2px 14px rgba(0,0,0,0.04)" }}>
                 <div>
                   <div style={{ fontWeight: "800", fontSize: "15px", color: B.black }}>Panel Verdict</div>
-                  <div style={{ fontSize: 
+                  <div style={{ fontSize: "12px", color: "#bbb", marginTop: "3px" }}>{doneResults.length} of {selectedJudges.length} judges complete</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  {JUDGES.filter(j => selectedJudges.includes(j.id) && judgeResults[j.id]?.status==="done").map(j => (
+                    <ScoreRing key={j.id} score={judgeResults[j.id].data.overall} color={j.color} size={44}/>
+                  ))}
+                  <div style={{ fontSize: "50px", fontWeight: "800", letterSpacing: "-0.03em", lineHeight: 1, color: avgScore >= 7 ? "#43A047" : avgScore >= 5 ? "#FB8C00" : "#E53935" }}>
+                    {avgScore}<span style={{ fontSize: "20px", color: "#ccc", fontWeight: "400" }}>/10</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+              {[
+                ...judgeArrivalOrder.filter(id => selectedJudges.includes(id)),
+                ...selectedJudges.filter(id => !judgeArrivalOrder.includes(id)),
+              ].map(jid => (
+                <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs} platform={platform}/>
+              ))}
+            </div>
+
+            {/* Partial result explanation */}
+            {jobStatus === "partial" && (
+              <div style={{
+                marginTop: "16px", padding: "12px 16px",
+                background: "#F5F5F5", border: "1px solid #E0E0E0", borderRadius: "10px",
+                display: "flex", gap: "10px", alignItems: "flex-start",
+              }}>
+                <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px", color: "#9E9E9E" }}>ℹ</span>
+                <span style={{ fontSize: "12px", color: "#757575", lineHeight: "1.55" }}>
+                  Note: One or more judges were unable to complete their review for this submission. The verdict reflects only the judges who responded.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
