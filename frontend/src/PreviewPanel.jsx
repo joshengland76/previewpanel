@@ -533,11 +533,21 @@ function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploa
   );
 }
 
+const OBJECTIVE_OPTIONS = [
+  "Funny Videos/Comedy", "Food & Drinks/Cooking", "Travel", "Fashion",
+  "Makeup/Beauty", "Pets/Animals", "Fitness/Wellness", "Dancing", "Gaming",
+  "Storytelling", "Life Hacks", "Fun Facts", "Shopping", "Cars/Automotive",
+  "ASMR", "Myth Busting", "Educational/How-To", "Aesthetic/Vibes", "Business/Finance",
+];
+
 export default function PreviewPanel() {
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
   const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
   const [objective, setObjective] = useState("");
+  const [objDropOpen, setObjDropOpen] = useState(false);
+  const [objFilter, setObjFilter] = useState("");
+  const [objDropAbove, setObjDropAbove] = useState(false);
   const [selectedJudges, setSelectedJudges] = useState(["critic","cool","dreamer"]);
   const [step, setStep] = useState(1);
   const [jobId, setJobId] = useState(null);
@@ -559,6 +569,7 @@ export default function PreviewPanel() {
   const [uploadZoneError, setUploadZoneError] = useState(null);
   const [judgeArrivalOrder, setJudgeArrivalOrder] = useState([]);
   const pollRef = useRef(null);
+  const objDropRef = useRef(null);
   const fileInputRef = useRef(null);
   const xhrRef = useRef(null);
   const notifiedRef = useRef(false);
@@ -580,6 +591,22 @@ export default function PreviewPanel() {
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
+
+  useEffect(() => {
+    if (!objDropOpen) return;
+    function handleOutside(e) {
+      if (objDropRef.current && !objDropRef.current.contains(e.target)) {
+        setObjDropOpen(false);
+        setObjFilter("");
+      }
+    }
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, [objDropOpen]);
 
   const toggleJudge = id => setSelectedJudges(p => p.includes(id) ? p.filter(j => j !== id) : [...p, id]);
 
@@ -1036,38 +1063,100 @@ export default function PreviewPanel() {
             </div>
 
             {/* 3 — Objective */}
-            <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
+            <div className="pp-section-gap" style={{ marginBottom: "10px", position: "relative" }} ref={objDropRef}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>
                 Objective <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(optional)</span>
               </div>
-              <input
-                list="objective-options"
-                value={objective}
-                onChange={e => setObjective(e.target.value)}
-                placeholder="Select a content category (optional)"
-                style={{ width: "100%", padding: "13px", height: "48px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px", color: B.body, fontSize: "14px", fontFamily: "Montserrat, sans-serif" }}
-              />
-              <datalist id="objective-options">
-                <option value="Funny Videos/Comedy" />
-                <option value="Food & Drinks/Cooking" />
-                <option value="Travel" />
-                <option value="Fashion" />
-                <option value="Makeup/Beauty" />
-                <option value="Pets/Animals" />
-                <option value="Fitness/Wellness" />
-                <option value="Dancing" />
-                <option value="Gaming" />
-                <option value="Storytelling" />
-                <option value="Life Hacks" />
-                <option value="Fun Facts" />
-                <option value="Shopping" />
-                <option value="Cars/Automotive" />
-                <option value="ASMR" />
-                <option value="Myth Busting" />
-                <option value="Educational/How-To" />
-                <option value="Aesthetic/Vibes" />
-                <option value="Business/Finance" />
-              </datalist>
+              {/* Trigger row */}
+              <div
+                onClick={() => {
+                  const rect = objDropRef.current?.getBoundingClientRect();
+                  setObjDropAbove(rect ? window.innerHeight - rect.bottom < 320 : false);
+                  setObjDropOpen(o => !o);
+                  setObjFilter("");
+                }}
+                style={{
+                  display: "flex", alignItems: "center", gap: "6px",
+                  padding: "0 13px", height: "48px",
+                  background: "#fff", border: `1.5px solid ${objDropOpen ? B.brown : B.border}`,
+                  borderRadius: "10px", cursor: "pointer", userSelect: "none",
+                  boxSizing: "border-box",
+                }}
+              >
+                <span style={{ flex: 1, fontSize: "14px", fontFamily: "Montserrat, sans-serif", color: objective ? B.body : "#bbb", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {objective || "Select a content category (optional)"}
+                </span>
+                {objective && (
+                  <span
+                    onClick={e => { e.stopPropagation(); setObjective(""); setObjDropOpen(false); }}
+                    style={{ fontSize: "18px", color: "#bbb", lineHeight: 1, cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}
+                  >×</span>
+                )}
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, transform: objDropOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
+                  <path d="M3 5.5L8 10.5L13 5.5" stroke={B.brown} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+              {/* Dropdown panel */}
+              {objDropOpen && (
+                <div style={{
+                  position: "absolute", left: 0, right: 0, zIndex: 1000,
+                  background: "#fff", border: `1.5px solid ${B.border}`,
+                  borderRadius: "10px", boxShadow: "0 4px 24px rgba(0,0,0,0.13)",
+                  overflow: "hidden",
+                  ...(objDropAbove ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }),
+                }}>
+                  {/* Filter input */}
+                  <div style={{ padding: "10px 13px", borderBottom: `1px solid ${B.border}` }}>
+                    <input
+                      autoFocus
+                      value={objFilter}
+                      onChange={e => setObjFilter(e.target.value)}
+                      placeholder="Search or type custom..."
+                      style={{ width: "100%", border: "none", outline: "none", fontSize: "14px", fontFamily: "Montserrat, sans-serif", color: B.body, background: "transparent" }}
+                    />
+                  </div>
+                  {/* Options */}
+                  <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+                    {OBJECTIVE_OPTIONS.filter(opt => opt.toLowerCase().includes(objFilter.toLowerCase())).map((opt, i, arr) => (
+                      <div
+                        key={opt}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => { setObjective(opt); setObjDropOpen(false); setObjFilter(""); }}
+                        style={{
+                          padding: "0 16px", minHeight: "44px", display: "flex", alignItems: "center",
+                          fontSize: "14px", fontFamily: "Montserrat, sans-serif",
+                          color: objective === opt ? B.brown : B.body,
+                          fontWeight: objective === opt ? "700" : "400",
+                          background: objective === opt ? B.lightBrown : "transparent",
+                          cursor: "pointer",
+                          borderBottom: i < arr.length - 1 ? `1px solid ${B.border}` : "none",
+                        }}
+                        onMouseEnter={e => { if (objective !== opt) e.currentTarget.style.background = "#FAF7F5"; }}
+                        onMouseLeave={e => { if (objective !== opt) e.currentTarget.style.background = "transparent"; }}
+                      >
+                        {opt}
+                      </div>
+                    ))}
+                    {/* Accept custom typed value not in list */}
+                    {objFilter.trim() && !OBJECTIVE_OPTIONS.some(o => o.toLowerCase() === objFilter.trim().toLowerCase()) && (
+                      <div
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => { setObjective(objFilter.trim()); setObjDropOpen(false); setObjFilter(""); }}
+                        style={{
+                          padding: "0 16px", minHeight: "44px", display: "flex", alignItems: "center", gap: "6px",
+                          fontSize: "14px", fontFamily: "Montserrat, sans-serif", color: B.brown, fontWeight: "600",
+                          cursor: "pointer", borderTop: `1px solid ${B.border}`,
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = B.lightBrown}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        <span style={{ fontSize: "11px", color: "#aaa", fontWeight: "400" }}>Use:</span>
+                        "{objFilter.trim()}"
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 4 — Judge selector */}
