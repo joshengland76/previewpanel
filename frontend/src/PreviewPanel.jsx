@@ -406,14 +406,14 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
             {dims.map(({ key, meta, score }) => (
               <div key={key} style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "2px", flex: "0 0 90px", overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "2px", flex: "0 0 115px", overflow: "hidden" }}>
                   <span style={{ fontSize: "11px", color: "#999", lineHeight: 1, whiteSpace: "nowrap" }}>{meta.label}</span>
                   <button
                     onClick={e => handleInfoClick(e, key)}
                     style={{ background: "none", border: "none", cursor: "pointer", padding: "0 1px", color: "#ccc", fontSize: "10px", lineHeight: 1, flexShrink: 0, touchAction: "manipulation" }}
                   >ⓘ</button>
                 </div>
-                <div style={{ flex: 1, maxWidth: "40%", height: "6px", background: judge.softBg, borderRadius: "3px", overflow: "hidden" }}>
+                <div style={{ flex: 1, maxWidth: "calc(40% - 25px)", height: "6px", background: judge.softBg, borderRadius: "3px", overflow: "hidden" }}>
                   <div style={{
                     height: "100%", width: `${(score / 10) * 100}%`,
                     background: judge.color, opacity: 0.7, borderRadius: "3px",
