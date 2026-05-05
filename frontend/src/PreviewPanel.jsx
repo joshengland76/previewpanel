@@ -1081,9 +1081,9 @@ export default function PreviewPanel() {
         .pp-sticky-wrap { margin-top: 4px; }
         @media (max-width: 480px) {
           .pp-main { padding: 0 14px 0 !important; }
-          .pp-section-gap { margin-bottom: 8px !important; }
+          .pp-section-gap { margin-bottom: 6px !important; }
           .pp-judge-list { gap: 4px !important; }
-          .pp-content-pad { padding-bottom: 80px; }
+          .pp-content-pad { padding-bottom: 100px; }
           .pp-sticky-wrap {
             position: fixed; bottom: 0; left: 0; right: 0;
             padding: 10px 14px max(20px, env(safe-area-inset-bottom));
@@ -1115,7 +1115,7 @@ export default function PreviewPanel() {
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
-              <div style={{ marginTop: "-12px", marginBottom: "12px" }}>
+              <div style={{ marginTop: "-12px", marginBottom: "8px" }}>
                 <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
               </div>
               {/* Issue #9: History button */}
@@ -1206,7 +1206,7 @@ export default function PreviewPanel() {
             </div>
 
             {/* 2 — Platform pills */}
-            <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
+            <div className="pp-section-gap" style={{ marginBottom: "8px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Platform</div>
               <div style={{ display: "flex", gap: "6px" }}>
                 {PLATFORMS.map(p => (
@@ -1228,7 +1228,7 @@ export default function PreviewPanel() {
             </div>
 
             {/* 3 — Objective */}
-            <div className="pp-section-gap" style={{ marginBottom: "10px", position: "relative" }} ref={objDropRef}>
+            <div className="pp-section-gap" style={{ marginBottom: "8px", position: "relative" }} ref={objDropRef}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>
                 Objective <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(optional)</span>
               </div>
@@ -1254,7 +1254,7 @@ export default function PreviewPanel() {
                 {objective ? (
                   <span
                     onClick={e => { e.stopPropagation(); setObjective(""); setObjDropOpen(false); }}
-                    style={{ fontSize: "16px", color: "#aaa", lineHeight: 1, cursor: "pointer", padding: "4px", flexShrink: 0, touchAction: "manipulation", display: "flex", alignItems: "center", justifyContent: "center", width: "20px", height: "20px" }}
+                    style={{ fontSize: "22px", fontWeight: "700", color: B.body, lineHeight: 1, cursor: "pointer", flexShrink: 0, touchAction: "manipulation", display: "flex", alignItems: "center", justifyContent: "center", width: "44px", height: "44px", marginRight: "-8px" }}
                   >×</span>
                 ) : (
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, transform: objDropOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
@@ -1326,15 +1326,15 @@ export default function PreviewPanel() {
             </div>
 
             {/* 4 — Judge selector */}
-            <div className="pp-section-gap" style={{ marginBottom: "12px" }}>
+            <div className="pp-section-gap" style={{ marginBottom: "8px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Panel</div>
-              <div className="pp-judge-list" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div className="pp-judge-list" style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 {JUDGES.map(j => {
                   const active = selectedJudges.includes(j.id);
                   return (
                     <div key={j.id} onClick={() => toggleJudge(j.id)} style={{
                       display: "flex", alignItems: "center", gap: "12px",
-                      padding: "14px 14px", borderRadius: "10px",
+                      padding: "10px 14px", borderRadius: "10px",
                       border: `1.5px solid ${active ? j.color+"50" : B.border}`,
                       background: active ? j.softBg : "#fff",
                       cursor: "pointer", transition: "all 0.15s ease",
@@ -1391,7 +1391,7 @@ export default function PreviewPanel() {
 
         {/* ── RESULTS SCREEN ── */}
         {step === 2 && (
-          <div style={{ animation: "pp-slide 0.3s ease" }}>
+          <div style={{ animation: "pp-slide 0.3s ease", paddingBottom: "max(40px, calc(env(safe-area-inset-bottom) + 24px))" }}>
 
             {/* Top bar */}
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
