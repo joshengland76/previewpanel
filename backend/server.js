@@ -213,14 +213,18 @@ async function initDb() {
         await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_${dim} NUMERIC`);
       }
     }
-    // Rename legacy cool_* columns to trendsetter_* if they exist
+    // Rename legacy cool_* columns to trendsetter_* if they exist and target doesn't
     for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
       await pgPool.query(`
         DO $$ BEGIN
           IF EXISTS (SELECT 1 FROM information_schema.columns
-                     WHERE table_name='submissions' AND column_name='cool_${dim}') THEN
+                     WHERE table_name='submissions' AND column_name='cool_${dim}')
+          AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_name='submissions' AND column_name='trendsetter_${dim}') THEN
             ALTER TABLE submissions RENAME COLUMN cool_${dim} TO trendsetter_${dim};
           END IF;
+        EXCEPTION WHEN others THEN
+          NULL;
         END $$
       `);
     }
