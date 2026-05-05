@@ -294,9 +294,27 @@ async function loadSubmissionLog() {
 
 async function saveSubmission(entry) {
   if (pgPool) {
+    const d = entry.dimensions || {};
+    const baseValues = [
+      entry.jobId, entry.ip, entry.platform, entry.fileSizeMB, entry.videoDurationSecs, entry.status,
+      entry.timings.totalMs, entry.timings.conversionMs, entry.timings.uploadMs, entry.timings.browserUploadMs ?? null,
+      entry.timings.judges.critic ?? null, entry.timings.judges.cool ?? null, entry.timings.judges.dreamer ?? null,
+      entry.scores.critic ?? null, entry.scores.cool ?? null, entry.scores.dreamer ?? null,
+      entry.avgScore, entry.fileName ?? null,
+      entry.timings.taskCreationMs ?? null, entry.timings.queueWaitMs ?? null, entry.timings.tlQueueMs ?? null,
+    ];
+    const fullValues = [
+      ...baseValues,
+      d.critic_hook_strength ?? null, d.critic_completion_likelihood ?? null, d.critic_share_save_worthiness ?? null,
+      d.trendsetter_hook_strength ?? null, d.trendsetter_completion_likelihood ?? null, d.trendsetter_share_save_worthiness ?? null,
+      d.dreamer_hook_strength ?? null, d.dreamer_completion_likelihood ?? null, d.dreamer_share_save_worthiness ?? null,
+      d.tiktok_rewatch_potential ?? null, d.tiktok_seo_strength ?? null,
+      d.instagram_dm_share_potential ?? null, d.instagram_originality ?? null,
+      d.youtube_watch_time_potential ?? null, d.youtube_thumbnail_hook ?? null,
+    ];
+    console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
+    console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, dreamer_hook=${d.dreamer_hook_strength ?? "null"}`);
     try {
-      console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs} ffmpeg_ms=${entry.timings.conversionMs} upload_ms=${entry.timings.uploadMs}`);
-      const d = entry.dimensions || {};
       await pgPool.query(`
         INSERT INTO submissions
           (job_id, ip, platform, file_size_mb, duration_secs, status,
@@ -312,47 +330,28 @@ async function saveSubmission(entry) {
            youtube_watch_time_potential, youtube_thumbnail_hook)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
-      `, [
-        entry.jobId,
-        entry.ip,
-        entry.platform,
-        entry.fileSizeMB,
-        entry.videoDurationSecs,
-        entry.status,
-        entry.timings.totalMs,
-        entry.timings.conversionMs,
-        entry.timings.uploadMs,
-        entry.timings.browserUploadMs ?? null,
-        entry.timings.judges.critic ?? null,
-        entry.timings.judges.cool ?? null,
-        entry.timings.judges.dreamer ?? null,
-        entry.scores.critic ?? null,
-        entry.scores.cool ?? null,
-        entry.scores.dreamer ?? null,
-        entry.avgScore,
-        entry.fileName ?? null,
-        entry.timings.taskCreationMs ?? null,
-        entry.timings.queueWaitMs ?? null,
-        entry.timings.tlQueueMs ?? null,
-        d.critic_hook_strength ?? null,
-        d.critic_completion_likelihood ?? null,
-        d.critic_share_save_worthiness ?? null,
-        d.trendsetter_hook_strength ?? null,
-        d.trendsetter_completion_likelihood ?? null,
-        d.trendsetter_share_save_worthiness ?? null,
-        d.dreamer_hook_strength ?? null,
-        d.dreamer_completion_likelihood ?? null,
-        d.dreamer_share_save_worthiness ?? null,
-        d.tiktok_rewatch_potential ?? null,
-        d.tiktok_seo_strength ?? null,
-        d.instagram_dm_share_potential ?? null,
-        d.instagram_originality ?? null,
-        d.youtube_watch_time_potential ?? null,
-        d.youtube_thumbnail_hook ?? null,
-      ]);
+      `, fullValues);
       return;
     } catch (err) {
-      console.error("[db] Failed to save submission:", err.message);
+      console.error(`[db] Full INSERT failed — code=${err.code} message=${err.message}`);
+      if (err.code === "42703") {
+        console.warn(`[db] Dimension columns missing in schema — retrying with base 21-column INSERT`);
+        try {
+          await pgPool.query(`
+            INSERT INTO submissions
+              (job_id, ip, platform, file_size_mb, duration_secs, status,
+               total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
+               critic_ms, trendsetter_ms, dreamer_ms,
+               critic_score, trendsetter_score, dreamer_score, avg_score,
+               file_name, task_creation_ms, queue_wait_ms, tl_queue_ms)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+          `, baseValues);
+          console.log(`[db] Base INSERT succeeded (no dimension columns) — job=${entry.jobId}`);
+          return;
+        } catch (fallbackErr) {
+          console.error(`[db] Base INSERT also failed — code=${fallbackErr.code} message=${fallbackErr.message}`);
+        }
+      }
     }
   }
   try { fs.appendFileSync(SUBMISSIONS_PATH, JSON.stringify(entry) + "\n"); } catch (e) { console.warn("[log] Failed to write submission to disk:", e.message); }
@@ -877,6 +876,11 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
   try {
     const parsed = JSON.parse(clean);
     console.log(`[TwelveLabs][${judge.id}] JSON parsed OK — keys:`, Object.keys(parsed));
+    if (parsed.dimensions) {
+      console.log(`[TwelveLabs][${judge.id}] dimensions received:`, JSON.stringify(parsed.dimensions));
+    } else {
+      console.warn(`[TwelveLabs][${judge.id}] WARNING: no dimensions field in parsed result — top-level keys: ${Object.keys(parsed).join(", ")}`);
+    }
     return applyMomentFilters(parsed, judge, videoDuration);
   } catch (parseErr) {
     console.error(`[TwelveLabs][${judge.id}] JSON parse FAILED: ${parseErr.message}`);
@@ -930,7 +934,7 @@ async function createAnalyzeTask(videoContext, judge, platform, objective, video
   let data;
   try {
     data = await tlClient.analyzeAsync.tasks.create(
-      { video: videoContext, prompt, temperature: 0.3, maxTokens: 2048 },
+      { video: videoContext, prompt, temperature: 0.3, maxTokens: 4096 },
       { timeoutInSeconds: 30 }
     );
   } catch (err) {
@@ -1320,6 +1324,13 @@ async function recordSubmissionForJob(jobId, finalStatus) {
       scores[id] = r.data.overall;
       scoreSum += r.data.overall;
       scoreCount++;
+    }
+    if (r.status === "done") {
+      if (r.data?.dimensions) {
+        console.log(`[${jobId}] [db] Judge ${id} dimensions from result:`, JSON.stringify(r.data.dimensions));
+      } else {
+        console.warn(`[${jobId}] [db] Judge ${id} done but NO dimensions field — r.data keys: ${Object.keys(r.data || {}).join(", ")}`);
+      }
     }
     if (r.status === "done" && r.data?.dimensions) {
       const d = r.data.dimensions;
