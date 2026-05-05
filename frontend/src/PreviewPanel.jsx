@@ -732,6 +732,7 @@ export default function PreviewPanel() {
   const [judgeArrivalOrder, setJudgeArrivalOrder] = useState([]);
   const pollRef = useRef(null);
   const objDropRef = useRef(null);
+  const objInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const xhrRef = useRef(null);
   const notifiedRef = useRef(false);
@@ -1271,10 +1272,10 @@ export default function PreviewPanel() {
                   overflow: "hidden",
                   ...(objDropAbove ? { bottom: "calc(100% + 4px)" } : { top: "calc(100% + 4px)" }),
                 }}>
-                  {/* Filter input */}
+                  {/* Filter input — not autofocused; keyboard only appears when user taps here or the custom CTA */}
                   <div style={{ padding: "10px 13px", borderBottom: `1px solid ${B.border}` }}>
                     <input
-                      autoFocus
+                      ref={objInputRef}
                       value={objFilter}
                       onChange={e => setObjFilter(e.target.value)}
                       placeholder="Search or type custom..."
@@ -1287,7 +1288,7 @@ export default function PreviewPanel() {
                       <div
                         key={opt}
                         onMouseDown={e => e.preventDefault()}
-                        onClick={() => { setObjective(opt); setObjDropOpen(false); setObjFilter(""); }}
+                        onClick={() => { objInputRef.current?.blur(); setObjective(opt); setObjDropOpen(false); setObjFilter(""); }}
                         style={{
                           padding: "0 16px", minHeight: "44px", display: "flex", alignItems: "center",
                           fontSize: "14px", fontFamily: "Montserrat, sans-serif",
@@ -1303,11 +1304,11 @@ export default function PreviewPanel() {
                         {opt}
                       </div>
                     ))}
-                    {/* Accept custom typed value not in list */}
+                    {/* "Use: xyz" — appears only when user has typed a value not in the list */}
                     {objFilter.trim() && !OBJECTIVE_OPTIONS.some(o => o.toLowerCase() === objFilter.trim().toLowerCase()) && (
                       <div
                         onMouseDown={e => e.preventDefault()}
-                        onClick={() => { setObjective(objFilter.trim()); setObjDropOpen(false); setObjFilter(""); }}
+                        onClick={() => { objInputRef.current?.blur(); setObjective(objFilter.trim()); setObjDropOpen(false); setObjFilter(""); }}
                         style={{
                           padding: "0 16px", minHeight: "44px", display: "flex", alignItems: "center", gap: "6px",
                           fontSize: "14px", fontFamily: "Montserrat, sans-serif", color: B.brown, fontWeight: "600",
@@ -1318,6 +1319,22 @@ export default function PreviewPanel() {
                       >
                         <span style={{ fontSize: "11px", color: "#aaa", fontWeight: "400" }}>Use:</span>
                         "{objFilter.trim()}"
+                      </div>
+                    )}
+                    {/* "Type a custom objective" CTA — appears when not typing; focuses the search input to trigger keyboard */}
+                    {!objFilter.trim() && (
+                      <div
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => objInputRef.current?.focus()}
+                        style={{
+                          padding: "0 16px", minHeight: "44px", display: "flex", alignItems: "center", gap: "8px",
+                          fontSize: "13px", fontFamily: "Montserrat, sans-serif", color: "#bbb", fontWeight: "400",
+                          cursor: "pointer", borderTop: `1px solid ${B.border}`,
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.background = "#FAF7F5"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      >
+                        ✏️ Type a custom objective
                       </div>
                     )}
                   </div>
