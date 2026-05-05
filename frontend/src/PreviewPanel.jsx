@@ -173,12 +173,14 @@ const WAITING_MESSAGES = [
   { text: "PreviewPanel is tracking energy levels, editing rhythm, and on-screen moments across your entire video right now.", highlight: false },
   { text: "This is worth the wait. Your judges are watching the full video, not skimming it.", highlight: false },
   { text: "You can put your phone down. We'll notify you when the panel has reached its verdict.", highlight: true },
+  { text: "The Editor is hunting for your standout scene — looking for moments worth clipping.", highlight: false },
   { text: "Three independent AI reviewers. One video. Zero shortcuts. That's why it takes a few minutes.", highlight: false },
   { text: "Still working — deep video analysis takes time. Your results will be thorough.", highlight: false },
   { text: "Judges are identifying specific timestamps where your video peaks and drops — frame by frame.", highlight: false },
   { text: "Go check your email, grab a coffee. We'll ping you when the verdict is in.", highlight: true },
   { text: "Audio quality, lighting, pacing, hook strength — it's all being evaluated right now.", highlight: false },
   { text: "Most AI feedback takes seconds because it's shallow. This takes minutes because it's real.", highlight: true },
+  { text: "The Dreamer is crafting caption ideas — finding the words that make people stop and tap.", highlight: false },
   { text: "Your judges have watched more content than any human critic. They're applying that now.", highlight: false },
   { text: "You can leave this screen — the analysis runs in the background and we'll notify you.", highlight: true },
   { text: "Delivery, content, platform fit, timestamps — every dimension is being scored independently.", highlight: false },
@@ -404,14 +406,14 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
             {dims.map(({ key, meta, score }) => (
               <div key={key} style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "2px", width: "80px", flexShrink: 0, minWidth: 0 }}>
-                  <span style={{ fontSize: "11px", color: "#999", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meta.label}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "2px", minWidth: "90px", flexShrink: 0 }}>
+                  <span style={{ fontSize: "11px", color: "#999", lineHeight: 1, whiteSpace: "nowrap" }}>{meta.label}</span>
                   <button
                     onClick={e => handleInfoClick(e, key)}
                     style={{ background: "none", border: "none", cursor: "pointer", padding: "0 1px", color: "#ccc", fontSize: "10px", lineHeight: 1, flexShrink: 0, touchAction: "manipulation" }}
                   >ⓘ</button>
                 </div>
-                <div style={{ flex: 1, height: "6px", background: judge.softBg, borderRadius: "3px", overflow: "hidden" }}>
+                <div style={{ flex: 1, maxWidth: "40%", height: "6px", background: judge.softBg, borderRadius: "3px", overflow: "hidden" }}>
                   <div style={{
                     height: "100%", width: `${(score / 10) * 100}%`,
                     background: judge.color, opacity: 0.7, borderRadius: "3px",
@@ -1042,6 +1044,7 @@ export default function PreviewPanel() {
     setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
     setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
     notifiedRef.current = false; savedRef.current = false;
+    setObjective("");
   };
 
   // Issue #9: Restore from history
