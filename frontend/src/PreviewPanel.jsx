@@ -1252,7 +1252,7 @@ export default function PreviewPanel() {
                 {objective && (
                   <span
                     onClick={e => { e.stopPropagation(); setObjective(""); setObjDropOpen(false); }}
-                    style={{ fontSize: "18px", color: "#bbb", lineHeight: 1, cursor: "pointer", padding: "2px 4px", flexShrink: 0 }}
+                    style={{ fontSize: "18px", color: "#bbb", lineHeight: 1, cursor: "pointer", padding: "4px 4px", flexShrink: 0, marginRight: "4px", touchAction: "manipulation" }}
                   >×</span>
                 )}
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, transform: objDropOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
@@ -1491,11 +1491,11 @@ export default function PreviewPanel() {
             {/* Platform + file tags (only when finished) */}
             {isFinished && (
               <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
-                <div style={{ padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", color: plat.color, flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", lineHeight: "1.2", color: plat.color, flexShrink: 0 }}>
                   {plat.icon} {plat.label}
                 </div>
                 {objective && (
-                  <div style={{ padding: "5px 13px", background: B.lightBrown, border: `1.5px solid ${B.beige}`, borderRadius: "99px", fontSize: "12px", fontWeight: "600", color: B.action, flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", padding: "5px 13px", background: B.lightBrown, border: `1.5px solid ${B.beige}`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", lineHeight: "1.2", color: B.action, flexShrink: 0 }}>
                     🎯 {objective}
                   </div>
                 )}
