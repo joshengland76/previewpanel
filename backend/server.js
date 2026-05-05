@@ -236,6 +236,23 @@ async function initDb() {
     ]) {
       await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col} NUMERIC`);
     }
+    // Ensure numeric columns aren't stranded as INTEGER from earlier deploys
+    for (const col of [
+      "avg_score",
+      "critic_hook_strength", "critic_completion_likelihood", "critic_share_save_worthiness",
+      "trendsetter_hook_strength", "trendsetter_completion_likelihood", "trendsetter_share_save_worthiness",
+      "dreamer_hook_strength", "dreamer_completion_likelihood", "dreamer_share_save_worthiness",
+      "tiktok_rewatch_potential", "tiktok_seo_strength",
+      "instagram_dm_share_potential", "instagram_originality",
+      "youtube_watch_time_potential", "youtube_thumbnail_hook",
+    ]) {
+      await pgPool.query(`
+        DO $$ BEGIN
+          ALTER TABLE submissions ALTER COLUMN ${col} TYPE NUMERIC USING ${col}::NUMERIC;
+        EXCEPTION WHEN others THEN NULL;
+        END $$
+      `);
+    }
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
@@ -296,25 +313,28 @@ async function loadSubmissionLog() {
   } catch { return []; }
 }
 
+// Safe integer coercion — rounds floats, passes null through
+function toInt(val) { return val == null ? null : Math.round(Number(val)); }
+
 async function saveSubmission(entry) {
   if (pgPool) {
     const d = entry.dimensions || {};
     const baseValues = [
       entry.jobId, entry.ip, entry.platform, entry.fileSizeMB, entry.videoDurationSecs, entry.status,
-      entry.timings.totalMs, entry.timings.conversionMs, entry.timings.uploadMs, entry.timings.browserUploadMs ?? null,
-      entry.timings.judges.critic ?? null, entry.timings.judges.cool ?? null, entry.timings.judges.dreamer ?? null,
+      toInt(entry.timings.totalMs), toInt(entry.timings.conversionMs), toInt(entry.timings.uploadMs), toInt(entry.timings.browserUploadMs),
+      toInt(entry.timings.judges.critic), toInt(entry.timings.judges.cool), toInt(entry.timings.judges.dreamer),
       entry.scores.critic ?? null, entry.scores.cool ?? null, entry.scores.dreamer ?? null,
       entry.avgScore, entry.fileName ?? null,
-      entry.timings.taskCreationMs ?? null, entry.timings.queueWaitMs ?? null, entry.timings.tlQueueMs ?? null,
+      toInt(entry.timings.taskCreationMs), toInt(entry.timings.queueWaitMs), toInt(entry.timings.tlQueueMs),
     ];
     const fullValues = [
       ...baseValues,
-      d.critic_hook_strength ?? null, d.critic_completion_likelihood ?? null, d.critic_share_save_worthiness ?? null,
-      d.trendsetter_hook_strength ?? null, d.trendsetter_completion_likelihood ?? null, d.trendsetter_share_save_worthiness ?? null,
-      d.dreamer_hook_strength ?? null, d.dreamer_completion_likelihood ?? null, d.dreamer_share_save_worthiness ?? null,
-      d.tiktok_rewatch_potential ?? null, d.tiktok_seo_strength ?? null,
-      d.instagram_dm_share_potential ?? null, d.instagram_originality ?? null,
-      d.youtube_watch_time_potential ?? null, d.youtube_thumbnail_hook ?? null,
+      toInt(d.critic_hook_strength), toInt(d.critic_completion_likelihood), toInt(d.critic_share_save_worthiness),
+      toInt(d.trendsetter_hook_strength), toInt(d.trendsetter_completion_likelihood), toInt(d.trendsetter_share_save_worthiness),
+      toInt(d.dreamer_hook_strength), toInt(d.dreamer_completion_likelihood), toInt(d.dreamer_share_save_worthiness),
+      toInt(d.tiktok_rewatch_potential), toInt(d.tiktok_seo_strength),
+      toInt(d.instagram_dm_share_potential), toInt(d.instagram_originality),
+      toInt(d.youtube_watch_time_potential), toInt(d.youtube_thumbnail_hook),
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, dreamer_hook=${d.dreamer_hook_strength ?? "null"}`);
