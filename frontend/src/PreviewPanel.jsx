@@ -315,6 +315,11 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
 
   function handleInfoClick(e, dimKey) {
     e.stopPropagation();
+    if (tooltipDim === dimKey) {
+      setTooltipDim(null);
+      setTooltipPos(null);
+      return;
+    }
     if (window.innerWidth < 640) {
       setTooltipPos(null); // bottom sheet on mobile
     } else {
@@ -389,6 +394,36 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
         </div>
       )}
 
+      {/* Performance Signals — always visible when has data, above expand button */}
+      {has && dims.length > 0 && (
+        <div style={{ padding: "8px 18px 6px" }}>
+          <div style={{ height: "1px", background: judge.softBg, marginBottom: "6px" }} />
+          <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "5px", fontWeight: "700" }}>
+            Performance Signals
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            {dims.map(({ key, meta, score }) => (
+              <div key={key} style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "16px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "2px", width: "80px", flexShrink: 0, minWidth: 0 }}>
+                  <span style={{ fontSize: "11px", color: "#999", lineHeight: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meta.label}</span>
+                  <button
+                    onClick={e => handleInfoClick(e, key)}
+                    style={{ background: "none", border: "none", cursor: "pointer", padding: "0 1px", color: "#ccc", fontSize: "10px", lineHeight: 1, flexShrink: 0, touchAction: "manipulation" }}
+                  >ⓘ</button>
+                </div>
+                <div style={{ flex: 1, height: "6px", background: judge.softBg, borderRadius: "3px", overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%", width: `${(score / 10) * 100}%`,
+                    background: judge.color, opacity: 0.7, borderRadius: "3px",
+                  }} />
+                </div>
+                <span style={{ fontSize: "11px", fontWeight: "700", color: judge.color, width: "20px", textAlign: "right", flexShrink: 0 }}>{score}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {has && open && (
         <div style={{ padding: "16px 18px 20px", animation: "pp-fade 0.22s ease" }}>
           {(result.delivery || result.content) && (
@@ -408,36 +443,6 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
             <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
               <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px", fontWeight: "700" }}>Platform Fit</div>
               <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.platformFit}</div>
-            </div>
-          )}
-
-          {/* Performance Signals */}
-          {dims.length > 0 && (
-            <div style={{ marginBottom: "16px" }}>
-              <div style={{ height: "1px", background: judge.softBg, marginBottom: "12px" }} />
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "10px", fontWeight: "700" }}>
-                Performance Signals
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {dims.map(({ key, meta, score }) => (
-                  <div key={key} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "3px", width: "88px", flexShrink: 0 }}>
-                      <span style={{ fontSize: "11px", color: "#999", lineHeight: 1 }}>{meta.label}</span>
-                      <button
-                        onClick={e => handleInfoClick(e, key)}
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "0 2px", color: "#ccc", fontSize: "10px", lineHeight: 1, flexShrink: 0 }}
-                      >ⓘ</button>
-                    </div>
-                    <div style={{ flex: 1, height: "8px", background: judge.softBg, borderRadius: "4px", overflow: "hidden" }}>
-                      <div style={{
-                        height: "100%", width: `${(score / 10) * 100}%`,
-                        background: judge.color, opacity: 0.7, borderRadius: "4px",
-                      }} />
-                    </div>
-                    <span style={{ fontSize: "11px", fontWeight: "700", color: judge.color, width: "20px", textAlign: "right", flexShrink: 0 }}>{score}</span>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
 
@@ -578,6 +583,15 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
             maxHeight: "65vh", overflowY: "auto",
           }}
         >
+          <button
+            onClick={() => { setTooltipDim(null); setTooltipPos(null); }}
+            style={{
+              position: "absolute", top: "10px", right: "10px",
+              background: "none", border: "none", cursor: "pointer",
+              color: "#aaa", fontSize: "20px", lineHeight: 1, padding: "4px 6px",
+              touchAction: "manipulation",
+            }}
+          >×</button>
           {!tooltipPos && (
             <div style={{ width: "36px", height: "4px", background: B.border, borderRadius: "2px", margin: "0 auto 18px" }} />
           )}
