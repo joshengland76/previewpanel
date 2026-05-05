@@ -21,7 +21,25 @@
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {
-          navigator.serviceWorker.register("/sw.js");
+          navigator.serviceWorker.register("/sw.js").then(reg => {
+            // If a new worker is already waiting, activate it immediately
+            if (reg.waiting) {
+              reg.waiting.postMessage("SKIP_WAITING");
+              navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload());
+            }
+            // Watch for a new worker installing after page load
+            reg.addEventListener("updatefound", () => {
+              const newWorker = reg.installing;
+              if (!newWorker) return;
+              newWorker.addEventListener("statechange", () => {
+                if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                  // New version ready — activate immediately without waiting for tab close
+                  newWorker.postMessage("SKIP_WAITING");
+                  navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload());
+                }
+              });
+            });
+          });
         });
       }
     </script>

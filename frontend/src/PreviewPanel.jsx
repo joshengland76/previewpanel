@@ -406,7 +406,7 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
           <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
             {dims.map(({ key, meta, score }) => (
               <div key={key} style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "2px", minWidth: "90px", flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "2px", flex: "0 0 90px", overflow: "hidden" }}>
                   <span style={{ fontSize: "11px", color: "#999", lineHeight: 1, whiteSpace: "nowrap" }}>{meta.label}</span>
                   <button
                     onClick={e => handleInfoClick(e, key)}
@@ -1252,15 +1252,16 @@ export default function PreviewPanel() {
                 <span style={{ flex: 1, fontSize: "14px", fontFamily: "Montserrat, sans-serif", color: objective ? B.body : "#bbb", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {objective || "Select a content category (optional)"}
                 </span>
-                {objective && (
+                {objective ? (
                   <span
                     onClick={e => { e.stopPropagation(); setObjective(""); setObjDropOpen(false); }}
-                    style={{ fontSize: "18px", color: "#bbb", lineHeight: 1, cursor: "pointer", padding: "4px 4px", flexShrink: 0, marginRight: "4px", touchAction: "manipulation" }}
+                    style={{ fontSize: "16px", color: "#aaa", lineHeight: 1, cursor: "pointer", padding: "4px", flexShrink: 0, touchAction: "manipulation", display: "flex", alignItems: "center", justifyContent: "center", width: "20px", height: "20px" }}
                   >×</span>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, transform: objDropOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
+                    <path d="M3 5.5L8 10.5L13 5.5" stroke={B.brown} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
                 )}
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0, transform: objDropOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.15s" }}>
-                  <path d="M3 5.5L8 10.5L13 5.5" stroke={B.brown} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
               </div>
               {/* Dropdown panel */}
               {objDropOpen && (
