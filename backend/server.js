@@ -236,6 +236,10 @@ async function initDb() {
     ]) {
       await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col} NUMERIC`);
     }
+    // Remove legacy cool_* columns left over from before the cool→trendsetter rename
+    for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
+      await pgPool.query(`ALTER TABLE submissions DROP COLUMN IF EXISTS cool_${dim}`);
+    }
     // Ensure numeric columns aren't stranded as INTEGER from earlier deploys
     for (const col of [
       "avg_score",
@@ -1376,6 +1380,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
       dimensions[`${prefix}_${key}`] = parseFloat((platDimSums[key] / platDimCounts[key]).toFixed(1));
     }
   }
+  console.log(`[${jobId}] [db] Platform dimensions — platform: ${job.platform ?? "unknown"}, tiktok_rewatch: ${dimensions.tiktok_rewatch_potential ?? "null"}, tiktok_seo: ${dimensions.tiktok_seo_strength ?? "null"}, instagram_dm_share: ${dimensions.instagram_dm_share_potential ?? "null"}, instagram_originality: ${dimensions.instagram_originality ?? "null"}, youtube_watch_time: ${dimensions.youtube_watch_time_potential ?? "null"}, youtube_thumbnail: ${dimensions.youtube_thumbnail_hook ?? "null"}`);
   if (Object.keys(dimensions).length > 0) {
     console.log(`[${jobId}] [db] Saving dimensions — critic_hook=${dimensions.critic_hook_strength ?? "—"}, critic_completion=${dimensions.critic_completion_likelihood ?? "—"}, critic_share=${dimensions.critic_share_save_worthiness ?? "—"}, trendsetter_hook=${dimensions.trendsetter_hook_strength ?? "—"}, trendsetter_completion=${dimensions.trendsetter_completion_likelihood ?? "—"}, dreamer_hook=${dimensions.dreamer_hook_strength ?? "—"}, dreamer_completion=${dimensions.dreamer_completion_likelihood ?? "—"}`);
   } else {
@@ -1495,13 +1500,16 @@ async function pollAnalyzeTasks() {
         // Log task status transitions — specifically queued → processing
         const prevStatus = taskStatusCache[row.task_id];
         if (prevStatus !== task.status) {
-          if (prevStatus === "queued" && task.status === "processing") {
-            console.log(`[poller] Task ${row.task_id} (${row.judge_id}, job ${row.job_id}): queued → processing`);
+          // Capture tl_queue_ms on queued→processing, or on first-seen-as-processing (after restart)
+          if (task.status === "processing" && (prevStatus === "queued" || prevStatus === undefined)) {
+            const transition = prevStatus === undefined ? "first-seen→processing" : "queued→processing";
+            console.log(`[poller] Task ${row.task_id} (${row.judge_id}, job ${row.job_id}): ${transition}`);
             const jobForQueue = jobs[row.job_id];
-            if (jobForQueue && jobForQueue.tasksCreatedAt && !jobForQueue.timings.tlQueueMs) {
-              const tlQueueMs = Date.now() - jobForQueue.tasksCreatedAt;
+            if (jobForQueue && !jobForQueue.timings.tlQueueMs) {
+              const baseline = jobForQueue.tasksCreatedAt || new Date(row.created_at).getTime();
+              const tlQueueMs = Date.now() - baseline;
               jobForQueue.timings.tlQueueMs = tlQueueMs;
-              console.log(`[poller] TwelveLabs queue time for job ${row.job_id}: ${tlQueueMs}ms`);
+              console.log(`[poller] TwelveLabs queue time for job ${row.job_id}: ${tlQueueMs}ms (baseline: ${jobForQueue.tasksCreatedAt ? "tasksCreatedAt" : "task created_at"})`);
             }
           }
           taskStatusCache[row.task_id] = task.status;
