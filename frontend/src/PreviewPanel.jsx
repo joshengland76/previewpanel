@@ -169,7 +169,7 @@ const WAITING_MESSAGES = [
   { text: "Your judges are analyzing visuals, audio, pacing, and delivery simultaneously — the same way a real viewer experiences it.", highlight: false },
   { text: "Most AI video tools convert speech to text and analyze that. PreviewPanel sees what your audience sees.", highlight: true },
   { text: "Feel free to switch apps — you'll get a notification the moment your results are ready.", highlight: true },
-  { text: "Hashtag suggestions coming…", highlight: false },
+  { text: "The Trendsetter is sourcing your hashtags — finding the tags that get you discovered.", highlight: false },
   { text: "PreviewPanel is tracking energy levels, editing rhythm, and on-screen moments across your entire video right now.", highlight: false },
   { text: "This is worth the wait. Your judges are watching the full video, not skimming it.", highlight: false },
   { text: "You can put your phone down. We'll notify you when the panel has reached its verdict.", highlight: true },

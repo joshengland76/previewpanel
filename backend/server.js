@@ -569,7 +569,7 @@ function buildBottomSection(judge, platform) {
   }
   // dreamer — caption suggestions
   return {
-    instruction: `\nCAPTIONS — Suggest 2-3 post caption options — the text the creator would write when posting this video to their platform. Each should be distinct in tone: Emotional (speaks to feeling and human connection), Conversational (sounds like how the creator naturally talks), Curiosity (makes someone want to click, comment, or share). Each caption should be under 150 characters and feel native to the platform. These are not on-screen text overlays — they are the post description that accompanies the video when published.`,
+    instruction: `\nCAPTIONS — Suggest 2-3 post caption options — the text the creator would write when posting this video to their platform. Each should be distinct in tone: Emotional (speaks to feeling and human connection), Conversational (sounds like how the creator naturally talks), Curiosity (makes someone want to click, comment, or share). Each caption should be under 150 characters and feel native to the platform. These are not on-screen text overlays — they are the post description that accompanies the video when published. Where it feels natural and authentic to the caption tone, include 1-2 emojis. Emojis should feel organic — not forced or decorative. They work best in the Conversational and Emotional tones where they add warmth or emphasis. The Curiosity tone can use emojis sparingly if they add intrigue. Never use emojis just to fill space — only include them when they genuinely strengthen the caption.`,
     format: `,\n  "captions": [{ "tone": "Emotional", "text": "<caption text>" }, { "tone": "Conversational", "text": "<caption text>" }, { "tone": "Curiosity", "text": "<caption text>" }]`,
   };
 }
