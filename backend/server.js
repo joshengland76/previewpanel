@@ -173,10 +173,10 @@ async function initDb() {
         upload_ms     INTEGER,
         critic_ms     INTEGER,
         trendsetter_ms INTEGER,
-        dreamer_ms    INTEGER,
+        connector_ms  INTEGER,
         critic_score  NUMERIC,
         trendsetter_score NUMERIC,
-        dreamer_score NUMERIC,
+        connector_score NUMERIC,
         avg_score     NUMERIC
       )
     `);
@@ -208,10 +208,37 @@ async function initDb() {
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
     // Dimension score columns — universal (per judge, using display names)
-    for (const judge of ["critic", "trendsetter", "dreamer"]) {
+    for (const judge of ["critic", "trendsetter", "connector"]) {
       for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
         await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_${dim} NUMERIC`);
       }
+    }
+    // Rename dreamer_* columns to connector_* (judge rename: The Dreamer → The Connector)
+    for (const col of ["ms", "score"]) {
+      await pgPool.query(`
+        DO $$ BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='submissions' AND column_name='dreamer_${col}')
+          AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_name='submissions' AND column_name='connector_${col}') THEN
+            ALTER TABLE submissions RENAME COLUMN dreamer_${col} TO connector_${col};
+          END IF;
+        EXCEPTION WHEN others THEN NULL;
+        END $$
+      `);
+    }
+    for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
+      await pgPool.query(`
+        DO $$ BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_name='submissions' AND column_name='dreamer_${dim}')
+          AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_name='submissions' AND column_name='connector_${dim}') THEN
+            ALTER TABLE submissions RENAME COLUMN dreamer_${dim} TO connector_${dim};
+          END IF;
+        EXCEPTION WHEN others THEN NULL;
+        END $$
+      `);
     }
     // Rename legacy cool_* columns to trendsetter_* if they exist and target doesn't
     for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
@@ -245,7 +272,7 @@ async function initDb() {
       "avg_score",
       "critic_hook_strength", "critic_completion_likelihood", "critic_share_save_worthiness",
       "trendsetter_hook_strength", "trendsetter_completion_likelihood", "trendsetter_share_save_worthiness",
-      "dreamer_hook_strength", "dreamer_completion_likelihood", "dreamer_share_save_worthiness",
+      "connector_hook_strength", "connector_completion_likelihood", "connector_share_save_worthiness",
       "tiktok_rewatch_potential", "tiktok_seo_strength",
       "instagram_dm_share_potential", "instagram_originality",
       "youtube_watch_time_potential", "youtube_thumbnail_hook",
@@ -271,8 +298,8 @@ async function loadSubmissionLog() {
       const { rows } = await pgPool.query(`
         SELECT job_id, created_at, ip, platform, file_size_mb, duration_secs, status,
                total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
-               critic_ms, trendsetter_ms, dreamer_ms,
-               critic_score, trendsetter_score, dreamer_score, avg_score,
+               critic_ms, trendsetter_ms, connector_ms,
+               critic_score, trendsetter_score, connector_score, avg_score,
                file_name, task_creation_ms, queue_wait_ms, tl_queue_ms
         FROM submissions ORDER BY created_at DESC LIMIT 500
       `);
@@ -296,13 +323,13 @@ async function loadSubmissionLog() {
           judges: {
             critic: r.critic_ms,
             cool: r.trendsetter_ms,
-            dreamer: r.dreamer_ms,
+            connector: r.connector_ms,
           },
         },
         scores: {
           ...(r.critic_score != null ? { critic: parseFloat(r.critic_score) } : {}),
           ...(r.trendsetter_score != null ? { cool: parseFloat(r.trendsetter_score) } : {}),
-          ...(r.dreamer_score != null ? { dreamer: parseFloat(r.dreamer_score) } : {}),
+          ...(r.connector_score != null ? { connector: parseFloat(r.connector_score) } : {}),
         },
         avgScore: r.avg_score != null ? parseFloat(r.avg_score) : null,
       }));
@@ -326,8 +353,8 @@ async function saveSubmission(entry) {
     const baseValues = [
       entry.jobId, entry.ip, entry.platform, entry.fileSizeMB, entry.videoDurationSecs, entry.status,
       toInt(entry.timings.totalMs), toInt(entry.timings.conversionMs), toInt(entry.timings.uploadMs), toInt(entry.timings.browserUploadMs),
-      toInt(entry.timings.judges.critic), toInt(entry.timings.judges.cool), toInt(entry.timings.judges.dreamer),
-      entry.scores.critic ?? null, entry.scores.cool ?? null, entry.scores.dreamer ?? null,
+      toInt(entry.timings.judges.critic), toInt(entry.timings.judges.cool), toInt(entry.timings.judges.connector),
+      entry.scores.critic ?? null, entry.scores.cool ?? null, entry.scores.connector ?? null,
       entry.avgScore, entry.fileName ?? null,
       toInt(entry.timings.taskCreationMs), toInt(entry.timings.queueWaitMs), toInt(entry.timings.tlQueueMs),
     ];
@@ -335,24 +362,24 @@ async function saveSubmission(entry) {
       ...baseValues,
       toInt(d.critic_hook_strength), toInt(d.critic_completion_likelihood), toInt(d.critic_share_save_worthiness),
       toInt(d.trendsetter_hook_strength), toInt(d.trendsetter_completion_likelihood), toInt(d.trendsetter_share_save_worthiness),
-      toInt(d.dreamer_hook_strength), toInt(d.dreamer_completion_likelihood), toInt(d.dreamer_share_save_worthiness),
+      toInt(d.connector_hook_strength), toInt(d.connector_completion_likelihood), toInt(d.connector_share_save_worthiness),
       toInt(d.tiktok_rewatch_potential), toInt(d.tiktok_seo_strength),
       toInt(d.instagram_dm_share_potential), toInt(d.instagram_originality),
       toInt(d.youtube_watch_time_potential), toInt(d.youtube_thumbnail_hook),
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
-    console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, dreamer_hook=${d.dreamer_hook_strength ?? "null"}`);
+    console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
     try {
       await pgPool.query(`
         INSERT INTO submissions
           (job_id, ip, platform, file_size_mb, duration_secs, status,
            total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
-           critic_ms, trendsetter_ms, dreamer_ms,
-           critic_score, trendsetter_score, dreamer_score, avg_score,
+           critic_ms, trendsetter_ms, connector_ms,
+           critic_score, trendsetter_score, connector_score, avg_score,
            file_name, task_creation_ms, queue_wait_ms, tl_queue_ms,
            critic_hook_strength, critic_completion_likelihood, critic_share_save_worthiness,
            trendsetter_hook_strength, trendsetter_completion_likelihood, trendsetter_share_save_worthiness,
-           dreamer_hook_strength, dreamer_completion_likelihood, dreamer_share_save_worthiness,
+           connector_hook_strength, connector_completion_likelihood, connector_share_save_worthiness,
            tiktok_rewatch_potential, tiktok_seo_strength,
            instagram_dm_share_potential, instagram_originality,
            youtube_watch_time_potential, youtube_thumbnail_hook)
@@ -369,8 +396,8 @@ async function saveSubmission(entry) {
             INSERT INTO submissions
               (job_id, ip, platform, file_size_mb, duration_secs, status,
                total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
-               critic_ms, trendsetter_ms, dreamer_ms,
-               critic_score, trendsetter_score, dreamer_score, avg_score,
+               critic_ms, trendsetter_ms, connector_ms,
+               critic_score, trendsetter_score, connector_score, avg_score,
                file_name, task_creation_ms, queue_wait_ms, tl_queue_ms)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
           `, baseValues);
@@ -514,23 +541,16 @@ const JUDGES = [
       "Classify each from YOUR lens: \"peak\" = scroll-stopping or share-worthy, \"drop\" = scroll-away risk or format miss, \"note\" = a platform signal worth flagging either way.",
   },
   {
-    id: "dreamer",
-    name: "The Dreamer",
+    id: "connector",
+    name: "The Connector",
     personality:
-      "You are The Dreamer — emotionally intelligent, audience-empathetic, and optimistic but honest. " +
-      "Your primary question is always: how does this make me feel? " +
-      "You evaluate emotional resonance, authenticity, storytelling quality, and whether " +
-      "the creator's personality and warmth come through in their delivery. " +
-      "You frame all feedback as 'compared to what works best for creators like this one' — " +
-      "grounded in realistic improvement, not unattainable standards. " +
-      "When genuine human connection or authenticity comes through, you notice it warmly and specifically — you observe the emotional detail that others miss. " +
-      "When genuine emotion or connection comes through, describe the specific moment and why it lands — the exact gesture, pause, or detail that creates the feeling. Never use generic warmth phrases. Be specific to what you actually observed in this video.",
+      "You are The Connector — emotionally perceptive, human-first, and attuned to the moments in a video that create genuine personal resonance. Your core question is not whether this content will go viral, but whether it creates a moment of real human recognition — the feeling that makes someone think of a specific person in their life and need to share it with them. You watch video the way a real person watches it, not as a strategist tracking signals but as a human being noticing what lands and what doesn't. You are looking for: moments of authentic personality that make a viewer feel they know the creator; emotional beats specific enough to remind someone of their own life or relationships; vulnerability, humor, or surprise that breaks through the scroll and feels genuinely personal rather than performed; and the quiet details that create intimacy — a real laugh, an unscripted reaction, a moment of honest feeling. You understand that human resonance is what drives the deepest engagement signals — content gets passed between people not because it is trending but because it touched something true. When you find a moment of genuine connection, you describe it specifically and warmly — naming the exact detail that creates the feeling and why it matters for how real people will experience this video. Your positives celebrate authentic human moments. Your suggestions help the creator find or amplify the moments of genuine connection that are already there, or identify what is missing that would make a viewer feel seen.",
     momentsInstruction:
-      "MOMENTS — identify the timestamps that genuinely matter TO YOU as The Dreamer.\n" +
-      "Look specifically for: moments of authentic human connection, emotional beats, storytelling turns, a look or pause that feels real, a moment where the creator's personality genuinely comes through, or a moment that loses the emotional thread.\n" +
-      "Quality over quantity — 2 truly felt moments beat 5 surface observations. Only flag timestamps that actually moved you or struck you as emotionally significant.\n" +
+      "MOMENTS — identify the timestamps that genuinely matter TO YOU as The Connector.\n" +
+      "Look specifically for: moments of authentic personality that make the viewer feel they know the creator, emotional beats specific enough to remind someone of their own life, a real laugh or unscripted reaction, a moment of vulnerability or honest feeling, a quiet detail that creates intimacy, or a moment that breaks the emotional spell and feels performed or distant.\n" +
+      "Quality over quantity — 2 truly felt moments beat 5 surface observations. Only flag timestamps that created real human recognition or its absence.\n" +
       "For each moment: use only timestamps you actually observed (no estimates, no evenly-spaced intervals).\n" +
-      "Classify each from YOUR lens: \"peak\" = emotionally resonant, authentic, or genuinely connecting with the audience, \"drop\" = a moment that breaks the emotional spell or loses warmth, \"note\" = a storytelling choice worth noting.",
+      "Classify each from YOUR lens: \"peak\" = genuine human connection, authentic personality, or a moment someone would DM to a specific person, \"drop\" = a moment that feels performed, distant, or breaks emotional intimacy, \"note\" = a choice that affects how personally the video lands.",
   },
 ];
 
@@ -550,7 +570,7 @@ const PLATFORM_FOCUS = {
   },
 };
 
-// ── Per-judge bottom section: clip (Editor) / hashtags (Trendsetter) / captions (Dreamer) ──
+// ── Per-judge bottom section: clip (Editor) / hashtags (Trendsetter) / captions (Connector) ──
 function buildBottomSection(judge, platform) {
   if (judge.id === "critic") {
     return {
@@ -567,9 +587,9 @@ function buildBottomSection(judge, platform) {
     }
     return { instruction: "", format: "" };
   }
-  // dreamer — caption suggestions
+  // connector — caption suggestions
   return {
-    instruction: `\nCAPTIONS — Suggest 2-3 post caption options — the text the creator would write when posting this video to their platform. Each should be distinct in tone: Emotional (speaks to feeling and human connection), Conversational (sounds like how the creator naturally talks), Curiosity (makes someone want to click, comment, or share). Each caption should be under 150 characters and feel native to the platform. These are not on-screen text overlays — they are the post description that accompanies the video when published. Where it feels natural and authentic to the caption tone, include 1-2 emojis. Emojis should feel organic — not forced or decorative. They work best in the Conversational and Emotional tones where they add warmth or emphasis. The Curiosity tone can use emojis sparingly if they add intrigue. Never use emojis just to fill space — only include them when they genuinely strengthen the caption.`,
+    instruction: `\nCAPTIONS — Suggest 2-3 post caption options that feel genuinely human and personally resonant — the kind of caption that makes a specific person feel seen. Each should be distinct in tone: Emotional (speaks directly to a feeling or human truth), Conversational (sounds like how the creator naturally talks to a friend), Curiosity (creates a personal hook that makes someone think "wait, that's me"). Each caption under 150 characters and feel native to the platform. These are post captions, not on-screen text. Include 1-2 emojis where they feel natural and warm — particularly in Emotional and Conversational tones. Emojis should feel organic — not forced or decorative. Never use emojis just to fill space — only include them when they genuinely strengthen the caption.`,
     format: `,\n  "captions": [{ "tone": "Emotional", "text": "<caption text>" }, { "tone": "Conversational", "text": "<caption text>" }, { "tone": "Curiosity", "text": "<caption text>" }]`,
   };
 }
@@ -611,7 +631,7 @@ function buildTLPrompt(judge, platform, objective, videoDuration) {
   } else if (judge.id === "cool") {
     dimensionFeedback = `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must explicitly address: (1) the hook against platform norms — does it meet the bar for this platform's scroll speed? (2) completion signals — does the pacing match what performs on this platform (TikTok: tight 5-8s blocks; Instagram: strong story arc under 90s; YouTube: compelling value delivery over 2+ minutes)? (3) the share/save trigger — is there a clear moment that would make someone hit save or DM it? Name the specific moment if it exists, or suggest what would create one. Reference specific platform algorithm factors when relevant — e.g. TikTok SEO keywords, Instagram DM share signals, YouTube watch time.`;
   } else {
-    dimensionFeedback = `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must address: (1) emotional hook — does the first 3 seconds create an emotional reason to keep watching, beyond just information? (2) the moment someone would share — emotional content gets DM-shared when it makes someone think of another person. Is there a moment of genuine connection, humor, vulnerability, or surprise that would trigger that? (3) completion pull — does the emotional arc make viewers want to see how it ends? Name the specific emotional beats that help or hurt completion.`;
+    dimensionFeedback = `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must address: (1) Human hook — does the first 3 seconds create a moment of genuine personal recognition or emotional curiosity, beyond just information or trend? Name what works or what is missing. (2) The recognition moment — is there a specific moment in this video that would make a viewer think of someone they know and want to share it? Name that moment exactly if it exists, or suggest what edit would create it. This is different from virality — it is the moment of "oh my god, [name] needs to see this." (3) Authenticity read — does the creator's genuine personality come through, or does the video feel performed and distant? Be specific about the moments that feel real versus produced. (4) Emotional arc — does the video create a feeling that builds and pays off, or does it start and end at the same emotional register with no movement?`;
   }
 
   // Objective performance lens (conditional)
@@ -1052,7 +1072,7 @@ app.post("/api/analyze", (req, res, next) => {
 
     const selectedJudgeIds = judgesParam
       ? JSON.parse(judgesParam)
-      : ["critic", "cool", "dreamer"];
+      : ["critic", "cool", "connector"];
     const selectedJudges = JUDGES.filter((j) => selectedJudgeIds.includes(j.id));
 
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1382,7 +1402,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   }
   console.log(`[${jobId}] [db] Platform dimensions — platform: ${job.platform ?? "unknown"}, tiktok_rewatch: ${dimensions.tiktok_rewatch_potential ?? "null"}, tiktok_seo: ${dimensions.tiktok_seo_strength ?? "null"}, instagram_dm_share: ${dimensions.instagram_dm_share_potential ?? "null"}, instagram_originality: ${dimensions.instagram_originality ?? "null"}, youtube_watch_time: ${dimensions.youtube_watch_time_potential ?? "null"}, youtube_thumbnail: ${dimensions.youtube_thumbnail_hook ?? "null"}`);
   if (Object.keys(dimensions).length > 0) {
-    console.log(`[${jobId}] [db] Saving dimensions — critic_hook=${dimensions.critic_hook_strength ?? "—"}, critic_completion=${dimensions.critic_completion_likelihood ?? "—"}, critic_share=${dimensions.critic_share_save_worthiness ?? "—"}, trendsetter_hook=${dimensions.trendsetter_hook_strength ?? "—"}, trendsetter_completion=${dimensions.trendsetter_completion_likelihood ?? "—"}, dreamer_hook=${dimensions.dreamer_hook_strength ?? "—"}, dreamer_completion=${dimensions.dreamer_completion_likelihood ?? "—"}`);
+    console.log(`[${jobId}] [db] Saving dimensions — critic_hook=${dimensions.critic_hook_strength ?? "—"}, critic_completion=${dimensions.critic_completion_likelihood ?? "—"}, critic_share=${dimensions.critic_share_save_worthiness ?? "—"}, trendsetter_hook=${dimensions.trendsetter_hook_strength ?? "—"}, trendsetter_completion=${dimensions.trendsetter_completion_likelihood ?? "—"}, connector_hook=${dimensions.connector_hook_strength ?? "—"}, connector_completion=${dimensions.connector_completion_likelihood ?? "—"}`);
   } else {
     console.log(`[${jobId}] [db] No dimensions found in judge results — dimensions object will be empty`);
   }
@@ -1646,7 +1666,7 @@ app.get("/admin/logs", (req, res) => {
   const statusColor = s => s === "done" ? "#2E7D32" : s === "partial" ? "#E65100" : s === "timeout" ? "#E65100" : s.startsWith("rejected_") ? "#795548" : "#C62828";
 
   const rows = submissionLog.map(e => {
-    const judgeCells = ["critic", "cool", "dreamer"].map(id => {
+    const judgeCells = ["critic", "cool", "connector"].map(id => {
       const score = e.scores[id];
       const t = e.timings.judges[id];
       return `<td style="text-align:center;white-space:nowrap">${score != null ? `<strong>${score}</strong>` : "—"}${t != null ? `<br><span style="color:#bbb;font-size:10px">${fmt(t)}</span>` : ""}</td>`;

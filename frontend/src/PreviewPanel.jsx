@@ -25,8 +25,8 @@ const JUDGES = [
   { id: "cool", name: "The Trendsetter", color: "#546E7A", softBg: "#ECEFF1",
     tagline: "Platform-native, trend-aware, detached.", scoreLabel: "The Trendsetter's Take",
     avatar: "/owl-trendsetter.png?v=3" },
-  { id: "dreamer", name: "The Dreamer", color: "#8D6E63", softBg: "#FBF8F7",
-    tagline: "Emotionally intelligent. Asks: how does this feel?", scoreLabel: "The Dreamer's Feeling",
+  { id: "connector", name: "The Connector", color: "#8D6E63", softBg: "#FBF8F7",
+    tagline: "Human-first. Finds the moments that make people share.", scoreLabel: "The Connector's Take",
     avatar: "/owl-dreamer.png?v=3" },
 ];
 
@@ -180,7 +180,7 @@ const WAITING_MESSAGES = [
   { text: "Go check your email, grab a coffee. We'll ping you when the verdict is in.", highlight: true },
   { text: "Audio quality, lighting, pacing, hook strength — it's all being evaluated right now.", highlight: false },
   { text: "Most AI feedback takes seconds because it's shallow. This takes minutes because it's real.", highlight: true },
-  { text: "The Dreamer is crafting caption ideas — finding the words that make people stop and tap.", highlight: false },
+  { text: "The Connector is finding your human moment — crafting captions that make people feel seen.", highlight: false },
   { text: "Your judges have watched more content than any human critic. They're applying that now.", highlight: false },
   { text: "You can leave this screen — the analysis runs in the background and we'll notify you.", highlight: true },
   { text: "Delivery, content, platform fit, timestamps — every dimension is being scored independently.", highlight: false },
@@ -495,8 +495,8 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
             </div>
           )}
 
-          {/* Dreamer — Caption Ideas only */}
-          {judge.id === "dreamer" && result?.captions?.length > 0 && (
+          {/* Connector — Caption Ideas only */}
+          {judge.id === "connector" && result?.captions?.length > 0 && (
             <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
               <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Caption Ideas</div>
               <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -710,7 +710,7 @@ export default function PreviewPanel() {
   const [objDropOpen, setObjDropOpen] = useState(false);
   const [objFilter, setObjFilter] = useState("");
   const [objDropAbove, setObjDropAbove] = useState(false);
-  const [selectedJudges, setSelectedJudges] = useState(["critic","cool","dreamer"]);
+  const [selectedJudges, setSelectedJudges] = useState(["critic","cool","connector"]);
   const [step, setStep] = useState(1);
   const [jobId, setJobId] = useState(null);
   const [jobStatus, setJobStatus] = useState(null);
@@ -1051,7 +1051,7 @@ export default function PreviewPanel() {
   const restoreFromHistory = (entry) => {
     setShowHistory(false);
     setPlatform(entry.platform);
-    setSelectedJudges(entry.selectedJudges || ["critic","cool","dreamer"]);
+    setSelectedJudges(entry.selectedJudges || ["critic","cool","connector"]);
     setJudgeResults(entry.results || {});
     if (entry.videoDuration) setVideoDurationSecs(entry.videoDuration);
     setJobStatus("done");
