@@ -27,7 +27,7 @@ const JUDGES = [
     avatar: "/owl-trendsetter.png?v=3" },
   { id: "connector", name: "The Connector", color: "#8D6E63", softBg: "#FBF8F7",
     tagline: "Human-first. Finds the moments that make people share.", scoreLabel: "The Connector's Take",
-    avatar: "/owl-connector.png?v=1" },
+    avatar: "/owl-connector.png?v=1", avatarStyle: { objectFit: "cover" } },
 ];
 
 // ── Issue #9: Local history helpers ──────────────────────────
@@ -352,7 +352,7 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
       }} onClick={() => has && setOpen(o => !o)}>
         <div style={{ background: judge.softBg, borderRadius: "8px", flexShrink: 0 }}>
           <img src={judge.avatar} alt={judge.name}
-            style={{ width: "52px", height: "52px", objectFit: "contain", display: "block", background: judge.softBg }} />
+            style={{ width: "52px", height: "52px", objectFit: "contain", display: "block", background: judge.softBg, ...(judge.avatarStyle) }} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: "800", fontSize: "14px", color: has ? judge.color : "#bbb" }}>{judge.name}</div>
@@ -1358,7 +1358,7 @@ export default function PreviewPanel() {
                     }}>
                       <div style={{ background: active ? j.softBg : "#F5F5F5", borderRadius: "6px", flexShrink: 0 }}>
                         <img src={j.avatar} alt={j.name}
-                          style={{ width: "44px", height: "44px", objectFit: "contain", display: "block", background: active ? j.softBg : "#F5F5F5" }} />
+                          style={{ width: "44px", height: "44px", objectFit: "contain", display: "block", background: active ? j.softBg : "#F5F5F5", ...(j.avatarStyle) }} />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: "800", fontSize: "14px", color: active ? j.color : "#bbb" }}>{j.name}</div>
