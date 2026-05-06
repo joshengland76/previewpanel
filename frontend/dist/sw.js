@@ -1,8 +1,12 @@
-const CACHE = "pp-1777734804088";
+const CACHE = "pp-1778024118483";
 const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|svg|ico)(\?|$)/i;
 
 self.addEventListener("install", e => {
   self.skipWaiting();
+});
+
+self.addEventListener("message", e => {
+  if (e.data === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("activate", e => {
