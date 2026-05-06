@@ -1,4 +1,4 @@
-const CACHE = "pp-1778024118483";
+const CACHE = "pp-1778035169643";
 const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|svg|ico)(\?|$)/i;
 
 self.addEventListener("install", e => {

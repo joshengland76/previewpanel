@@ -9,8 +9,10 @@ function swVersionPlugin() {
     closeBundle() {
       const swPath = path.resolve("dist/sw.js");
       if (!fs.existsSync(swPath)) return;
-      const stamped = fs.readFileSync(swPath, "utf-8").replace("__SW_VERSION__", String(Date.now()));
+      const ts = String(Date.now());
+      const stamped = fs.readFileSync(swPath, "utf-8").replace("__SW_VERSION__", ts);
       fs.writeFileSync(swPath, stamped);
+      console.log(`SW version stamp: ${ts}`);
     },
   };
 }
