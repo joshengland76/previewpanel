@@ -1844,3 +1844,4 @@ try {
   console.error("[startup] Fatal error during server initialization:", err);
   process.exit(1);
 }
+
