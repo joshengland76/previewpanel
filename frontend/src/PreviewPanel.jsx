@@ -27,7 +27,7 @@ const JUDGES = [
     avatar: "/owl-trendsetter.png?v=3" },
   { id: "connector", name: "The Connector", color: "#8D6E63", softBg: "#FBF8F7",
     tagline: "Human-first. Finds the moments that make people share.", scoreLabel: "The Connector's Take",
-    avatar: "/owl-dreamer.png?v=3" },
+    avatar: "/owl-connector.png?v=1" },
 ];
 
 // ── Issue #9: Local history helpers ──────────────────────────
