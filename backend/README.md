@@ -3,7 +3,7 @@
 AI-powered pre-publish video feedback. Upload a video, get feedback from three synthetic judges powered by [TwelveLabs Pegasus](https://twelvelabs.io).
 
 **Stack:** Node.js + Express (backend) · React + Vite (frontend)  
-**Deploy targets:** Railway (backend) · Vercel (frontend)
+**Deploy targets:** Render (backend) · Vercel (frontend)
 
 ---
 
@@ -31,53 +31,42 @@ Open **http://localhost:5173**. The Vite dev server proxies `/api` requests to `
 
 ---
 
-## Deploying the Backend to Railway
+## Deploying the Backend to Render
+
+The backend is deployed via the `render.yaml` file at the repo root. Render reads this file automatically when you connect the repository.
 
 ### Prerequisites
-- A [Railway](https://railway.app) account (free tier works)
+- A [Render](https://render.com) account (free tier works)
 - Your `TWELVELABS_API_KEY` from [app.twelvelabs.io](https://app.twelvelabs.io)
 - (Optional) An `ANTHROPIC_API_KEY` from [console.anthropic.com](https://console.anthropic.com)
 
 ### Steps
 
-**1. Push the backend to GitHub**
+**1. Connect the repo to Render**
 
-```bash
-cd previewpanel-backend
-git init
-git add .
-git commit -m "Initial commit"
-# Create a new repo at github.com, then:
-git remote add origin https://github.com/YOUR_USERNAME/previewpanel-backend.git
-git push -u origin main
-```
+1. Go to [render.com](https://render.com) → **New** → **Blueprint**
+2. Connect your GitHub account and select this repository
+3. Render detects `render.yaml` and configures the `previewpanel-backend` web service automatically
 
-**2. Create a Railway project**
+**2. Set environment variables**
 
-1. Go to [railway.app](https://railway.app) → **New Project**
-2. Choose **Deploy from GitHub repo**
-3. Select your `previewpanel-backend` repository
-4. Railway detects Node.js automatically and uses `npm start`
-
-**3. Set environment variables**
-
-In your Railway project → **Variables** tab, add:
+In your Render service → **Environment** tab, add:
 
 | Variable | Value |
 |---|---|
 | `TWELVELABS_API_KEY` | your TwelveLabs API key |
 | `ANTHROPIC_API_KEY` | your Anthropic key (optional) |
 
-Do **not** add `PORT` — Railway sets it automatically.
+Do **not** add `PORT` — Render sets it automatically.
 
-**4. Verify ffmpeg is available**
+**3. ffmpeg**
 
-The `nixpacks.toml` file in this repo tells Railway to install ffmpeg during build. No extra steps needed.
+The `render.yaml` build command (`apt-get install -y ffmpeg`) installs ffmpeg automatically. No extra steps needed.
 
-**5. Note your Railway URL**
+**4. Note your Render URL**
 
-After deployment, Railway gives you a URL like:  
-`https://previewpanel-backend-production.up.railway.app`
+After deployment, Render gives you a URL like:  
+`https://previewpanel-backend.onrender.com`
 
 Save this — you need it for the frontend deployment.
 
@@ -87,7 +76,7 @@ Save this — you need it for the frontend deployment.
 
 ### Prerequisites
 - A [Vercel](https://vercel.com) account
-- The Railway backend URL from above
+- The Render backend URL from above
 
 ### Steps
 
@@ -118,7 +107,7 @@ In the Vercel project → **Settings** → **Environment Variables**, add:
 
 | Variable | Value |
 |---|---|
-| `VITE_API_URL` | `https://your-backend.up.railway.app` (no trailing slash) |
+| `VITE_API_URL` | `https://previewpanel-backend.onrender.com` (no trailing slash) |
 
 **4. Deploy**
 
@@ -134,13 +123,13 @@ Click **Deploy**. On every future push to `main`, Vercel rebuilds automatically.
 |---|---|---|
 | `TWELVELABS_API_KEY` | ✓ | TwelveLabs API key |
 | `ANTHROPIC_API_KEY` | optional | Enables Claude fallback for malformed JSON responses |
-| `PORT` | auto | Set by Railway automatically; defaults to `3001` locally |
+| `PORT` | auto | Set by Render automatically; defaults to `3001` locally |
 
 ### Frontend (`.env.local`)
 
 | Variable | Required | Description |
 |---|---|---|
-| `VITE_API_URL` | production only | Full Railway backend URL, e.g. `https://your-app.up.railway.app` |
+| `VITE_API_URL` | production only | Full Render backend URL, e.g. `https://previewpanel-backend.onrender.com` |
 
 Leave `VITE_API_URL` unset locally — the Vite dev proxy routes `/api` to `localhost:3001`.
 
@@ -148,7 +137,7 @@ Leave `VITE_API_URL` unset locally — the Vite dev proxy routes `/api` to `loca
 
 ## Notes
 
-- **Uploads are ephemeral on Railway.** Files uploaded by users are converted, sent to TwelveLabs, then deleted immediately. No persistent storage is needed.
+- **Uploads are ephemeral on Render.** Files uploaded by users are converted, sent to TwelveLabs, then deleted immediately. No persistent storage is needed.
 - **CORS** is currently open (`*`). If you want to restrict it to your Vercel domain, update the `cors()` call in `server.js`:
   ```js
   app.use(cors({ origin: "https://your-app.vercel.app" }));
