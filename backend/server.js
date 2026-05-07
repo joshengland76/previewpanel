@@ -267,6 +267,12 @@ async function initDb() {
     for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
       await pgPool.query(`ALTER TABLE submissions DROP COLUMN IF EXISTS cool_${dim}`);
     }
+    // Objective fit columns (9 new)
+    for (const judge of ["critic", "trendsetter", "connector"]) {
+      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_score INTEGER`);
+      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_verdict TEXT`);
+      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_reasoning TEXT`);
+    }
     // Ensure numeric columns aren't stranded as INTEGER from earlier deploys
     for (const col of [
       "avg_score",
@@ -366,6 +372,9 @@ async function saveSubmission(entry) {
       toInt(d.tiktok_rewatch_potential), toInt(d.tiktok_seo_strength),
       toInt(d.instagram_dm_share_potential), toInt(d.instagram_originality),
       toInt(d.youtube_watch_time_potential), toInt(d.youtube_thumbnail_hook),
+      toInt(d.critic_objective_fit_score), d.critic_objective_fit_verdict ?? null, d.critic_objective_fit_reasoning ?? null,
+      toInt(d.trendsetter_objective_fit_score), d.trendsetter_objective_fit_verdict ?? null, d.trendsetter_objective_fit_reasoning ?? null,
+      toInt(d.connector_objective_fit_score), d.connector_objective_fit_verdict ?? null, d.connector_objective_fit_reasoning ?? null,
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
@@ -382,9 +391,13 @@ async function saveSubmission(entry) {
            connector_hook_strength, connector_completion_likelihood, connector_share_save_worthiness,
            tiktok_rewatch_potential, tiktok_seo_strength,
            instagram_dm_share_potential, instagram_originality,
-           youtube_watch_time_potential, youtube_thumbnail_hook)
+           youtube_watch_time_potential, youtube_thumbnail_hook,
+           critic_objective_fit_score, critic_objective_fit_verdict, critic_objective_fit_reasoning,
+           trendsetter_objective_fit_score, trendsetter_objective_fit_verdict, trendsetter_objective_fit_reasoning,
+           connector_objective_fit_score, connector_objective_fit_verdict, connector_objective_fit_reasoning)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
-                $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
+                $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
+                $37,$38,$39,$40,$41,$42,$43,$44,$45)
       `, fullValues);
       return;
     } catch (err) {
@@ -607,7 +620,7 @@ function buildTLPrompt(judge, platform, objective, videoDuration) {
     ? `\nVIDEO DURATION — This video is ${videoDuration.label} long. You MUST ONLY reference timestamps between 0:00 and ${videoDuration.label}. Do NOT reference any timestamp beyond this duration.\nTIMESTAMP NOTE — Timestamps are approximate (within 1-2 seconds due to encoding). Reference the general moment, not the exact frame.`
     : "";
 
-  const { lengthGuidance } = buildVideoContext(videoDuration);
+  const { videoType, lengthGuidance } = buildVideoContext(videoDuration);
   const { instruction: bottomInstruction, format: bottomFormat } = buildBottomSection(judge, platform);
 
   // Platform-specific dimension definitions
@@ -634,9 +647,35 @@ function buildTLPrompt(judge, platform, objective, videoDuration) {
     dimensionFeedback = `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must address: (1) Human hook — does the first 3 seconds create a moment of genuine personal recognition or emotional curiosity, beyond just information or trend? Name what works or what is missing. (2) The recognition moment — is there a specific moment in this video that would make a viewer think of someone they know and want to share it? Name that moment exactly if it exists, or suggest what edit would create it. This is different from virality — it is the moment of "oh my god, [name] needs to see this." (3) Authenticity read — does the creator's genuine personality come through, or does the video feel performed and distant? Be specific about the moments that feel real versus produced. (4) Emotional arc — does the video create a feeling that builds and pays off, or does it start and end at the same emotional register with no movement?`;
   }
 
-  // Objective performance lens (conditional)
+  const objReasoningLength = { very_short: "1 sentence", short: "1 sentence", medium: "1–2 sentences", long: "2 sentences" }[videoType] || "1–2 sentences";
+
+  const judgeLens = judge.id === "critic"
+    ? `As The Editor, evaluate whether the craft serves the objective. Did the editing choices — pacing, cuts, structure, timing — actively support delivery of the objective? A comedy objective demands tight timing and precise cuts; a tutorial objective demands clear pacing and information density. Score how well the craft execution fulfills the creator's stated intent.`
+    : judge.id === "cool"
+    ? `As The Trendsetter, evaluate whether the objective lands in a platform-native way. Does it hit the format, timing, and conventions that make this type of content perform on this platform right now? Score whether the objective is executed in a way that would actually work here — not just attempted.`
+    : `As The Connector, evaluate whether the objective creates genuine emotional resonance. Did it land at a human level — did it actually produce the feeling the objective intends (laughter, warmth, curiosity, awe)? Score whether a real person watching would feel what the video is trying to make them feel.`;
+
   const objectiveLens = objective ? `
-CONTENT OBJECTIVE PERFORMANCE LENS — The creator has identified this video's objective as: ${objective}. This changes what predicts performance for this specific category. Apply the following lens throughout all your feedback and scoring:
+
+OBJECTIVE FIT — REQUIRED EVALUATION
+The creator has set this video's objective as: "${objective}". You must evaluate whether this video succeeds at this objective. This is a required top-level output field — not optional commentary.
+
+YOUR EVALUATION LENS:
+${judgeLens}
+
+SCORING — use the full range honestly:
+1–3: Clear miss — a viewer would not recognise this as a successful ${objective} video
+4–6: Partial — some elements work but it falls short in critical ways
+7–9: Hits — delivers on the objective with clear success
+10: Nails it — exceptional; a textbook example of the objective done right
+
+VERDICT: Set verdict to exactly one of: "hits" (score 7–10), "partial" (score 4–6), or "misses" (score 1–3).
+
+REACTION REQUIREMENT: If verdict is "misses" or "partial", your reaction field must name the objective and state the failure directly — not in subtext, not buried in suggestions. Example: "As a comedy video, this doesn't land — the setup takes too long and the punchline is too soft." Do not soften this into generic feedback. For a "hits" verdict, integrate the objective naturally into your reaction — don't lead with a verdict declaration.
+
+REASONING: Write ${objReasoningLength} for the objective_fit.reasoning field, explaining your score in your own voice and referencing specific moments from the video where possible.
+
+CATEGORY PERFORMANCE CONTEXT — Apply this category-specific knowledge when scoring all dimensions (not just objective_fit), since the creator's objective changes what predicts performance:
 If objective is 'ASMR': Audio quality and sensory immersion replace fast pacing as the primary completion signal. Hook is about immediate sensory reward, not pattern interrupt. Share-worthiness comes from creating a 'this is so relaxing' reaction. Harsh cuts, loud sounds, or abrupt transitions are significant negatives. Score audio quality heavily.
 If objective is 'Funny Videos/Comedy': Hook score should heavily weight the speed of setup. Completion likelihood depends entirely on whether the punchline lands and lands fast. Share-worthiness is the primary signal — comedy is the most DM-shared content type. Timing precision matters more than any other category. A joke that takes 10 seconds to set up when it could take 3 is a critical pacing failure.
 If objective is 'Food & Drinks/Cooking': Close-up shots and satisfying reveals are the visual hook. Save rate is extremely high in this category so save-worthiness should be weighted higher than average. Completion is driven by whether the recipe payoff is clearly promised and delivered. Appetite appeal in the visuals is a primary quality signal.
@@ -703,7 +742,7 @@ UNIVERSAL DIMENSIONS:
 - completion_likelihood (1-10): How likely is a viewer to watch to the end based on pacing, value-per-second, and structure?
 - share_save_worthiness (1-10): How likely is someone to share via DM or save to rewatch?
 PLATFORM-SPECIFIC DIMENSIONS for ${platform.toUpperCase()}:${platformDimensionDefs}
-OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 35%, share_save_worthiness ≈ 25%, platform-specific dimensions share the remaining ≈ 40%. When the objective lens above applies, adjust these weights per the category guidance.
+OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 35%, share_save_worthiness ≈ 25%, platform-specific dimensions share the remaining ≈ 40%. When the CATEGORY PERFORMANCE CONTEXT above applies, adjust these weights per that guidance.
 
 You are reviewing this video BEFORE it is published on ${platform.toUpperCase()}.
 For ${platform.toUpperCase()}, pay special attention to: ${pf.signals}.
@@ -746,7 +785,7 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
   ],
   "suggestions": [
     "<specific actionable improvement — timestamp, why it matters for algorithm signals, and the exact edit>"
-  ]${bottomFormat}
+  ]${bottomFormat}${objective ? `,\n  "objective_fit": {\n    "score": <integer 1–10>,\n    "verdict": "hits|partial|misses",\n    "reasoning": "<explanation in your voice>"\n  }` : ""}
 }`;
 }
 
@@ -915,6 +954,7 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
   // If the SDK already deserialized the result into an object, use it directly
   if (rawText !== null && typeof rawText === "object") {
     console.log(`[TwelveLabs][${judge.id}] result already deserialized — keys:`, Object.keys(rawText));
+    validateObjectiveFit(rawText, judge.id, objective);
     return applyMomentFilters(rawText, judge, videoDuration);
   }
 
@@ -929,6 +969,7 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
     } else {
       console.warn(`[TwelveLabs][${judge.id}] WARNING: no dimensions field in parsed result — top-level keys: ${Object.keys(parsed).join(", ")}`);
     }
+    validateObjectiveFit(parsed, judge.id, objective);
     return applyMomentFilters(parsed, judge, videoDuration);
   } catch (parseErr) {
     console.error(`[TwelveLabs][${judge.id}] JSON parse FAILED: ${parseErr.message}`);
@@ -948,8 +989,25 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
       overall: null,
       reaction: "This judge was unable to complete analysis. Please try again.",
       positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "",
-      moments: [], suggestions: [],
+      moments: [], suggestions: [], objective_fit: null,
     };
+  }
+}
+
+function validateObjectiveFit(parsed, judgeId, objective) {
+  if (!objective) return;
+  const of = parsed.objective_fit;
+  if (!of) {
+    console.warn(`[TwelveLabs][${judgeId}] OBJECTIVE_FIT MISSING — judge skipped required field despite objective "${objective}" being set`);
+    return;
+  }
+  const scoreOk = typeof of.score === "number" && of.score >= 1 && of.score <= 10;
+  const verdictOk = ["hits", "partial", "misses"].includes(of.verdict);
+  const reasoningOk = typeof of.reasoning === "string" && of.reasoning.trim().length > 0;
+  if (!scoreOk || !verdictOk || !reasoningOk) {
+    console.warn(`[TwelveLabs][${judgeId}] OBJECTIVE_FIT MALFORMED — score=${of.score} verdict=${of.verdict} reasoning_present=${reasoningOk}`);
+  } else {
+    console.log(`[TwelveLabs][${judgeId}] objective_fit OK — score=${of.score} verdict=${of.verdict}`);
   }
 }
 
@@ -1309,7 +1367,7 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
             if (jobs[jobId]) {
               jobs[jobId].results[judge.id] = {
                 status: "error", error: errMsg,
-                data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] },
+                data: { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [], objective_fit: null },
               };
             }
           } else {
@@ -1393,6 +1451,13 @@ async function recordSubmissionForJob(jobId, finalStatus) {
           platDimCounts[key] = (platDimCounts[key] || 0) + 1;
         }
       }
+    }
+    if (r.status === "done" && r.data?.objective_fit) {
+      const colPrefix = id === "cool" ? "trendsetter" : id;
+      const of = r.data.objective_fit;
+      if (of.score != null) dimensions[`${colPrefix}_objective_fit_score`] = toInt(of.score);
+      if (of.verdict) dimensions[`${colPrefix}_objective_fit_verdict`] = of.verdict;
+      if (of.reasoning) dimensions[`${colPrefix}_objective_fit_reasoning`] = of.reasoning;
     }
   }
   for (const [key, prefix] of Object.entries(PLAT_DIM_PREFIX)) {

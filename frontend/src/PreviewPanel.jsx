@@ -289,6 +289,7 @@ const DIMENSION_META = {
   originality:          { label: "Originality",    tooltip: "In December 2025, Instagram made its largest algorithmic shift in years: original content creators saw 40-60% increases in reach while accounts reposting or aggregating content from other platforms saw 60-80% reach collapses. The platform's AI now actively identifies and penalizes watermarked content (videos downloaded from TikTok or other platforms and re-uploaded) and rewards content that appears to be filmed and produced natively. Beyond watermarks, the algorithm uses visual and audio fingerprinting to identify repurposed content. Originality is scored here based on visual and production cues that suggest native creation versus content that appears derivative or recycled." },
   watch_time_potential: { label: "Watch Time",     tooltip: "YouTube's algorithm prioritizes two distinct watch time metrics: relative watch time (the percentage of a video watched) and absolute watch time (the total minutes spent watching). Both are used because they capture different quality signals — relative watch time rewards content that retains viewers proportionally, while absolute watch time rewards content that keeps viewers engaged for longer total durations. Research shows that 2-3 minute YouTube Shorts achieve the strongest combined performance across both metrics. The algorithm also measures session depth — whether a viewer continues watching additional videos after yours — rewarding content that creates momentum rather than ending a viewing session." },
   thumbnail_hook:       { label: "Thumbnail",      tooltip: "On YouTube, the first frame of a video functions as its default thumbnail in many placements, making it a pre-click conversion signal that determines whether a viewer clicks to watch at all. A strong first frame is visually distinct at small sizes (YouTube thumbnails display at approximately 168x94px in most placements), communicates the video's topic or value immediately, features a human face with clear expression where relevant (face thumbnails consistently outperform non-face thumbnails in click-through rate studies), and avoids text-heavy compositions that become unreadable at thumbnail size. Click-through rate from thumbnail is a direct input into YouTube's recommendation algorithm — underperforming thumbnails suppress distribution regardless of content quality." },
+  objective_fit:        { label: "Objective Fit",  tooltip: "Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance. A high score means the video clearly delivers on its stated objective; a low score means it misses the mark." },
 };
 const DIMENSION_ORDER = [
   "hook_strength", "completion_likelihood", "share_save_worthiness",
@@ -308,11 +309,16 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
   const editorClips = result
     ? (result.clips?.length > 0 ? result.clips : result.clip?.start ? [result.clip] : [])
     : [];
-  // Dimension rows — filter to only keys with non-null values
+  // Dimension rows — filter to only keys with non-null values, append objective_fit if present
   const dims = has
-    ? DIMENSION_ORDER
-        .map(key => ({ key, meta: DIMENSION_META[key], score: result.dimensions?.[key] ?? null }))
-        .filter(d => d.score != null)
+    ? [
+        ...DIMENSION_ORDER
+          .map(key => ({ key, meta: DIMENSION_META[key], score: result.dimensions?.[key] ?? null }))
+          .filter(d => d.score != null),
+        ...(result.objective_fit?.score != null
+          ? [{ key: "objective_fit", meta: DIMENSION_META.objective_fit, score: result.objective_fit.score }]
+          : []),
+      ]
     : [];
 
   function handleInfoClick(e, dimKey) {
@@ -428,6 +434,25 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
 
       {has && open && (
         <div style={{ padding: "16px 18px 20px", animation: "pp-fade 0.22s ease" }}>
+          {result.objective_fit && (
+            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: "700" }}>Objective Fit</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{
+                    fontSize: "10px", fontWeight: "700", padding: "2px 8px", borderRadius: "10px",
+                    background: result.objective_fit.verdict === "hits" ? "#E8F5E9" : result.objective_fit.verdict === "partial" ? "#FFF3E0" : "#FFEBEE",
+                    color: result.objective_fit.verdict === "hits" ? "#2E7D32" : result.objective_fit.verdict === "partial" ? "#E65100" : "#C62828",
+                    textTransform: "capitalize", letterSpacing: "0.04em",
+                  }}>
+                    {result.objective_fit.verdict}
+                  </span>
+                  <span style={{ fontSize: "13px", fontWeight: "700", color: judge.color }}>{result.objective_fit.score}/10</span>
+                </div>
+              </div>
+              <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.objective_fit.reasoning}</div>
+            </div>
+          )}
           {(result.delivery || result.content) && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
               {[{label:"Delivery — How it's presented", val:result.delivery},
