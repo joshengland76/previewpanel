@@ -260,6 +260,7 @@ async function initDb() {
       "tiktok_rewatch_potential", "tiktok_seo_strength",
       "instagram_dm_share_potential", "instagram_originality",
       "youtube_watch_time_potential", "youtube_thumbnail_hook",
+      "youtube_swipe_resistance",
     ]) {
       await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col} NUMERIC`);
     }
@@ -281,7 +282,7 @@ async function initDb() {
       "connector_hook_strength", "connector_completion_likelihood", "connector_share_save_worthiness",
       "tiktok_rewatch_potential", "tiktok_seo_strength",
       "instagram_dm_share_potential", "instagram_originality",
-      "youtube_watch_time_potential", "youtube_thumbnail_hook",
+      "youtube_watch_time_potential", "youtube_swipe_resistance",
     ]) {
       await pgPool.query(`
         DO $$ BEGIN
@@ -371,7 +372,7 @@ async function saveSubmission(entry) {
       toInt(d.connector_hook_strength), toInt(d.connector_completion_likelihood), toInt(d.connector_share_save_worthiness),
       toInt(d.tiktok_rewatch_potential), toInt(d.tiktok_seo_strength),
       toInt(d.instagram_dm_share_potential), toInt(d.instagram_originality),
-      toInt(d.youtube_watch_time_potential), toInt(d.youtube_thumbnail_hook),
+      toInt(d.youtube_watch_time_potential), toInt(d.youtube_swipe_resistance),
       toInt(d.critic_objective_fit_score), d.critic_objective_fit_verdict ?? null, d.critic_objective_fit_reasoning ?? null,
       toInt(d.trendsetter_objective_fit_score), d.trendsetter_objective_fit_verdict ?? null, d.trendsetter_objective_fit_reasoning ?? null,
       toInt(d.connector_objective_fit_score), d.connector_objective_fit_verdict ?? null, d.connector_objective_fit_reasoning ?? null,
@@ -391,7 +392,7 @@ async function saveSubmission(entry) {
            connector_hook_strength, connector_completion_likelihood, connector_share_save_worthiness,
            tiktok_rewatch_potential, tiktok_seo_strength,
            instagram_dm_share_potential, instagram_originality,
-           youtube_watch_time_potential, youtube_thumbnail_hook,
+           youtube_watch_time_potential, youtube_swipe_resistance,
            critic_objective_fit_score, critic_objective_fit_verdict, critic_objective_fit_reasoning,
            trendsetter_objective_fit_score, trendsetter_objective_fit_verdict, trendsetter_objective_fit_reasoning,
            connector_objective_fit_score, connector_objective_fit_verdict, connector_objective_fit_reasoning)
@@ -633,8 +634,8 @@ function buildTLPrompt(judge, platform, objective, videoDuration) {
     platformDimensionDefs = `\n- dm_share_potential (1-10): Specifically, would someone DM this to a friend?\n- originality (1-10): Does this feel like fresh original content?`;
     platformDimensionFormat = `,\n    "dm_share_potential": <1-10>,\n    "originality": <1-10>`;
   } else {
-    platformDimensionDefs = `\n- watch_time_potential (1-10): Would viewers watch this for significant absolute time?\n- thumbnail_hook (1-10): Does the first frame work as an effective thumbnail?`;
-    platformDimensionFormat = `,\n    "watch_time_potential": <1-10>,\n    "thumbnail_hook": <1-10>`;
+    platformDimensionDefs = `\n- watch_time_potential (1-10): Would viewers watch this for significant absolute time?\n- swipe_resistance (1-10): How well does this video survive the critical first 0.5–1 seconds before YouTube Shorts viewers swipe past? Consider: opening-frame visual hook strength, sound or music impact in the first second, motion or movement that immediately holds attention, clarity of subject (viewer instantly understands what they're watching), and absence of slow-build openings that lose viewers.`;
+    platformDimensionFormat = `,\n    "watch_time_potential": <1-10>,\n    "swipe_resistance": <1-10>`;
   }
 
   // Judge-specific dimension feedback instructions
@@ -1423,7 +1424,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   const PLAT_DIM_PREFIX = {
     rewatch_potential: "tiktok", seo_strength: "tiktok",
     dm_share_potential: "instagram", originality: "instagram",
-    watch_time_potential: "youtube", thumbnail_hook: "youtube",
+    watch_time_potential: "youtube", swipe_resistance: "youtube",
   };
   for (const [id, r] of Object.entries(job.results || {})) {
     if (r.status === "done" && r.data?.overall) {
@@ -1465,7 +1466,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
       dimensions[`${prefix}_${key}`] = parseFloat((platDimSums[key] / platDimCounts[key]).toFixed(1));
     }
   }
-  console.log(`[${jobId}] [db] Platform dimensions — platform: ${job.platform ?? "unknown"}, tiktok_rewatch: ${dimensions.tiktok_rewatch_potential ?? "null"}, tiktok_seo: ${dimensions.tiktok_seo_strength ?? "null"}, instagram_dm_share: ${dimensions.instagram_dm_share_potential ?? "null"}, instagram_originality: ${dimensions.instagram_originality ?? "null"}, youtube_watch_time: ${dimensions.youtube_watch_time_potential ?? "null"}, youtube_thumbnail: ${dimensions.youtube_thumbnail_hook ?? "null"}`);
+  console.log(`[${jobId}] [db] Platform dimensions — platform: ${job.platform ?? "unknown"}, tiktok_rewatch: ${dimensions.tiktok_rewatch_potential ?? "null"}, tiktok_seo: ${dimensions.tiktok_seo_strength ?? "null"}, instagram_dm_share: ${dimensions.instagram_dm_share_potential ?? "null"}, instagram_originality: ${dimensions.instagram_originality ?? "null"}, youtube_watch_time: ${dimensions.youtube_watch_time_potential ?? "null"}, youtube_swipe_resistance: ${dimensions.youtube_swipe_resistance ?? "null"}`);
   if (Object.keys(dimensions).length > 0) {
     console.log(`[${jobId}] [db] Saving dimensions — critic_hook=${dimensions.critic_hook_strength ?? "—"}, critic_completion=${dimensions.critic_completion_likelihood ?? "—"}, critic_share=${dimensions.critic_share_save_worthiness ?? "—"}, trendsetter_hook=${dimensions.trendsetter_hook_strength ?? "—"}, trendsetter_completion=${dimensions.trendsetter_completion_likelihood ?? "—"}, connector_hook=${dimensions.connector_hook_strength ?? "—"}, connector_completion=${dimensions.connector_completion_likelihood ?? "—"}`);
   } else {

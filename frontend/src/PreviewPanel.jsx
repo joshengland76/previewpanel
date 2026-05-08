@@ -10,11 +10,11 @@ const B = {
 };
 
 const PLATFORMS = [
-  { id: "youtube", label: "YouTube", pillLabel: "YouTube", icon: "▶", color: "#CC0000",
+  { id: "youtube", label: "Shorts", pillLabel: "Shorts", icon: "▶", color: "#CC0000",
     hint: "TwelveLabs watches your full video — analyzing delivery, energy, pacing, and hook strength." },
   { id: "tiktok", label: "TikTok", pillLabel: "TikTok", icon: "♪", color: "#010101",
     hint: "Judges evaluate hook strength, loop-ability, audio sync, and scroll-stopping moments." },
-  { id: "instagram", label: "Instagram Reels", pillLabel: "Reels", icon: "◉", color: "#C13584",
+  { id: "instagram", label: "Reels", pillLabel: "Reels", icon: "◉", color: "#C13584",
     hint: "Judges evaluate aesthetic cohesion, first frame, audio choice, and shareability." },
 ];
 
@@ -288,14 +288,14 @@ const DIMENSION_META = {
   dm_share_potential:   { label: "DM Share",       tooltip: "Direct message shares — when a viewer sends a Reel to someone via Instagram DM — are the single strongest signal in Instagram's ranking algorithm for reaching new audiences. The algorithm weights DM shares at 3-5x the value of a like because they represent a deliberate, high-intent action: the viewer saw enough value in the content to personally recommend it to someone they know. Content that triggers the \"I need to send this to [specific person]\" reaction — through humor, relatability, practical value, or emotional resonance — consistently outperforms content that earns passive likes." },
   originality:          { label: "Originality",    tooltip: "In December 2025, Instagram made its largest algorithmic shift in years: original content creators saw 40-60% increases in reach while accounts reposting or aggregating content from other platforms saw 60-80% reach collapses. The platform's AI now actively identifies and penalizes watermarked content (videos downloaded from TikTok or other platforms and re-uploaded) and rewards content that appears to be filmed and produced natively. Beyond watermarks, the algorithm uses visual and audio fingerprinting to identify repurposed content. Originality is scored here based on visual and production cues that suggest native creation versus content that appears derivative or recycled." },
   watch_time_potential: { label: "Watch Time",     tooltip: "YouTube's algorithm prioritizes two distinct watch time metrics: relative watch time (the percentage of a video watched) and absolute watch time (the total minutes spent watching). Both are used because they capture different quality signals — relative watch time rewards content that retains viewers proportionally, while absolute watch time rewards content that keeps viewers engaged for longer total durations. Research shows that 2-3 minute YouTube Shorts achieve the strongest combined performance across both metrics. The algorithm also measures session depth — whether a viewer continues watching additional videos after yours — rewarding content that creates momentum rather than ending a viewing session." },
-  thumbnail_hook:       { label: "Thumbnail",      tooltip: "On YouTube, the first frame of a video functions as its default thumbnail in many placements, making it a pre-click conversion signal that determines whether a viewer clicks to watch at all. A strong first frame is visually distinct at small sizes (YouTube thumbnails display at approximately 168x94px in most placements), communicates the video's topic or value immediately, features a human face with clear expression where relevant (face thumbnails consistently outperform non-face thumbnails in click-through rate studies), and avoids text-heavy compositions that become unreadable at thumbnail size. Click-through rate from thumbnail is a direct input into YouTube's recommendation algorithm — underperforming thumbnails suppress distribution regardless of content quality." },
+  swipe_resistance:     { label: "Swipe Resistance", tooltip: "YouTube Shorts viewers decide within the first 0.5–1 seconds whether to swipe past. Swipe Resistance scores how well this video holds attention in that critical window — based on opening-frame visual hook strength, sound or music impact in the first second, motion or movement that immediately captures attention, clarity of subject (the viewer instantly understands what they're watching), and the absence of slow-build openings that bleed viewers before the content begins." },
   objective_fit:        { label: "Objective Fit",  tooltip: "Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance. A high score means the video clearly delivers on its stated objective; a low score means it misses the mark." },
 };
 const DIMENSION_ORDER = [
   "hook_strength", "completion_likelihood", "share_save_worthiness",
   "rewatch_potential", "seo_strength",
   "dm_share_potential", "originality",
-  "watch_time_potential", "thumbnail_hook",
+  "watch_time_potential", "swipe_resistance",
 ];
 
 function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
