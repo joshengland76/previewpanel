@@ -1,4 +1,13 @@
 import { useState, useRef, useEffect } from "react";
+import TikTokLogo from "./components/TikTokLogo";
+import InstagramLogo from "./components/InstagramLogo";
+import YouTubeLogo from "./components/YouTubeLogo";
+
+const PLATFORM_LOGOS = { youtube: YouTubeLogo, tiktok: TikTokLogo, instagram: InstagramLogo };
+function PlatformIcon({ id, size }) {
+  const Logo = PLATFORM_LOGOS[id];
+  return Logo ? <Logo size={size} /> : null;
+}
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -259,7 +268,7 @@ function HistoryPanel({ history, onRestore, onClose }) {
             onMouseLeave={e => e.currentTarget.style.borderColor = B.border}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-              <span style={{ fontSize: "11px", fontWeight: "700", color: plat.color }}>{plat.icon} {plat.label}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: "700", color: plat.color }}><PlatformIcon id={plat.id} size={13} />{plat.label}</span>
               <span style={{ fontSize: "10px", color: "#bbb", marginLeft: "auto" }}>{date}</span>
             </div>
             <div style={{ fontSize: "12px", color: "#888", marginBottom: "6px", fontFamily: "'Courier New', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1246,7 +1255,7 @@ export default function PreviewPanel() {
                     display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
                     padding: "0 6px", whiteSpace: "nowrap",
                   }}>
-                    <span style={{ fontSize: "12px", lineHeight: 1 }}>{p.icon}</span>
+                    <PlatformIcon id={p.id} size={20} />
                     {p.pillLabel}
                   </button>
                 ))}
@@ -1536,8 +1545,9 @@ export default function PreviewPanel() {
             {/* Platform + file tags (only when finished) */}
             {isFinished && (
               <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", lineHeight: "1.2", color: plat.color, flexShrink: 0 }}>
-                  {plat.icon} {plat.label}
+                <div style={{ display: "flex", alignItems: "center", gap: "5px", padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", lineHeight: "1.2", color: plat.color, flexShrink: 0 }}>
+                  <PlatformIcon id={plat.id} size={15} />
+                  {plat.label}
                 </div>
                 {objective && (
                   <div style={{ display: "flex", alignItems: "center", padding: "5px 13px", background: B.lightBrown, border: `1.5px solid ${B.beige}`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", lineHeight: "1.2", color: B.action, flexShrink: 0 }}>
