@@ -19,11 +19,11 @@ const B = {
 };
 
 const PLATFORMS = [
-  { id: "youtube", label: "Shorts", pillLabel: "Shorts", icon: "▶", color: "#CC0000",
+  { id: "youtube", label: "Shorts", pillLabel: "Shorts", color: "#CC0000",
     hint: "TwelveLabs watches your full video — analyzing delivery, energy, pacing, and hook strength." },
-  { id: "tiktok", label: "TikTok", pillLabel: "TikTok", icon: "♪", color: "#010101",
+  { id: "tiktok", label: "TikTok", pillLabel: "TikTok", color: "#010101",
     hint: "Judges evaluate hook strength, loop-ability, audio sync, and scroll-stopping moments." },
-  { id: "instagram", label: "Reels", pillLabel: "Reels", icon: "◉", color: "#C13584",
+  { id: "instagram", label: "Reels", pillLabel: "Reels", color: "#C13584",
     hint: "Judges evaluate aesthetic cohesion, first frame, audio choice, and shareability." },
 ];
 
