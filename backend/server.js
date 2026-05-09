@@ -276,6 +276,12 @@ async function initDb() {
     }
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS thumbnail_data_url TEXT`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS objective TEXT`);
+    // Big-picture dimensions (10 per judge × 3 judges = 30 columns)
+    for (const judge of ["critic", "trendsetter", "connector"]) {
+      for (const dim of ["funny", "compelling", "authentic", "novel", "visually_engaging", "emotionally_resonant", "useful", "surprising", "relatable", "polished"]) {
+        await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_big_${dim} INTEGER`);
+      }
+    }
     // Ensure numeric columns aren't stranded as INTEGER from earlier deploys
     for (const col of [
       "avg_score",
@@ -390,6 +396,18 @@ async function saveSubmission(entry) {
       toInt(d.connector_objective_fit_score), d.connector_objective_fit_verdict ?? null, d.connector_objective_fit_reasoning ?? null,
       entry.thumbnailDataUrl ?? null,
       entry.objective ?? null,
+      // critic big-picture ($48–$57)
+      toInt(d.critic_big_funny), toInt(d.critic_big_compelling), toInt(d.critic_big_authentic),
+      toInt(d.critic_big_novel), toInt(d.critic_big_visually_engaging), toInt(d.critic_big_emotionally_resonant),
+      toInt(d.critic_big_useful), toInt(d.critic_big_surprising), toInt(d.critic_big_relatable), toInt(d.critic_big_polished),
+      // trendsetter big-picture ($58–$67)
+      toInt(d.trendsetter_big_funny), toInt(d.trendsetter_big_compelling), toInt(d.trendsetter_big_authentic),
+      toInt(d.trendsetter_big_novel), toInt(d.trendsetter_big_visually_engaging), toInt(d.trendsetter_big_emotionally_resonant),
+      toInt(d.trendsetter_big_useful), toInt(d.trendsetter_big_surprising), toInt(d.trendsetter_big_relatable), toInt(d.trendsetter_big_polished),
+      // connector big-picture ($68–$77)
+      toInt(d.connector_big_funny), toInt(d.connector_big_compelling), toInt(d.connector_big_authentic),
+      toInt(d.connector_big_novel), toInt(d.connector_big_visually_engaging), toInt(d.connector_big_emotionally_resonant),
+      toInt(d.connector_big_useful), toInt(d.connector_big_surprising), toInt(d.connector_big_relatable), toInt(d.connector_big_polished),
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
@@ -410,10 +428,16 @@ async function saveSubmission(entry) {
            critic_objective_fit_score, critic_objective_fit_verdict, critic_objective_fit_reasoning,
            trendsetter_objective_fit_score, trendsetter_objective_fit_verdict, trendsetter_objective_fit_reasoning,
            connector_objective_fit_score, connector_objective_fit_verdict, connector_objective_fit_reasoning,
-           thumbnail_data_url, objective)
+           thumbnail_data_url, objective,
+           critic_big_funny, critic_big_compelling, critic_big_authentic, critic_big_novel, critic_big_visually_engaging, critic_big_emotionally_resonant, critic_big_useful, critic_big_surprising, critic_big_relatable, critic_big_polished,
+           trendsetter_big_funny, trendsetter_big_compelling, trendsetter_big_authentic, trendsetter_big_novel, trendsetter_big_visually_engaging, trendsetter_big_emotionally_resonant, trendsetter_big_useful, trendsetter_big_surprising, trendsetter_big_relatable, trendsetter_big_polished,
+           connector_big_funny, connector_big_compelling, connector_big_authentic, connector_big_novel, connector_big_visually_engaging, connector_big_emotionally_resonant, connector_big_useful, connector_big_surprising, connector_big_relatable, connector_big_polished)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
-                $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47)
+                $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,
+                $48,$49,$50,$51,$52,$53,$54,$55,$56,$57,
+                $58,$59,$60,$61,$62,$63,$64,$65,$66,$67,
+                $68,$69,$70,$71,$72,$73,$74,$75,$76,$77)
       `, fullValues);
       return;
     } catch (err) {
@@ -653,6 +677,26 @@ function buildTLPrompt(judge, platform, objective, videoDuration) {
     platformDimensionFormat = `,\n    "watch_time_potential": <1-10>,\n    "swipe_resistance": <1-10>`;
   }
 
+  const bigPictureLens = judge.id === "critic"
+    ? "From a craft and editing perspective"
+    : judge.id === "cool"
+    ? "From an algorithmic and viral-potential perspective"
+    : "From an emotional and human resonance perspective";
+
+  const bigPictureDimensionDefs = `\nBIG-PICTURE DIMENSIONS — ${bigPictureLens}, score each of the following 10 qualities (1–10 integer; 1 = not at all, 5 = moderately, 10 = exceptionally — reserve 9–10 for content that genuinely stands out; most videos score 3–7):
+- funny (1-10): Does this produce genuine humor?
+- compelling (1-10): Does it command attention without effort from the viewer?
+- authentic (1-10): Does the creator feel real, not performed?
+- novel (1-10): Is this something the viewer hasn't seen before?
+- visually_engaging (1-10): Does the imagery itself reward looking?
+- emotionally_resonant (1-10): Does it move the viewer?
+- useful (1-10): Does the viewer learn or take away something concrete?
+- surprising (1-10): Does it subvert expectations?
+- relatable (1-10): Does it speak to something in the viewer's life?
+- polished (1-10): Does the production feel professional?`;
+
+  const bigPictureFormat = `,\n    "big_picture": {\n      "funny": <1-10>,\n      "compelling": <1-10>,\n      "authentic": <1-10>,\n      "novel": <1-10>,\n      "visually_engaging": <1-10>,\n      "emotionally_resonant": <1-10>,\n      "useful": <1-10>,\n      "surprising": <1-10>,\n      "relatable": <1-10>,\n      "polished": <1-10>\n    }`;
+
   // Judge-specific dimension feedback instructions
   let dimensionFeedback = "";
   if (judge.id === "critic") {
@@ -758,7 +802,7 @@ UNIVERSAL DIMENSIONS:
 - completion_likelihood (1-10): How likely is a viewer to watch to the end based on pacing, value-per-second, and structure?
 - share_save_worthiness (1-10): How likely is someone to share via DM or save to rewatch?
 PLATFORM-SPECIFIC DIMENSIONS for ${platform.toUpperCase()}:${platformDimensionDefs}
-OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 35%, share_save_worthiness ≈ 25%, platform-specific dimensions share the remaining ≈ 40%. When the CATEGORY PERFORMANCE CONTEXT above applies, adjust these weights per that guidance.
+OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 35%, share_save_worthiness ≈ 25%, platform-specific dimensions share the remaining ≈ 40%. When the CATEGORY PERFORMANCE CONTEXT above applies, adjust these weights per that guidance.${bigPictureDimensionDefs}
 
 You are reviewing this video BEFORE it is published on ${platform.toUpperCase()}.
 For ${platform.toUpperCase()}, pay special attention to: ${pf.signals}.
@@ -789,7 +833,7 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
   "dimensions": {
     "hook_strength": <1-10>,
     "completion_likelihood": <1-10>,
-    "share_save_worthiness": <1-10>${platformDimensionFormat}
+    "share_save_worthiness": <1-10>${platformDimensionFormat}${bigPictureFormat}
   },
   "reaction": "<gut reaction in first person — 1 sentence for short/empty videos, 2-3 for longer ones>",
   "positives": "<genuine praise connected to performance signals — specific, content-focused, never about appearance. Omit this field entirely if there is nothing genuine to praise>",
@@ -1477,6 +1521,13 @@ async function recordSubmissionForJob(jobId, finalStatus) {
       if (of.score != null) dimensions[`${colPrefix}_objective_fit_score`] = toInt(of.score);
       if (of.verdict) dimensions[`${colPrefix}_objective_fit_verdict`] = of.verdict;
       if (of.reasoning) dimensions[`${colPrefix}_objective_fit_reasoning`] = of.reasoning;
+    }
+    if (r.status === "done" && r.data?.dimensions?.big_picture) {
+      const colPrefix = id === "cool" ? "trendsetter" : id;
+      const bp = r.data.dimensions.big_picture;
+      for (const key of ["funny", "compelling", "authentic", "novel", "visually_engaging", "emotionally_resonant", "useful", "surprising", "relatable", "polished"]) {
+        if (bp[key] != null) dimensions[`${colPrefix}_big_${key}`] = toInt(bp[key]);
+      }
     }
   }
   for (const [key, prefix] of Object.entries(PLAT_DIM_PREFIX)) {
