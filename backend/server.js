@@ -274,6 +274,7 @@ async function initDb() {
       await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_verdict TEXT`);
       await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_reasoning TEXT`);
     }
+    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS thumbnail_data_url TEXT`);
     // Ensure numeric columns aren't stranded as INTEGER from earlier deploys
     for (const col of [
       "avg_score",
@@ -354,6 +355,16 @@ async function loadSubmissionLog() {
 // Safe integer coercion — rounds floats, passes null through
 function toInt(val) { return val == null ? null : Math.round(Number(val)); }
 
+async function extractThumbnail(filePath) {
+  try {
+    const { stdout } = await execFileAsync(FFMPEG, [
+      "-i", filePath, "-frames:v", "1", "-vf", "scale=160:-1",
+      "-f", "image2pipe", "-vcodec", "mjpeg", "-",
+    ], { encoding: "buffer", maxBuffer: 10 * 1024 * 1024 });
+    return `data:image/jpeg;base64,${stdout.toString("base64")}`;
+  } catch { return null; }
+}
+
 async function saveSubmission(entry) {
   if (pgPool) {
     const d = entry.dimensions || {};
@@ -376,6 +387,7 @@ async function saveSubmission(entry) {
       toInt(d.critic_objective_fit_score), d.critic_objective_fit_verdict ?? null, d.critic_objective_fit_reasoning ?? null,
       toInt(d.trendsetter_objective_fit_score), d.trendsetter_objective_fit_verdict ?? null, d.trendsetter_objective_fit_reasoning ?? null,
       toInt(d.connector_objective_fit_score), d.connector_objective_fit_verdict ?? null, d.connector_objective_fit_reasoning ?? null,
+      entry.thumbnailDataUrl ?? null,
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
@@ -395,10 +407,11 @@ async function saveSubmission(entry) {
            youtube_watch_time_potential, youtube_swipe_resistance,
            critic_objective_fit_score, critic_objective_fit_verdict, critic_objective_fit_reasoning,
            trendsetter_objective_fit_score, trendsetter_objective_fit_verdict, trendsetter_objective_fit_reasoning,
-           connector_objective_fit_score, connector_objective_fit_verdict, connector_objective_fit_reasoning)
+           connector_objective_fit_score, connector_objective_fit_verdict, connector_objective_fit_reasoning,
+           thumbnail_data_url)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
-                $37,$38,$39,$40,$41,$42,$43,$44,$45)
+                $37,$38,$39,$40,$41,$42,$43,$44,$45,$46)
       `, fullValues);
       return;
     } catch (err) {
@@ -1244,6 +1257,9 @@ app.post("/api/analyze", (req, res, next) => {
           jobs[jobId].videoDuration = convertedDuration;
         }
 
+        // 7. Extract first-frame thumbnail for history panel
+        jobs[jobId].thumbnailDataUrl = await extractThumbnail(preprocessedPath);
+
         // Store for runPipeline — original file kept until after TwelveLabs upload (HEVC fallback)
         jobs[jobId].preProcessedPath = preprocessedPath;
         jobs[jobId].inputCodecs = inputCodecs;
@@ -1487,6 +1503,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     scores,
     dimensions,
     avgScore: scoreCount > 0 ? parseFloat((scoreSum / scoreCount).toFixed(1)) : null,
+    thumbnailDataUrl: job.thumbnailDataUrl || null,
   };
   submissionLog.unshift(entry);
   if (submissionLog.length > 500) submissionLog.length = 500;
@@ -1706,6 +1723,7 @@ app.get("/api/status/:jobId", (req, res) => {
     error: job.error,
     duration: job.videoDuration?.secs || null,
     queuePosition: currentQueuePosition,
+    thumbnailDataUrl: job.thumbnailDataUrl || null,
   });
 });
 

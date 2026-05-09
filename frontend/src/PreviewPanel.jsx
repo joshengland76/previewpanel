@@ -262,24 +262,36 @@ function HistoryPanel({ history, onRestore, onClose }) {
         return (
           <div key={i} onClick={() => onRestore(entry)} style={{
             background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "12px",
-            padding: "14px 16px", cursor: "pointer", transition: "border-color 0.15s",
+            padding: "12px", cursor: "pointer", transition: "border-color 0.15s",
+            display: "flex", gap: "12px", alignItems: "center",
           }}
             onMouseEnter={e => e.currentTarget.style.borderColor = B.brown}
             onMouseLeave={e => e.currentTarget.style.borderColor = B.border}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: "700", color: plat.color }}><PlatformIcon id={plat.id} size={13} />{plat.label}</span>
-              <span style={{ fontSize: "10px", color: "#bbb", marginLeft: "auto" }}>{date}</span>
-            </div>
-            <div style={{ fontSize: "12px", color: "#888", marginBottom: "6px", fontFamily: "'Courier New', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {entry.fileName}
-            </div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              {entry.scores.map(s => (
-                <span key={s.id} style={{ fontSize: "11px", fontWeight: "700", color: JUDGES.find(j=>j.id===s.id)?.color || B.brown }}>
-                  {JUDGES.find(j=>j.id===s.id)?.name.split(" ")[1] || s.id}: {s.score}/10
-                </span>
-              ))}
+            {entry.thumbnailDataUrl
+              ? <img src={entry.thumbnailDataUrl} alt="" style={{ width: "80px", height: "52px", objectFit: "cover", borderRadius: "6px", flexShrink: 0 }} />
+              : <div style={{ width: "80px", height: "52px", background: "#f0ece6", borderRadius: "6px", flexShrink: 0 }} />
+            }
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", fontWeight: "700", color: plat.color }}><PlatformIcon id={plat.id} size={13} />{plat.label}</span>
+                <span style={{ fontSize: "10px", color: "#bbb", marginLeft: "auto" }}>{date}</span>
+              </div>
+              <div style={{ fontSize: "12px", color: "#888", marginBottom: "6px", fontFamily: "'Courier New', monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {entry.fileName}
+              </div>
+              {(() => {
+                const validScores = (entry.scores || []).filter(s => s.score != null);
+                if (!validScores.length) return null;
+                const avg = validScores.reduce((sum, s) => sum + s.score, 0) / validScores.length;
+                const avgRounded = Math.round(avg * 10) / 10;
+                const scoreColor = avg >= 7 ? "#43A047" : avg >= 5 ? "#FB8C00" : "#E53935";
+                return (
+                  <span style={{ fontSize: "12px", fontWeight: "700", color: scoreColor }}>
+                    {avgRounded}/10 avg
+                  </span>
+                );
+              })()}
             </div>
           </div>
         );
@@ -864,6 +876,7 @@ export default function PreviewPanel() {
                 results: data.results,
                 videoDuration: data.duration,
                 selectedJudges,
+                thumbnailDataUrl: data.thumbnailDataUrl || null,
               };
               saveToHistory(entry);
               setHistory(loadHistory());
