@@ -359,7 +359,7 @@ function toInt(val) { return val == null ? null : Math.round(Number(val)); }
 async function extractThumbnail(filePath) {
   try {
     const { stdout } = await execFileAsync(FFMPEG, [
-      "-i", filePath, "-frames:v", "1", "-vf", "scale=160:-1",
+      "-i", filePath, "-frames:v", "1", "-vf", "scale=96:-1", "-q:v", "4",
       "-f", "image2pipe", "-vcodec", "mjpeg", "-",
     ], { encoding: "buffer", maxBuffer: 10 * 1024 * 1024 });
     return `data:image/jpeg;base64,${stdout.toString("base64")}`;
