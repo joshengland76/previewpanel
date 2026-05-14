@@ -40,6 +40,16 @@ const FFMPEG = fs.existsSync("/opt/homebrew/bin/ffmpeg")
 // ── Issue #3: 3-minute video limit ───────────────────────────
 const MAX_VIDEO_DURATION_SECS = 300; // 5 minutes
 
+// Mirrors OBJECTIVE_OPTIONS in frontend/src/PreviewPanel.jsx — keep in sync.
+const VALID_OBJECTIVES = new Set([
+  "Funny Videos/Comedy", "Food & Drinks/Cooking", "Travel", "Fashion",
+  "Makeup/Beauty", "Pets/Animals", "Fitness/Wellness", "Dancing", "Gaming",
+  "Storytelling", "Life Hacks", "Fun Facts", "Shopping", "Cars/Automotive",
+  "ASMR", "Myth Busting", "Educational/How-To", "Aesthetic/Vibes", "Business/Finance",
+]);
+const VALID_PLATFORMS = new Set(["tiktok", "instagram", "youtube"]);
+const VALID_VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
+
 process.on("uncaughtException", (err) => {
   console.error("[uncaughtException] Unhandled exception — server will exit:", err);
   process.exit(1);
@@ -72,6 +82,22 @@ const upload = multer({
 
 app.use(cors());
 app.use(express.json());
+
+// Bearer-token gate for the /api/research/* surface. Token is compared against
+// RESEARCH_API_KEY (set on Render). Missing key in env → endpoint is disabled.
+function requireResearchAuth(req, res, next) {
+  const expected = process.env.RESEARCH_API_KEY;
+  if (!expected) {
+    console.warn("[research-auth] RESEARCH_API_KEY not set — rejecting request");
+    return res.status(401).json({ error: "Invalid or missing authentication token" });
+  }
+  const header = req.headers.authorization || "";
+  const m = header.match(/^Bearer\s+(.+)$/i);
+  if (!m || m[1] !== expected) {
+    return res.status(401).json({ error: "Invalid or missing authentication token" });
+  }
+  next();
+}
 
 // ── Issue #1: Job Queue — process ONE job at a time to prevent OOM ──────────
 let activeJob = null; // jobId of currently running pipeline
@@ -412,7 +438,7 @@ async function saveSubmission(entry) {
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
     try {
-      await pgPool.query(`
+      const { rows } = await pgPool.query(`
         INSERT INTO submissions
           (job_id, ip, platform, file_size_mb, duration_secs, status,
            total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
@@ -438,14 +464,15 @@ async function saveSubmission(entry) {
                 $48,$49,$50,$51,$52,$53,$54,$55,$56,$57,
                 $58,$59,$60,$61,$62,$63,$64,$65,$66,$67,
                 $68,$69,$70,$71,$72,$73,$74,$75,$76,$77)
+        RETURNING id
       `, fullValues);
-      return;
+      return rows[0]?.id ?? null;
     } catch (err) {
       console.error(`[db] Full INSERT failed — code=${err.code} message=${err.message}`);
       if (err.code === "42703") {
         console.warn(`[db] Dimension columns missing in schema — retrying with base 21-column INSERT`);
         try {
-          await pgPool.query(`
+          const { rows } = await pgPool.query(`
             INSERT INTO submissions
               (job_id, ip, platform, file_size_mb, duration_secs, status,
                total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
@@ -453,9 +480,10 @@ async function saveSubmission(entry) {
                critic_score, trendsetter_score, connector_score, avg_score,
                file_name, task_creation_ms, queue_wait_ms, tl_queue_ms)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+            RETURNING id
           `, baseValues);
           console.log(`[db] Base INSERT succeeded (no dimension columns) — job=${entry.jobId}`);
-          return;
+          return rows[0]?.id ?? null;
         } catch (fallbackErr) {
           console.error(`[db] Base INSERT also failed — code=${fallbackErr.code} message=${fallbackErr.message}`);
         }
@@ -463,6 +491,7 @@ async function saveSubmission(entry) {
     }
   }
   try { fs.appendFileSync(SUBMISSIONS_PATH, JSON.stringify(entry) + "\n"); } catch (e) { console.warn("[log] Failed to write submission to disk:", e.message); }
+  return null;
 }
 
 async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs) {
@@ -1153,6 +1182,123 @@ Required JSON format:
 }
 
 // ── POST /api/analyze ─────────────────────────────────────────
+// ── Shared preprocessing: ffmpeg conversion + size/duration validation ──────
+// Used by both /api/analyze (UI) and /api/research/submit (research API).
+// Side effects on success: populates jobs[jobId] with preProcessedPath,
+// inputCodecs, isHEVC, originalFilePath, videoDuration, thumbnailDataUrl,
+// preprocessedAt. On failure: sets jobs[jobId].status='error', cleans up the
+// uploaded files, and writes a submission record via recordSubmissionForJob.
+// Returns { ok: true } on success or { ok: false, status, error } on failure
+// (status is the same string passed to recordSubmissionForJob).
+async function preprocessUploadedVideo(jobId, filePath) {
+  let preprocessedPath = null;
+  try {
+    // 1. Raw size check — instant stat, no ffmpeg
+    const rawSizeMB = fs.statSync(filePath).size / 1024 / 1024;
+    console.log(`[${jobId}] Raw file: ${jobs[jobId].fileName || "unknown"} — ${rawSizeMB.toFixed(1)} MB`);
+    if (rawSizeMB > 1024) {
+      const error = "File too large to process. Please use a video under 1GB.";
+      jobs[jobId].status = "error";
+      jobs[jobId].error = error;
+      console.log(`[${jobId}] Rejected — raw file too large: ${rawSizeMB.toFixed(1)}MB`);
+      fs.unlink(filePath, () => {});
+      await recordSubmissionForJob(jobId, "rejected_too_large");
+      return { ok: false, status: "rejected_too_large", error };
+    }
+
+    // 2. Duration check on raw file — reads headers, no encode
+    const rawDuration = await getVideoDuration(filePath);
+    if (rawDuration && rawDuration.secs > MAX_VIDEO_DURATION_SECS) {
+      const error = `Video is ${rawDuration.label} long. PreviewPanel currently supports videos up to 5:00. Please trim your video and try again.`;
+      jobs[jobId].status = "error";
+      jobs[jobId].error = error;
+      console.log(`[${jobId}] Rejected — video too long: ${rawDuration.label}`);
+      fs.unlink(filePath, () => {});
+      await recordSubmissionForJob(jobId, "rejected_too_long");
+      return { ok: false, status: "rejected_too_long", error };
+    }
+    if (rawDuration && rawDuration.secs < 4) {
+      const error = "Video is too short. Please use a video that is at least 4 seconds long.";
+      jobs[jobId].status = "error";
+      jobs[jobId].error = error;
+      console.log(`[${jobId}] Rejected — video too short: ${rawDuration.label}`);
+      fs.unlink(filePath, () => {});
+      await recordSubmissionForJob(jobId, "rejected_too_short");
+      return { ok: false, status: "rejected_too_short", error };
+    }
+
+    // 3. Codec detect + first-pass convert
+    const inputCodecs = await probeCodecs(filePath);
+    const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
+    const t_conv = Date.now();
+    preprocessedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
+    jobs[jobId].timings.conversionMs = Date.now() - t_conv;
+
+    // 4. Second compression pass if over 150MB
+    let convertedSizeMB = fs.statSync(preprocessedPath).size / 1024 / 1024;
+    if (convertedSizeMB > 150) {
+      const inputSizeMB = convertedSizeMB;
+      const pass2Path = preprocessedPath + ".pass2.mp4";
+      const t_conv2 = Date.now();
+      await execFileAsync(FFMPEG, [
+        "-i", preprocessedPath,
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-vf", "scale=640:-2",
+        "-c:a", "aac", "-b:a", "96k",
+        "-vsync", "cfr", "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
+      ]);
+      const pass2Ms = Date.now() - t_conv2;
+      jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + pass2Ms;
+      fs.unlink(preprocessedPath, () => {});
+      preprocessedPath = pass2Path;
+      convertedSizeMB = fs.statSync(preprocessedPath).size / 1024 / 1024;
+      console.log(`[ffmpeg] Second pass: ${inputSizeMB.toFixed(1)}MB → ${convertedSizeMB.toFixed(1)}MB in ${(pass2Ms / 1000).toFixed(1)}s (ultrafast, 640p, crf35)`);
+    }
+
+    // 5. Hard reject if still too large after all passes
+    if (convertedSizeMB > 190) {
+      const error = "Your video is too large after processing. Please reduce the video quality or length before uploading.";
+      jobs[jobId].status = "error";
+      jobs[jobId].error = error;
+      console.log(`[${jobId}] Rejected — converted file too large: ${convertedSizeMB.toFixed(1)}MB`);
+      fs.unlink(filePath, () => {});
+      fs.unlink(preprocessedPath, () => {});
+      await recordSubmissionForJob(jobId, "rejected_too_large");
+      return { ok: false, status: "rejected_too_large", error };
+    }
+
+    // 6. Read converted duration — authoritative for TwelveLabs timestamps
+    const convertedDuration = await getVideoDuration(preprocessedPath);
+    if (convertedDuration) {
+      const origSecs = rawDuration?.secs ?? null;
+      console.log(`[ffmpeg] Duration — original: ${origSecs != null ? origSecs.toFixed(1) + "s" : "unknown"}, converted: ${convertedDuration.secs.toFixed(1)}s`);
+      if (origSecs != null && Math.abs(convertedDuration.secs - origSecs) > 2) {
+        console.warn(`[ffmpeg] Warning: duration mismatch of ${Math.abs(convertedDuration.secs - origSecs).toFixed(1)}s between original and converted file`);
+      }
+      jobs[jobId].videoDuration = convertedDuration;
+    }
+
+    // 7. Extract first-frame thumbnail for history panel
+    jobs[jobId].thumbnailDataUrl = await extractThumbnail(preprocessedPath);
+
+    // Store for runPipeline — original file kept until after TwelveLabs upload (HEVC fallback)
+    jobs[jobId].preProcessedPath = preprocessedPath;
+    jobs[jobId].inputCodecs = inputCodecs;
+    jobs[jobId].isHEVC = isHEVC;
+    jobs[jobId].originalFilePath = filePath;
+    jobs[jobId].preprocessedAt = Date.now();
+    console.log(`[${jobId}] Preprocessing complete — enqueuing for TwelveLabs upload`);
+    return { ok: true };
+  } catch (err) {
+    jobs[jobId].status = "error";
+    jobs[jobId].error = err.message;
+    console.error(`[${jobId}] Preprocessing error: ${err.message}`, err);
+    fs.unlink(filePath, () => {});
+    if (preprocessedPath) fs.unlink(preprocessedPath, () => {});
+    await recordSubmissionForJob(jobId, "error");
+    return { ok: false, status: "error", error: err.message };
+  }
+}
+
 app.post("/api/analyze", (req, res, next) => {
   const t_request = Date.now();
   console.log(`[upload] Request received — starting multer file parse`);
@@ -1221,107 +1367,8 @@ app.post("/api/analyze", (req, res, next) => {
     // All ffmpeg work happens here, before enqueueJob, so the queue slot is held
     // only for the short TwelveLabs upload + task creation phase (~2-3s per job).
     if (filePath) {
-      let preprocessedPath = null;
-      try {
-        // 1. Raw size check — instant stat, no ffmpeg
-        const rawSizeMB = fs.statSync(filePath).size / 1024 / 1024;
-        console.log(`[${jobId}] Raw file: ${jobs[jobId].fileName || "unknown"} — ${rawSizeMB.toFixed(1)} MB`);
-        if (rawSizeMB > 1024) {
-          jobs[jobId].status = "error";
-          jobs[jobId].error = "File too large to process. Please use a video under 1GB.";
-          console.log(`[${jobId}] Rejected — raw file too large: ${rawSizeMB.toFixed(1)}MB`);
-          fs.unlink(filePath, () => {});
-          await recordSubmissionForJob(jobId, "rejected_too_large");
-          return;
-        }
-
-        // 2. Duration check on raw file — reads headers, no encode
-        const rawDuration = await getVideoDuration(filePath);
-        if (rawDuration && rawDuration.secs > MAX_VIDEO_DURATION_SECS) {
-          jobs[jobId].status = "error";
-          jobs[jobId].error = `Video is ${rawDuration.label} long. PreviewPanel currently supports videos up to 5:00. Please trim your video and try again.`;
-          console.log(`[${jobId}] Rejected — video too long: ${rawDuration.label}`);
-          fs.unlink(filePath, () => {});
-          await recordSubmissionForJob(jobId, "rejected_too_long");
-          return;
-        }
-        if (rawDuration && rawDuration.secs < 4) {
-          jobs[jobId].status = "error";
-          jobs[jobId].error = "Video is too short. Please use a video that is at least 4 seconds long.";
-          console.log(`[${jobId}] Rejected — video too short: ${rawDuration.label}`);
-          fs.unlink(filePath, () => {});
-          await recordSubmissionForJob(jobId, "rejected_too_short");
-          return;
-        }
-
-        // 3. Codec detect + first-pass convert
-        const inputCodecs = await probeCodecs(filePath);
-        const isHEVC = inputCodecs.video === "hevc" || inputCodecs.video === "h265";
-        const t_conv = Date.now();
-        preprocessedPath = await convertToMp4(filePath, { preProbed: inputCodecs });
-        jobs[jobId].timings.conversionMs = Date.now() - t_conv;
-
-        // 4. Second compression pass if over 150MB
-        let convertedSizeMB = fs.statSync(preprocessedPath).size / 1024 / 1024;
-        if (convertedSizeMB > 150) {
-          const inputSizeMB = convertedSizeMB;
-          const pass2Path = preprocessedPath + ".pass2.mp4";
-          const t_conv2 = Date.now();
-          await execFileAsync(FFMPEG, [
-            "-i", preprocessedPath,
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-vf", "scale=640:-2",
-            "-c:a", "aac", "-b:a", "96k",
-            "-vsync", "cfr", "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
-          ]);
-          const pass2Ms = Date.now() - t_conv2;
-          jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + pass2Ms;
-          fs.unlink(preprocessedPath, () => {});
-          preprocessedPath = pass2Path;
-          convertedSizeMB = fs.statSync(preprocessedPath).size / 1024 / 1024;
-          console.log(`[ffmpeg] Second pass: ${inputSizeMB.toFixed(1)}MB → ${convertedSizeMB.toFixed(1)}MB in ${(pass2Ms / 1000).toFixed(1)}s (ultrafast, 640p, crf35)`);
-        }
-
-        // 5. Hard reject if still too large after all passes
-        if (convertedSizeMB > 190) {
-          jobs[jobId].status = "error";
-          jobs[jobId].error = "Your video is too large after processing. Please reduce the video quality or length before uploading.";
-          console.log(`[${jobId}] Rejected — converted file too large: ${convertedSizeMB.toFixed(1)}MB`);
-          fs.unlink(filePath, () => {});
-          fs.unlink(preprocessedPath, () => {});
-          await recordSubmissionForJob(jobId, "rejected_too_large");
-          return;
-        }
-
-        // 6. Read converted duration — authoritative for TwelveLabs timestamps
-        const convertedDuration = await getVideoDuration(preprocessedPath);
-        if (convertedDuration) {
-          const origSecs = rawDuration?.secs ?? null;
-          console.log(`[ffmpeg] Duration — original: ${origSecs != null ? origSecs.toFixed(1) + "s" : "unknown"}, converted: ${convertedDuration.secs.toFixed(1)}s`);
-          if (origSecs != null && Math.abs(convertedDuration.secs - origSecs) > 2) {
-            console.warn(`[ffmpeg] Warning: duration mismatch of ${Math.abs(convertedDuration.secs - origSecs).toFixed(1)}s between original and converted file`);
-          }
-          jobs[jobId].videoDuration = convertedDuration;
-        }
-
-        // 7. Extract first-frame thumbnail for history panel
-        jobs[jobId].thumbnailDataUrl = await extractThumbnail(preprocessedPath);
-
-        // Store for runPipeline — original file kept until after TwelveLabs upload (HEVC fallback)
-        jobs[jobId].preProcessedPath = preprocessedPath;
-        jobs[jobId].inputCodecs = inputCodecs;
-        jobs[jobId].isHEVC = isHEVC;
-        jobs[jobId].originalFilePath = filePath;
-        jobs[jobId].preprocessedAt = Date.now();
-        console.log(`[${jobId}] Preprocessing complete — enqueuing for TwelveLabs upload`);
-      } catch (err) {
-        jobs[jobId].status = "error";
-        jobs[jobId].error = err.message;
-        console.error(`[${jobId}] Preprocessing error: ${err.message}`, err);
-        fs.unlink(filePath, () => {});
-        if (preprocessedPath) fs.unlink(preprocessedPath, () => {});
-        await recordSubmissionForJob(jobId, "error");
-        return;
-      }
+      const pre = await preprocessUploadedVideo(jobId, filePath);
+      if (!pre.ok) return;
     }
 
     // Queue slot held only for TwelveLabs upload + task creation (~2-3s per job)
@@ -1333,6 +1380,160 @@ app.post("/api/analyze", (req, res, next) => {
     if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
+
+// POST /api/research/submit — synchronous video scoring for the correlation
+// research project. Reuses the exact same pipeline as /api/analyze: preprocess
+// → enqueueJob(runPipeline) → background poller → recordSubmissionForJob.
+// Unlike the UI path, the request stays open until scoring finalizes.
+// Typical duration: 60-120 seconds (TwelveLabs runs all three judges). Hard
+// cap inside waitForJobCompletion below. Auth: bearer token matched against
+// RESEARCH_API_KEY env var.
+app.post("/api/research/submit", requireResearchAuth, (req, res, next) => {
+  upload.single("video")(req, res, (err) => {
+    if (err) {
+      console.error(`[research_api] Multer error:`, err.message);
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
+  const tStart = Date.now();
+  const cleanupTempFile = () => {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+  };
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "Missing required field: video (multipart file)" });
+    }
+
+    const platform = (req.body.platform || "").toString().trim();
+    if (!VALID_PLATFORMS.has(platform)) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid platform "${platform}" — must be one of: tiktok, instagram, youtube` });
+    }
+
+    const objective = (req.body.objective || "").toString();
+    if (!VALID_OBJECTIVES.has(objective)) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid objective "${objective}" — must exactly match one of the 19 PreviewPanel objective strings (case and punctuation sensitive)` });
+    }
+
+    const externalVideoId = (req.body.external_video_id || "").toString().trim();
+    const originalName = (req.file.originalname || "").toString();
+    const ext = path.extname(originalName).toLowerCase();
+    if (!VALID_VIDEO_EXTS.has(ext)) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid video extension "${ext}" — must be one of: .mp4, .mov, .webm` });
+    }
+
+    // file_name resolution, in priority order:
+    //   1. external_video_id provided → "<platform>_<id>.<ext>" (research dataset pattern)
+    //   2. client-provided multipart filename
+    //   3. degenerate fallback (no filename in upload) → "<platform>_<jobId>.<ext>"
+    // Guarantees file_name is never null/empty in the submissions table.
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const fileName = externalVideoId
+      ? `${platform}_${externalVideoId}${ext}`
+      : (originalName || `${platform}_${jobId}${ext}`);
+
+    jobs[jobId] = {
+      status: "uploading",
+      queuePosition: 0,
+      platform,
+      objective,
+      source: "research_api",
+      results: {},
+      error: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      timings: { conversionMs: null, uploadMs: null, browserUploadMs: null, judges: {} },
+      ip: (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map(s => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })(),
+      fileSizeMB: parseFloat((req.file.size / 1024 / 1024).toFixed(2)),
+      fileName,
+      browserUploadMs: null,
+    };
+
+    console.log(`[${jobId}] [research_api] Job created — platform=${platform} objective="${objective}" file=${fileName} size=${jobs[jobId].fileSizeMB}MB external_id=${externalVideoId || "—"}`);
+
+    const pre = await preprocessUploadedVideo(jobId, req.file.path);
+    if (!pre.ok) {
+      const isInternal = pre.status === "error";
+      return res.status(isInternal ? 500 : 400).json({
+        error: pre.error,
+        rejection_reason: pre.status,
+        submission_id: jobs[jobId]?.submissionId ?? null,
+      });
+    }
+
+    enqueueJob(jobId, () => runPipeline(jobId, null, platform, objective, JUDGES));
+
+    try {
+      await waitForJobCompletion(jobId);
+    } catch (waitErr) {
+      console.error(`[${jobId}] [research_api] Wait error: ${waitErr.message}`);
+      return res.status(500).json({
+        error: waitErr.message,
+        submission_id: jobs[jobId]?.submissionId ?? null,
+      });
+    }
+
+    const job = jobs[jobId];
+    const scores = {
+      critic_score: typeof job.results?.critic?.data?.overall === "number" ? job.results.critic.data.overall : null,
+      trendsetter_score: typeof job.results?.cool?.data?.overall === "number" ? job.results.cool.data.overall : null,
+      connector_score: typeof job.results?.connector?.data?.overall === "number" ? job.results.connector.data.overall : null,
+    };
+    const validScores = Object.values(scores).filter(v => typeof v === "number");
+    scores.avg_score = validScores.length
+      ? parseFloat((validScores.reduce((a, b) => a + b, 0) / validScores.length).toFixed(1))
+      : null;
+
+    const responseStatus = job.status === "done" ? "complete" : job.status;
+    const completedAtIso = new Date(job.completedAt || Date.now()).toISOString();
+    const allThreeComplete = ["critic", "cool", "connector"].every(id => job.results?.[id]?.status === "done");
+    const durationMs = Date.now() - tStart;
+
+    console.log(`[research_api] submission_id=${job.submissionId ?? "null"} source=research_api platform=${platform} objective="${objective}" duration_ms=${durationMs} all_three_complete=${allThreeComplete}`);
+
+    const httpStatus = (responseStatus === "complete" || responseStatus === "partial") ? 200 : 500;
+    const body = {
+      submission_id: job.submissionId ?? null,
+      status: responseStatus,
+      scores,
+      completed_at: completedAtIso,
+    };
+    if (httpStatus === 500) body.error = job.error || `Scoring ${responseStatus}`;
+    return res.status(httpStatus).json(body);
+  } catch (err) {
+    console.error(`[research_api] Unexpected error:`, err);
+    cleanupTempFile();
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message || "Internal error" });
+    }
+  }
+});
+
+// Synchronous wait for a job to reach jobs[jobId].finalized = true (set inside
+// recordSubmissionForJob). Polls local memory every 1s; nudges the background
+// TwelveLabs poller every 5s to reduce response latency below the poller's
+// native 15s interval. Hard cap: 8 minutes — well above the 60-120s typical
+// scoring duration, leaves headroom for TwelveLabs queueing.
+async function waitForJobCompletion(jobId, maxWaitMs = 8 * 60 * 1000) {
+  const startWait = Date.now();
+  let lastPollNudge = 0;
+  while (Date.now() - startWait < maxWaitMs) {
+    const job = jobs[jobId];
+    if (!job) throw new Error(`Job ${jobId} vanished from memory before completion`);
+    if (job.submissionRecorded) return job;
+    if (Date.now() - lastPollNudge > 5000) {
+      lastPollNudge = Date.now();
+      pollAnalyzeTasks().catch(err => console.warn(`[waitForJobCompletion] Poll nudge error: ${err.message}`));
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  throw new Error(`Timed out waiting for job ${jobId} after ${Math.round(maxWaitMs / 1000)}s`);
+}
 
 // ── Upload phase pipeline (queue slot held only during this) ──────────────────
 // Preprocessing (ffmpeg) already completed before this is called — this function
@@ -1561,7 +1762,13 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   };
   submissionLog.unshift(entry);
   if (submissionLog.length > 500) submissionLog.length = 500;
-  await saveSubmission(entry);
+  const submissionId = await saveSubmission(entry);
+  if (submissionId != null) job.submissionId = submissionId;
+  job.completedAt = Date.now();
+  // Set AFTER submissionId/completedAt populate so waitForJobCompletion can
+  // safely read them on the same tick. `finalized` above is set first as a
+  // re-entry guard, but the DB write happens between them.
+  job.submissionRecorded = true;
   console.log(`[${jobId}] [log] ${JSON.stringify(entry)}`);
 }
 

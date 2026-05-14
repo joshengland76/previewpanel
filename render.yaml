@@ -12,3 +12,5 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: RESEARCH_API_KEY
+        sync: false
