@@ -1042,6 +1042,47 @@ async function uploadAssetDirect(filePath) {
   return assetId;
 }
 
+// ── Salvage a malformed-but-present JSON object from raw judge text ─────
+// Dependency-free, runs ONLY in the catch branch after JSON.parse fails.
+// Conservatively: (1) extract the outermost balanced { … } block (skips prose
+// preamble, trailing refusal text, and un-stripped markdown around a real
+// object), respecting string literals so braces inside strings don't miscount;
+// (2) strip trailing commas before } or ]; (3) JSON.parse the result.
+// Never throws — returns the parsed object on success, or null on any failure.
+function salvageJudgeJson(rawText) {
+  try {
+    const text = String(rawText || "");
+    const start = text.indexOf("{");
+    if (start === -1) return null;
+    // Walk forward to the brace that closes the first object, tracking string
+    // state so that { } characters inside JSON strings are ignored.
+    let depth = 0, end = -1, inStr = false, esc = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    if (end === -1) return null;
+    let candidate = text.slice(start, end + 1);
+    // Remove trailing commas immediately before a closing } or ].
+    candidate = candidate.replace(/,(\s*[}\]])/g, "$1");
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Parse raw TwelveLabs text into structured judge result ─────
 async function processAnalyzeResult(rawText, judge, platform, objective, videoDuration) {
   // If the SDK already deserialized the result into an object, use it directly
@@ -1069,6 +1110,16 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
     console.error(`[TwelveLabs][${judge.id}] Full raw text (${clean.length} chars): ${clean.slice(0, 2000)}`);
     if (clean.length > 2000) console.error(`[TwelveLabs][${judge.id}] ...truncated (${clean.length - 2000} more chars)`);
 
+    // Local salvage first — no API call. Recovers malformed-but-present objects
+    // (prose preamble, trailing refusal text, trailing commas) before the
+    // fallback chain, so structureWithClaude fires less often (a cost win).
+    const salvaged = salvageJudgeJson(clean);
+    if (salvaged && salvaged.overall) {
+      console.log(`[TwelveLabs][${judge.id}] SALVAGED malformed JSON locally — overall=${salvaged.overall}, dimensions=${salvaged.dimensions ? "present" : "missing"}, keys: ${Object.keys(salvaged).join(", ")}`);
+      validateObjectiveFit(salvaged, judge.id, objective);
+      return applyMomentFilters(salvaged, judge, videoDuration);
+    }
+
     if (process.env.ANTHROPIC_API_KEY) {
       try {
         console.log(`[TwelveLabs][${judge.id}] Attempting Claude fallback to structure raw text`);
@@ -1077,6 +1128,12 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
         console.error(`[TwelveLabs][${judge.id}] Claude fallback also failed: ${claudeErr.message}`);
       }
     }
+
+    // Unrecoverable: parse, local salvage, and any Claude fallback all failed.
+    // Log judge id, objective, and the head of the raw response so this NULL
+    // write is inspectable later (the raw Pegasus text is otherwise overwritten
+    // and survives only transiently in Render logs). Diagnostic only.
+    console.error(`[TwelveLabs][${judge.id}] SALVAGE FAILED — unrecoverable, writing NULL. objective="${objective ?? "none"}" raw (first 500 chars): ${clean.slice(0, 500)}`);
 
     return {
       overall: null,
