@@ -66,7 +66,7 @@ The `render.yaml` build command (`apt-get install -y ffmpeg`) installs ffmpeg au
 **4. Note your Render URL**
 
 After deployment, Render gives you a URL like:  
-`https://previewpanel-backend.onrender.com`
+`https://previewpanel.onrender.com`
 
 Save this — you need it for the frontend deployment.
 
@@ -107,7 +107,7 @@ In the Vercel project → **Settings** → **Environment Variables**, add:
 
 | Variable | Value |
 |---|---|
-| `VITE_API_URL` | `https://previewpanel-backend.onrender.com` (no trailing slash) |
+| `VITE_API_URL` | `https://previewpanel.onrender.com` (no trailing slash) |
 
 **4. Deploy**
 
@@ -129,7 +129,7 @@ Click **Deploy**. On every future push to `main`, Vercel rebuilds automatically.
 
 | Variable | Required | Description |
 |---|---|---|
-| `VITE_API_URL` | production only | Full Render backend URL, e.g. `https://previewpanel-backend.onrender.com` |
+| `VITE_API_URL` | production only | Full Render backend URL, e.g. `https://previewpanel.onrender.com` |
 
 Leave `VITE_API_URL` unset locally — the Vite dev proxy routes `/api` to `localhost:3001`.
 
