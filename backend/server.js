@@ -1057,7 +1057,7 @@ async function uploadAssetDirect(filePath) {
 //     slice (indexOf '{' .. lastIndexOf '}') tolerates inner unescaped quotes that
 //     break the Strategy-1 walker.
 // Never throws — returns the parsed object on success, or null on any failure.
-function salvageJudgeJson(rawText) {
+function salvageJudgeJson(rawText, judgeId) {
   const text = String(rawText || "");
 
   // Strategy 1 — balanced-brace extract + trailing-comma fix (unchanged behavior).
@@ -1098,7 +1098,13 @@ function salvageJudgeJson(rawText) {
     if (start !== -1 && end > start) {
       const repaired = jsonrepair(text.slice(start, end + 1));
       const parsed = JSON.parse(repaired);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        // Distinct marker so jsonrepair (Strategy 2) recoveries are separable in
+        // the logs from Strategy-1 balanced-brace recoveries (which only emit the
+        // caller's generic "SALVAGED malformed JSON locally" line). Grep this.
+        console.log(`[TwelveLabs][${judgeId || "?"}] SALVAGED via jsonrepair (Strategy 2)`);
+        return parsed;
+      }
     }
   } catch {
     // unrecoverable — caller falls through to NULL path + raw logging
@@ -1137,7 +1143,7 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
     // Local salvage first — no API call. Recovers malformed-but-present objects
     // (prose preamble, trailing refusal text, trailing commas) before the
     // fallback chain, so structureWithClaude fires less often (a cost win).
-    const salvaged = salvageJudgeJson(clean);
+    const salvaged = salvageJudgeJson(clean, judge.id);
     if (salvaged && salvaged.overall) {
       console.log(`[TwelveLabs][${judge.id}] SALVAGED malformed JSON locally — overall=${salvaged.overall}, dimensions=${salvaged.dimensions ? "present" : "missing"}, keys: ${Object.keys(salvaged).join(", ")}`);
       validateObjectiveFit(salvaged, judge.id, objective);
@@ -2176,6 +2182,19 @@ app.get("/admin/logs", (req, res) => {
 
 // ── Health check ──────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({ ok: true }));
+
+// Build provenance — proves which commit is running after a deploy, with no
+// dashboard or API key: curl https://previewpanel.onrender.com/version
+// sha: Render injects RENDER_GIT_COMMIT (default env var) at runtime; falls back
+// to GIT_COMMIT or "unknown" off-Render. startedAt: process boot time (~deploy time).
+// Unauthenticated, no DB calls — trivial and safe.
+const BUILD_SHA = process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || "unknown";
+const STARTED_AT = new Date().toISOString();
+app.get("/version", (_, res) => res.json({
+  sha: BUILD_SHA,
+  shortSha: BUILD_SHA === "unknown" ? "unknown" : BUILD_SHA.slice(0, 7),
+  startedAt: STARTED_AT,
+}));
 
 // ── TwelveLabs warm-up — keeps infrastructure warm, prevents cold-start delays ─
 const WARMUP_PATH = path.join(__dirname, "uploads", "warmup.mp4");

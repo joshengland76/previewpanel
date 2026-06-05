@@ -6,7 +6,7 @@ import { jsonrepair } from "jsonrepair";  // Strategy 2 dep; injected into the e
 
 // ── Pull the actual salvageJudgeJson source out of server.js ──────────────
 const src = fs.readFileSync(new URL("./server.js", import.meta.url), "utf8");
-const marker = "function salvageJudgeJson(rawText) {";
+const marker = "function salvageJudgeJson(rawText, judgeId) {";
 const start = src.indexOf(marker);
 if (start === -1) throw new Error("salvageJudgeJson not found in server.js");
 // The function is immediately followed by this sentinel comment; slice to it.
