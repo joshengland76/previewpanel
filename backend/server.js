@@ -26,6 +26,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { TwelveLabs } from "twelvelabs-js";
 import pg from "pg";
 import FormDataStream from "form-data";
+import { jsonrepair } from "jsonrepair";
 import "dotenv/config";
 
 const { Pool } = pg;
@@ -1043,44 +1044,67 @@ async function uploadAssetDirect(filePath) {
 }
 
 // ── Salvage a malformed-but-present JSON object from raw judge text ─────
-// Dependency-free, runs ONLY in the catch branch after JSON.parse fails.
-// Conservatively: (1) extract the outermost balanced { … } block (skips prose
-// preamble, trailing refusal text, and un-stripped markdown around a real
-// object), respecting string literals so braces inside strings don't miscount;
-// (2) strip trailing commas before } or ]; (3) JSON.parse the result.
+// Runs ONLY in the catch branch after JSON.parse fails. Two strategies, in order:
+//   Strategy 1 (cheap, no deps): extract the first balanced { … } block (skips
+//     prose preamble, trailing refusal text, un-stripped markdown), respecting
+//     string literals so braces inside strings don't miscount; strip trailing
+//     commas; JSON.parse. Handles prose/markdown-wrapped otherwise-valid JSON.
+//   Strategy 2 (jsonrepair): when Strategy 1 can't (the Connector prose-field bug
+//     — unescaped double-quotes inside string values like reaction/positives/
+//     delivery, which prematurely close the string and mislead the brace walker;
+//     also smart/curly quotes, stray control chars), run the maintained jsonrepair
+//     library over the coarse first{…last} region, then JSON.parse. The coarse
+//     slice (indexOf '{' .. lastIndexOf '}') tolerates inner unescaped quotes that
+//     break the Strategy-1 walker.
 // Never throws — returns the parsed object on success, or null on any failure.
 function salvageJudgeJson(rawText) {
+  const text = String(rawText || "");
+
+  // Strategy 1 — balanced-brace extract + trailing-comma fix (unchanged behavior).
   try {
-    const text = String(rawText || "");
     const start = text.indexOf("{");
-    if (start === -1) return null;
-    // Walk forward to the brace that closes the first object, tracking string
-    // state so that { } characters inside JSON strings are ignored.
-    let depth = 0, end = -1, inStr = false, esc = false;
-    for (let i = start; i < text.length; i++) {
-      const ch = text[i];
-      if (inStr) {
-        if (esc) esc = false;
-        else if (ch === "\\") esc = true;
-        else if (ch === '"') inStr = false;
-        continue;
+    if (start !== -1) {
+      // Walk forward to the brace that closes the first object, tracking string
+      // state so that { } characters inside JSON strings are ignored.
+      let depth = 0, end = -1, inStr = false, esc = false;
+      for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (inStr) {
+          if (esc) esc = false;
+          else if (ch === "\\") esc = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) { end = i; break; }
+        }
       }
-      if (ch === '"') { inStr = true; continue; }
-      if (ch === "{") depth++;
-      else if (ch === "}") {
-        depth--;
-        if (depth === 0) { end = i; break; }
+      if (end !== -1) {
+        const candidate = text.slice(start, end + 1).replace(/,(\s*[}\]])/g, "$1");
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
       }
     }
-    if (end === -1) return null;
-    let candidate = text.slice(start, end + 1);
-    // Remove trailing commas immediately before a closing } or ].
-    candidate = candidate.replace(/,(\s*[}\]])/g, "$1");
-    const parsed = JSON.parse(candidate);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
-    return null;
+    // fall through to Strategy 2
   }
+
+  // Strategy 2 — jsonrepair over the coarse first{…last} region.
+  try {
+    const start = text.indexOf("{"), end = text.lastIndexOf("}");
+    if (start !== -1 && end > start) {
+      const repaired = jsonrepair(text.slice(start, end + 1));
+      const parsed = JSON.parse(repaired);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // unrecoverable — caller falls through to NULL path + raw logging
+  }
+
+  return null;
 }
 
 // ── Parse raw TwelveLabs text into structured judge result ─────
