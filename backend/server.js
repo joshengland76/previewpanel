@@ -403,6 +403,7 @@ async function extractThumbnail(filePath) {
 async function saveSubmission(entry) {
   if (pgPool) {
     const d = entry.dimensions || {};
+    const cr = entry.contentRisk || {};  // Editor-only content-risk (migration 015); {} → all NULL
     const baseValues = [
       entry.jobId, entry.ip, entry.platform, entry.fileSizeMB, entry.videoDurationSecs, entry.status,
       toInt(entry.timings.totalMs), toInt(entry.timings.conversionMs), toInt(entry.timings.uploadMs), toInt(entry.timings.browserUploadMs),
@@ -439,6 +440,10 @@ async function saveSubmission(entry) {
       toInt(d.connector_big_novel), toInt(d.connector_big_visually_engaging), toInt(d.connector_big_emotionally_resonant),
       toInt(d.connector_big_useful), toInt(d.connector_big_surprising), toInt(d.connector_big_relatable),
       toInt(d.connector_big_emotion_intensity),
+      // content-risk covariates (Editor-only; NULL when absent) + provenance tag ($78–$84)
+      cr.risk_sexual_suggestive ?? null, cr.risk_violence_shock ?? null, cr.risk_hate_harassment ?? null,
+      cr.risk_profanity ?? null, cr.risk_outrage_inflammatory ?? null, cr.risk_dangerous_acts ?? null,
+      entry.contentRisk ? "editor-risk-v1" : null,
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
@@ -462,13 +467,15 @@ async function saveSubmission(entry) {
            thumbnail_data_url, objective,
            critic_big_funny, critic_big_compelling, critic_big_authentic, critic_big_novel, critic_big_visually_engaging, critic_big_emotionally_resonant, critic_big_useful, critic_big_surprising, critic_big_relatable, critic_big_emotion_intensity,
            trendsetter_big_funny, trendsetter_big_compelling, trendsetter_big_authentic, trendsetter_big_novel, trendsetter_big_visually_engaging, trendsetter_big_emotionally_resonant, trendsetter_big_useful, trendsetter_big_surprising, trendsetter_big_relatable, trendsetter_big_emotion_intensity,
-           connector_big_funny, connector_big_compelling, connector_big_authentic, connector_big_novel, connector_big_visually_engaging, connector_big_emotionally_resonant, connector_big_useful, connector_big_surprising, connector_big_relatable, connector_big_emotion_intensity)
+           connector_big_funny, connector_big_compelling, connector_big_authentic, connector_big_novel, connector_big_visually_engaging, connector_big_emotionally_resonant, connector_big_useful, connector_big_surprising, connector_big_relatable, connector_big_emotion_intensity,
+           risk_sexual_suggestive, risk_violence_shock, risk_hate_harassment, risk_profanity, risk_outrage_inflammatory, risk_dangerous_acts, risk_scored_version)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
                 $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,
                 $48,$49,$50,$51,$52,$53,$54,$55,$56,$57,
                 $58,$59,$60,$61,$62,$63,$64,$65,$66,$67,
-                $68,$69,$70,$71,$72,$73,$74,$75,$76,$77)
+                $68,$69,$70,$71,$72,$73,$74,$75,$76,$77,
+                $78,$79,$80,$81,$82,$83,$84)
         RETURNING id
       `, fullValues);
       return rows[0]?.id ?? null;
@@ -794,6 +801,23 @@ For any custom objective not listed above, apply equivalent category-specific lo
   const editingCraftBlock = `
 EDITING CRAFT — Pay attention to the editing of this video. Note specific editing choices that help or hurt the video's performance: cuts, pacing, transitions, caption style and placement, on-screen text, background music choice and volume, sound effects, zoom-ins, speed changes (fast-forward or slow-mo), overlays, stickers, animations, and effects. Where editing works well, name the specific moment and technique. Where editing could be improved, give a concrete actionable suggestion — for example: 'Cut the 8-second pause at 0:23', 'Add a zoom-in at 0:15 when the product is revealed', 'Lower the background music volume during the spoken section', 'Add captions in bold white text with a subtle drop shadow for accessibility and retention', 'Speed up the setup section to 1.5x', 'Add a sound effect at the transition at 0:10'. Suggest specific caption text where relevant. Focus on editing changes that would meaningfully improve watchability and audience retention, not editing for its own sake.${judge.id === "critic" ? "\nEditing craft is your primary lens. Use at least half your suggestions field for specific editing improvements. Lead with editing observations in your delivery field before covering other aspects of presentation." : ""}`;
 
+  // CONTENT-RISK control variables — Editor (critic) ONLY. Descriptive covariates
+  // for the research; explicitly NOT quality factors and must not move craft scores.
+  // Numeric-only (no per-field prose) to avoid reintroducing JSON-parse risk.
+  const contentRiskBlock = judge.id === "critic" ? `
+CONTENT-RISK ASSESSMENT (independent of your quality scoring).
+Separately from your quality assessment, rate the presence and intensity of the following content characteristics, each on a 0–10 integer scale. These are descriptive measurements for research only — they are NOT quality factors. A high or low risk score must NOT change any of your dimension scores or your overall score. Score what is actually present in the video, using the full 0–10 range and the anchors given.
+- sexual_suggestive — degree to which the video uses sexual or physical-attractiveness appeal as a draw. Score the framing and intent, NOT whether a person is attractive. 0 = none; attractiveness, if any, is incidental. 3 = mildly suggestive: form-fitting or revealing clothing is present but not emphasized by framing or focus. 5 = moderately suggestive: clothing, posing, or camera framing deliberately draws attention to the body. 8 = strongly suggestive: sexual appeal is a primary draw of the video. 10 = overtly sexual or near-explicit.
+- violence_shock — 0 = none. 3 = mild/implied conflict or cartoonish peril. 5 = real physical altercation or injury shown without graphic detail; intense stunts. 8 = graphic injury, gore, or real violence. 10 = extreme graphic violence/gore.
+- hate_harassment — 0 = none. 3 = edgy/insensitive language not targeting a protected group. 5 = demeaning generalization about a group, or a pointed personal attack. 8 = clear hateful or harassing content targeting a protected group or individual. 10 = explicit hate speech or incitement.
+- profanity — 0 = none. 3 = occasional mild language. 5 = repeated strong profanity as normal speech. 8 = pervasive strong profanity central to the delivery. 10 = relentless profanity.
+- outrage_inflammatory — degree of deliberate rage-bait / provocation. 0 = neutral or positive framing. 3 = mildly provocative opinion. 5 = deliberately controversial framing or rage-bait elements. 8 = content engineered to provoke anger or division. 10 = pure rage-bait, maximally inflammatory.
+- dangerous_acts — risky behavior viewers might imitate. 0 = none. 3 = minor, clearly controlled risk. 5 = risky behavior viewers might copy (stunts, mild challenges). 8 = genuinely dangerous acts presented as entertainment. 10 = life-threatening acts or challenges encouraging imitation.
+` : "";
+  const contentRiskFormat = judge.id === "critic"
+    ? `,\n  "content_risk": { "sexual_suggestive": <0-10>, "violence_shock": <0-10>, "hate_harassment": <0-10>, "profanity": <0-10>, "outrage_inflammatory": <0-10>, "dangerous_acts": <0-10> }`
+    : "";
+
   return `${judge.personality}
 ${GUARDRAILS}${durationLine}${lengthGuidance}
 
@@ -861,6 +885,7 @@ POSITIVES — When identifying positives, connect them to performance signals wh
 
 You are one of three judges reviewing this video. Each judge must identify a DIFFERENT genuine strength — focus on an aspect the other judges are less likely to notice given your unique lens. Do not manufacture praise; only include positives that are genuinely present in the video.
 
+${contentRiskBlock}
 Provide your analysis in this exact JSON format (no markdown, no backticks):
 {
   "overall": <integer 1-10 — weighted average of your dimension scores>,
@@ -879,7 +904,7 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
   ],
   "suggestions": [
     "<specific actionable improvement — timestamp, why it matters for algorithm signals, and the exact edit>"
-  ]${bottomFormat}${objective ? `,\n  "objective_fit": {\n    "score": <integer 1–10>,\n    "verdict": "hits|partial|misses",\n    "reasoning": "<explanation in your voice>"\n  }` : ""}
+  ]${bottomFormat}${contentRiskFormat}${objective ? `,\n  "objective_fit": {\n    "score": <integer 1–10>,\n    "verdict": "hits|partial|misses",\n    "reasoning": "<explanation in your voice>"\n  }` : ""}
 }`;
 }
 
@@ -1766,6 +1791,35 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
 }
 
 // ── Module-level submission recorder (used by pipeline + poller) ──────────────
+// Coerce the Editor's content_risk object to the migration-015 columns: integer,
+// clamped 0–10, out-of-range logged (never fails the write). Missing field → null.
+function clampRisk(cr, jobId) {
+  const map = {
+    risk_sexual_suggestive: "sexual_suggestive",
+    risk_violence_shock: "violence_shock",
+    risk_hate_harassment: "hate_harassment",
+    risk_profanity: "profanity",
+    risk_outrage_inflammatory: "outrage_inflammatory",
+    risk_dangerous_acts: "dangerous_acts",
+  };
+  const out = {};
+  for (const [col, key] of Object.entries(map)) {
+    const raw = cr[key];
+    if (raw == null) { out[col] = null; continue; }
+    let n = Math.round(Number(raw));
+    if (!Number.isFinite(n)) {
+      console.warn(`[${jobId}] [risk] non-numeric ${key}=${JSON.stringify(raw)} → null`);
+      out[col] = null; continue;
+    }
+    if (n < 0 || n > 10) {
+      console.warn(`[${jobId}] [risk] out-of-range ${key}=${n} → clamped to 0–10`);
+      n = Math.max(0, Math.min(10, n));
+    }
+    out[col] = n;
+  }
+  return out;
+}
+
 async function recordSubmissionForJob(jobId, finalStatus) {
   const job = jobs[jobId] || {};
   if (job.finalized) return;
@@ -1773,6 +1827,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   const scores = {};
   let scoreSum = 0, scoreCount = 0;
   const dimensions = {};
+  let contentRisk = null;  // Editor(critic)-only content-risk covariates (migration 015)
   const platDimSums = {};
   const platDimCounts = {};
   const PLAT_DIM_PREFIX = {
@@ -1821,6 +1876,12 @@ async function recordSubmissionForJob(jobId, finalStatus) {
         if (bp[key] != null) dimensions[`${colPrefix}_big_${key}`] = toInt(bp[key]);
       }
     }
+    // CONTENT-RISK covariates — Editor (critic) ONLY. Do NOT read content_risk
+    // from trendsetter/connector even if present.
+    if (r.status === "done" && id === "critic" && r.data?.content_risk) {
+      contentRisk = clampRisk(r.data.content_risk, jobId);
+      console.log(`[${jobId}] [risk] critic content_risk: ${JSON.stringify(contentRisk)}`);
+    }
   }
   for (const [key, prefix] of Object.entries(PLAT_DIM_PREFIX)) {
     if (platDimCounts[key]) {
@@ -1847,6 +1908,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     timings: { ...(job.timings || {}), browserUploadMs },
     scores,
     dimensions,
+    contentRisk,
     avgScore: scoreCount > 0 ? parseFloat((scoreSum / scoreCount).toFixed(1)) : null,
     thumbnailDataUrl: job.thumbnailDataUrl || null,
     objective: job.objective || null,
