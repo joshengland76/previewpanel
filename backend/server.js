@@ -805,8 +805,9 @@ EDITING CRAFT — Pay attention to the editing of this video. Note specific edit
   // for the research; explicitly NOT quality factors and must not move craft scores.
   // Numeric-only (no per-field prose) to avoid reintroducing JSON-parse risk.
   const contentRiskBlock = judge.id === "critic" ? `
-CONTENT-RISK ASSESSMENT (independent of your quality scoring).
-Separately from your quality assessment, score each of the following six content characteristics from 0 (absent) to 10 (strongly present) for how present/intense it is in this video. These are descriptive research measurements, NOT quality factors — a high or low risk score must NOT change any of your dimension scores or your overall score.
+
+CONTENT-RISK ASSESSMENT (for the "content_risk" field shown in the JSON above — independent of your quality scoring).
+This is an ADDITIONAL field, never a replacement: include it ALONGSIDE every required field above (especially the "dimensions" object). Do NOT omit or substitute any required field in order to add it. Score each of the following six content characteristics from 0 (absent) to 10 (strongly present) for how present/intense it is in this video. These are descriptive research measurements, NOT quality factors — a high or low risk score must NOT change any of your dimension scores or your overall score.
 - sexual_suggestive — sexual or physical-attractiveness appeal as a draw. Score the framing and intent, NOT whether a person happens to be attractive.
 - violence_shock — violent, graphic, or shocking content.
 - hate_harassment — hateful or harassing content toward a group or individual.
@@ -885,8 +886,9 @@ POSITIVES — When identifying positives, connect them to performance signals wh
 
 You are one of three judges reviewing this video. Each judge must identify a DIFFERENT genuine strength — focus on an aspect the other judges are less likely to notice given your unique lens. Do not manufacture praise; only include positives that are genuinely present in the video.
 
-${contentRiskBlock}
-Provide your analysis in this exact JSON format (no markdown, no backticks):
+${judge.id === "critic"
+  ? `Provide your analysis in this EXACT JSON format (no markdown, no backticks). Include EVERY key shown below and do NOT add, rename, or substitute any other top-level key. The "dimensions" object and ALL of its sub-fields are REQUIRED — never omit "dimensions", and never replace it with any other field (in particular, do NOT output a "relativeInsight" field; it does not exist in this schema):`
+  : `Provide your analysis in this exact JSON format (no markdown, no backticks):`}
 {
   "overall": <integer 1-10 — weighted average of your dimension scores>,
   "dimensions": {
@@ -905,7 +907,7 @@ Provide your analysis in this exact JSON format (no markdown, no backticks):
   "suggestions": [
     "<specific actionable improvement — timestamp, why it matters for algorithm signals, and the exact edit>"
   ]${bottomFormat}${contentRiskFormat}${objective ? `,\n  "objective_fit": {\n    "score": <integer 1–10>,\n    "verdict": "hits|partial|misses",\n    "reasoning": "<explanation in your voice>"\n  }` : ""}
-}`;
+}${contentRiskBlock}`;
 }
 
 // ── ffmpeg conversion ─────────────────────────────────────────────────────────
