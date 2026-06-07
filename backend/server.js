@@ -888,6 +888,8 @@ You are one of three judges reviewing this video. Each judge must identify a DIF
 
 ${judge.id === "critic"
   ? `Provide your analysis in this EXACT JSON format (no markdown, no backticks). Include EVERY key shown below and do NOT add, rename, or substitute any other top-level key. The "dimensions" object and ALL of its sub-fields are REQUIRED — never omit "dimensions", and never replace it with any other field (in particular, do NOT output a "relativeInsight" field; it does not exist in this schema):`
+  : judge.id === "connector"
+  ? `Provide your analysis in this EXACT JSON format (no markdown, no backticks). Your ENTIRE response MUST be a single valid JSON object and nothing else: it MUST begin with { and end with }. Do NOT write a prose essay, narrative, or any text outside the JSON, and NEVER return a written analysis in place of this JSON — express all of your emotional, human-resonance observations INSIDE the JSON string fields (reaction, positives, delivery, content). Include EVERY key shown below and do NOT add, rename, or substitute any other top-level key. The "dimensions" object and ALL of its sub-fields are REQUIRED — never omit "dimensions", and never replace it with any other field (do NOT output a "relativeInsight" field; it does not exist in this schema):`
   : `Provide your analysis in this exact JSON format (no markdown, no backticks):`}
 {
   "overall": <integer 1-10 — weighted average of your dimension scores>,
