@@ -1544,6 +1544,19 @@ app.post("/api/research/submit", requireResearchAuth, (req, res, next) => {
     }
 
     const externalVideoId = (req.body.external_video_id || "").toString().trim();
+
+    // Optional subset-judge scoring (default = all three, so normal scoring is unchanged
+    // when `judges` is absent). Comma-separated judge ids, e.g. "connector" for a
+    // single-judge backfill. runPipeline already supports a judge subset.
+    const judgesParam = (req.body.judges || "").toString().trim();
+    const selJudges = judgesParam
+      ? JUDGES.filter((j) => judgesParam.split(",").map((s) => s.trim()).includes(j.id))
+      : JUDGES;
+    if (selJudges.length === 0) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid judges "${judgesParam}" — use any of: critic,cool,connector` });
+    }
+
     const originalName = (req.file.originalname || "").toString();
     const ext = path.extname(originalName).toLowerCase();
     if (!VALID_VIDEO_EXTS.has(ext)) {
@@ -1590,7 +1603,7 @@ app.post("/api/research/submit", requireResearchAuth, (req, res, next) => {
       });
     }
 
-    enqueueJob(jobId, () => runPipeline(jobId, null, platform, objective, JUDGES));
+    enqueueJob(jobId, () => runPipeline(jobId, null, platform, objective, selJudges));
 
     try {
       await waitForJobCompletion(jobId);
