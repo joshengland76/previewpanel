@@ -30,10 +30,10 @@ const PLATFORMS = [
 const JUDGES = [
   { id: "critic", name: "The Editor", color: B.brown, softBg: "#EFEBE9",
     tagline: "Sharp-eyed. Focused on craft, cuts, and execution.", scoreLabel: "The Editor's Cut",
-    avatar: "/owl-critic.png?v=3" },
+    avatar: "/owl-editor.png?v=2", avatarScale: 1.1 },
   { id: "cool", name: "The Trendsetter", color: "#546E7A", softBg: "#ECEFF1",
     tagline: "Platform-native, trend-aware, discerning.", scoreLabel: "The Trendsetter's Take",
-    avatar: "/owl-trendsetter.png?v=3" },
+    avatar: "/owl-trendsetter.png?v=3", avatarScale: 1.1 },
   { id: "connector", name: "The Connector", color: "#8D6E63", softBg: "#FBF8F7",
     tagline: "Human-first. Finds the moments that make people share.", scoreLabel: "The Connector's Take",
     avatar: "/owl-connector.png?v=1" },
@@ -379,7 +379,7 @@ function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
       }} onClick={() => has && setOpen(o => !o)}>
         <div style={{ background: judge.softBg, borderRadius: "8px", flexShrink: 0 }}>
           <img src={judge.avatar} alt={judge.name}
-            style={{ width: "52px", height: "52px", objectFit: "contain", display: "block", background: judge.softBg }} />
+            style={{ width: "52px", height: "52px", objectFit: "contain", display: "block", background: judge.softBg, transform: judge.avatarScale ? `scale(${judge.avatarScale})` : undefined }} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: "800", fontSize: "14px", color: has ? judge.color : "#bbb" }}>{judge.name}</div>
@@ -1405,7 +1405,7 @@ export default function PreviewPanel() {
                     }}>
                       <div style={{ background: active ? j.softBg : "#F5F5F5", borderRadius: "6px", flexShrink: 0 }}>
                         <img src={j.avatar} alt={j.name}
-                          style={{ width: "44px", height: "44px", objectFit: "contain", display: "block", background: active ? j.softBg : "#F5F5F5" }} />
+                          style={{ width: "44px", height: "44px", objectFit: "contain", display: "block", background: active ? j.softBg : "#F5F5F5", transform: j.avatarScale ? `scale(${j.avatarScale})` : undefined }} />
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontWeight: "800", fontSize: "14px", color: active ? j.color : "#bbb" }}>{j.name}</div>
