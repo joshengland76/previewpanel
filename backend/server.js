@@ -155,6 +155,13 @@ async function drainQueue() {
   }
 }
 
+// Pegasus model version sent on every TwelveLabs analyze call. Defaults to
+// pegasus1.2 — the same model the API defaulted to when unset — so pinning is a
+// no-op behavior change today. Flip to pegasus1.5 via the PEGASUS_MODEL env var
+// as a deliberate, dated cutover before TwelveLabs' 2026-07-13 1.2 deprecation.
+// Accepted values: "pegasus1.2" | "pegasus1.5".
+const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.2";
+
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
 function tl() {
@@ -303,6 +310,13 @@ async function initDb() {
     }
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS thumbnail_data_url TEXT`);
     await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS objective TEXT`);
+    // Pegasus model provenance (which TwelveLabs model produced each score). New
+    // rows populate it from PEGASUS_MODEL at insert time. One-time backfill: every
+    // row scored before the 2026-06-20 pin ran on the API default, pegasus1.2.
+    // Date-bounded so it can never mislabel post-cutover rows (those are set
+    // explicitly on insert; any NULL there stays NULL = genuinely unknown).
+    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS pegasus_model TEXT`);
+    await pgPool.query(`UPDATE submissions SET pegasus_model = 'pegasus1.2' WHERE pegasus_model IS NULL AND created_at < '2026-06-21'`);
     // Big-picture dimensions — 11 per judge × 3 judges = 33 columns.
     // polished is retained in the schema (Phase 1a data) but no longer written.
     for (const judge of ["critic", "trendsetter", "connector"]) {
@@ -444,6 +458,8 @@ async function saveSubmission(entry) {
       cr.risk_sexual_suggestive ?? null, cr.risk_violence_shock ?? null, cr.risk_hate_harassment ?? null,
       cr.risk_profanity ?? null, cr.risk_outrage_inflammatory ?? null, cr.risk_dangerous_acts ?? null,
       entry.contentRisk ? "editor-risk-v1" : null,
+      // Pegasus model provenance ($85)
+      PEGASUS_MODEL,
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
@@ -468,14 +484,15 @@ async function saveSubmission(entry) {
            critic_big_funny, critic_big_compelling, critic_big_authentic, critic_big_novel, critic_big_visually_engaging, critic_big_emotionally_resonant, critic_big_useful, critic_big_surprising, critic_big_relatable, critic_big_emotion_intensity,
            trendsetter_big_funny, trendsetter_big_compelling, trendsetter_big_authentic, trendsetter_big_novel, trendsetter_big_visually_engaging, trendsetter_big_emotionally_resonant, trendsetter_big_useful, trendsetter_big_surprising, trendsetter_big_relatable, trendsetter_big_emotion_intensity,
            connector_big_funny, connector_big_compelling, connector_big_authentic, connector_big_novel, connector_big_visually_engaging, connector_big_emotionally_resonant, connector_big_useful, connector_big_surprising, connector_big_relatable, connector_big_emotion_intensity,
-           risk_sexual_suggestive, risk_violence_shock, risk_hate_harassment, risk_profanity, risk_outrage_inflammatory, risk_dangerous_acts, risk_scored_version)
+           risk_sexual_suggestive, risk_violence_shock, risk_hate_harassment, risk_profanity, risk_outrage_inflammatory, risk_dangerous_acts, risk_scored_version,
+           pegasus_model)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
                 $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,
                 $48,$49,$50,$51,$52,$53,$54,$55,$56,$57,
                 $58,$59,$60,$61,$62,$63,$64,$65,$66,$67,
                 $68,$69,$70,$71,$72,$73,$74,$75,$76,$77,
-                $78,$79,$80,$81,$82,$83,$84)
+                $78,$79,$80,$81,$82,$83,$84,$85)
         RETURNING id
       `, fullValues);
       return rows[0]?.id ?? null;
@@ -1253,7 +1270,7 @@ async function createAnalyzeTask(videoContext, judge, platform, objective, video
   let data;
   try {
     data = await tlClient.analyzeAsync.tasks.create(
-      { video: videoContext, prompt, temperature: 0.3, maxTokens: 4096 },
+      { video: videoContext, prompt, modelName: PEGASUS_MODEL, temperature: 0.3, maxTokens: 4096 },
       { timeoutInSeconds: 30 }
     );
   } catch (err) {
@@ -2305,7 +2322,7 @@ async function runWarmup() {
   try {
     const assetId = await uploadAssetDirect(WARMUP_PATH);
     await tl().analyzeAsync.tasks.create(
-      { video: { type: "asset_id", assetId }, prompt: "Describe this video in one word.", maxTokens: 10 },
+      { video: { type: "asset_id", assetId }, prompt: "Describe this video in one word.", modelName: PEGASUS_MODEL, maxTokens: 10 },
       { timeoutInSeconds: 30 }
     );
     console.log("[warmup] TwelveLabs warm-up ping sent");
