@@ -341,6 +341,24 @@ async function initDb() {
         END $$
       `);
     }
+    // ── migration 016: pp_synthesis (panel synthesis layer) — ADDITIVE ONLY ──
+    // App-submission synthesis store. Idempotent. Touches no existing column and
+    // no research table beyond a read-only FK to submissions(id). Mirrors
+    // migrations/016_pp_synthesis.sql.
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS pp_synthesis (
+        id             BIGSERIAL PRIMARY KEY,
+        submission_id  INTEGER REFERENCES submissions(id),
+        job_id         TEXT,
+        synthesis      JSONB NOT NULL,
+        model          TEXT,
+        prompt_version TEXT,
+        created_at     TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_submission_id ON pp_synthesis(submission_id)`);
+    await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_job_id ON pp_synthesis(job_id)`);
+
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
@@ -1198,7 +1216,13 @@ async function processAnalyzeResult(rawText, judge, platform, objective, videoDu
       return applyMomentFilters(salvaged, judge, videoDuration);
     }
 
-    if (process.env.ANTHROPIC_API_KEY) {
+    // Judge-salvage Claude fallback — DELIBERATELY DISABLED. A Claude-recovered
+    // judge writes dimensionless, mixed-provenance rows that corrupt the
+    // correlation study, which is why ANTHROPIC_API_KEY was revoked from Render.
+    // This gate now requires an EXPLICIT opt-in flag (default off) on TOP of the
+    // key, so the fallback cannot silently re-arm if a key ever reappears. Do not
+    // remove the flag. (This is unrelated to synthesis, which uses its own key.)
+    if (process.env.JUDGE_CLAUDE_FALLBACK_ENABLED === "true" && process.env.ANTHROPIC_API_KEY) {
       try {
         console.log(`[TwelveLabs][${judge.id}] Attempting Claude fallback to structure raw text`);
         const structured = await structureWithClaude(clean, judge, platform);
@@ -1320,6 +1344,164 @@ Required JSON format:
   const text = msg.content.map((b) => b.text || "").join("");
   const clean = text.replace(/```json|```/g, "").trim();
   return JSON.parse(clean);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PANEL SYNTHESIS LAYER — app /api/analyze submissions ONLY, never research.
+//
+// Reads the judges' already-finished outputs and produces one synthesized verdict
+// via a dedicated Anthropic call. It NEVER alters the judges, the scoring path,
+// runPipeline, avg_score, or anything the correlation study reads/writes. It uses
+// its OWN key (SYNTHESIS_ANTHROPIC_API_KEY — never ANTHROPIC_API_KEY) and runs
+// non-blocking AFTER a job completes, so it adds zero latency/cost to any path and
+// a failure simply degrades the results page to the judges' raw data.
+// ════════════════════════════════════════════════════════════════════════════
+let _synthAnthropic;
+function synthAnthropic() {
+  if (!_synthAnthropic) _synthAnthropic = new Anthropic({ apiKey: process.env.SYNTHESIS_ANTHROPIC_API_KEY });
+  return _synthAnthropic;
+}
+const SYNTHESIS_MODEL = process.env.SYNTHESIS_MODEL || "claude-haiku-4-5-20251001";
+const SYNTHESIS_PROMPT_VERSION = "synthesis-v1.1";
+let SYNTHESIS_SYSTEM_PROMPT = null;
+try {
+  SYNTHESIS_SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, "synthesisSystemPrompt.txt"), "utf8");
+} catch (e) {
+  console.warn(`[synthesis] system-prompt file missing — synthesis disabled: ${e.message}`);
+}
+
+// Internal judge id → canonical synthesis name. critic=Editor, cool=Trendsetter.
+const SYNTH_JUDGE_CANON = { critic: "editor", cool: "trendsetter", connector: "connector" };
+
+// Parse a judge "M:SS" (or "SS") timestamp to seconds for the synthesis payload.
+// Module-scoped on purpose: applyMomentFilters has its OWN local tsToSecs closure
+// that buildSynthesisInput cannot see — referencing it threw ReferenceError once a
+// judge had moments. Returns NaN for junk (filtered out by Number.isFinite).
+const parseTimestampSeconds = (ts) => {
+  const p = String(ts).split(":").map(Number);
+  return p.length === 2 ? p[0] * 60 + p[1] : p[0];
+};
+
+// Deterministic verdict — the model is NOT trusted for score/action (§3A authority
+// split). headline = rounded average of the PRESENT judges' overall scores.
+export function computeSynthesisVerdict(presentScores) {
+  const avg = presentScores.reduce((a, b) => a + b, 0) / presentScores.length;
+  const headline_score = Math.round(avg);
+  const action = headline_score >= 8 ? "post" : headline_score >= 5 ? "polish" : "rework";
+  return { headline_score, action };
+}
+
+// synthesizePanel — call Anthropic with the normalized present-judge array + video
+// context and return the validated synthesis object, or null so the caller degrades
+// gracefully to the judges' raw data. `panel` carries the deterministic
+// present/missing split (the model is not trusted for that either).
+export async function synthesizePanel(judges, video, panel) {
+  if (!SYNTHESIS_SYSTEM_PROMPT) return null;
+  if (!process.env.SYNTHESIS_ANTHROPIC_API_KEY) {
+    console.warn("[synthesis] SYNTHESIS_ANTHROPIC_API_KEY not set — skipping synthesis");
+    return null;
+  }
+  if (!Array.isArray(judges) || judges.length === 0) return null;
+
+  let raw;
+  try {
+    const msg = await synthAnthropic().messages.create({
+      model: SYNTHESIS_MODEL,
+      max_tokens: 2000,
+      temperature: 0.3,
+      system: SYNTHESIS_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: JSON.stringify({ video, judges }) }],
+    });
+    raw = (msg.content || []).map((b) => b.text || "").join("");
+  } catch (err) {
+    console.error(`[synthesis] Anthropic call failed: ${err.message}`);
+    return null;
+  }
+
+  // Parse defensively — reuse the judge salvage/jsonrepair utility.
+  let syn = null;
+  const clean = raw.replace(/```json|```/g, "").trim();
+  try { syn = JSON.parse(clean); }
+  catch { syn = salvageJudgeJson(clean, "synthesis"); }
+  if (!syn || typeof syn !== "object") {
+    console.error(`[synthesis] unparseable response (${raw.length} chars): ${raw.slice(0, 300)}`);
+    return null;
+  }
+
+  // Backend owns the score/action (overwrite the model) and the factual panel.
+  const presentScores = judges.map((j) => j.overall_score).filter((n) => typeof n === "number");
+  syn.verdict = { ...(syn.verdict || {}), ...computeSynthesisVerdict(presentScores) };
+  syn.panel = panel;
+  return syn;
+}
+
+// buildSynthesisInput — PURE (no network/IO): normalize a job's finished judges
+// into the §3A user payload (judges + video) plus the deterministic
+// present/missing panel. Exported so the offline unit test can assert the
+// normalization (critic→editor, cool→trendsetter) and the deterministic panel
+// without a network call. Logic is unchanged from the approved inline version;
+// the only change is that `sentiment` is included on a note ONLY when present.
+export function buildSynthesisInput(job) {
+  const entries = Object.entries(job.results || {});
+  const present = entries.filter(([, r]) => r.status === "done" && r.data && r.data.overall != null);
+
+  const judges = present.map(([id, r]) => {
+    const d = r.data;
+    const timestamped_notes = (Array.isArray(d.moments) ? d.moments : [])
+      .map((m) => {
+        const n = { t_seconds: parseTimestampSeconds(m.timestamp), note: m.note };
+        if (m.type) n.sentiment = m.type; // optional hint — omit entirely when absent
+        return n;
+      })
+      .filter((n) => Number.isFinite(n.t_seconds));
+    return {
+      name: SYNTH_JUDGE_CANON[id] || id,
+      overall_score: d.overall,
+      objective_fit: d.objective_fit || null,
+      dimensions: d.dimensions || {},
+      timestamped_notes,
+      suggestions: Array.isArray(d.suggestions) ? d.suggestions : [],
+    };
+  });
+  const presentNames = judges.map((j) => j.name);
+  const expectedNames = entries.map(([id]) => SYNTH_JUDGE_CANON[id] || id);
+  const panel = {
+    judges_present: presentNames,
+    judges_missing: expectedNames.filter((n) => !presentNames.includes(n)),
+  };
+  const video = {
+    platform: job.platform,
+    objective: job.objective,
+    duration_seconds: job.videoDuration?.secs ?? null,
+  };
+  return { judges, video, panel };
+}
+
+// runSynthesisForJob — normalize a completed APP job's judges, synthesize, attach
+// to the job for /api/status, and persist to pp_synthesis. Fully isolated: any
+// failure leaves the judges' results untouched and only flips synthesisStatus.
+async function runSynthesisForJob(jobId) {
+  const job = jobs[jobId];
+  if (!job) return;
+  const { judges, video, panel } = buildSynthesisInput(job);
+  if (judges.length === 0) { job.synthesisStatus = "failed"; return; }
+
+  const syn = await synthesizePanel(judges, video, panel);
+  job.synthesis = syn || null;
+  job.synthesisStatus = syn ? "ready" : "failed";
+  if (!syn) return;
+  console.log(`[${jobId}] [synthesis] ready — score=${syn.verdict?.headline_score} action=${syn.verdict?.action} present=${panel.judges_present.join(",")}`);
+
+  if (pgPool) {
+    try {
+      await pgPool.query(
+        `INSERT INTO pp_synthesis (submission_id, job_id, synthesis, model, prompt_version) VALUES ($1,$2,$3,$4,$5)`,
+        [job.submissionId ?? null, jobId, JSON.stringify(syn), SYNTHESIS_MODEL, SYNTHESIS_PROMPT_VERSION]
+      );
+    } catch (e) {
+      console.error(`[${jobId}] [synthesis] persist failed (synthesis still returned to client): ${e.message}`);
+    }
+  }
 }
 
 // ── POST /api/analyze ─────────────────────────────────────────
@@ -2001,6 +2183,17 @@ async function checkJobCompletion(jobId) {
 
   await recordSubmissionForJob(jobId, finalStatus);
 
+  // Panel synthesis — APP submissions ONLY, never research (constraint 1.3).
+  // Fire-and-forget: never blocks job completion, the status response, or the
+  // research path; a failure only flips synthesisStatus and degrades to judges.
+  if (job.source !== "research_api" && (finalStatus === "done" || finalStatus === "partial")) {
+    job.synthesisStatus = "pending";
+    runSynthesisForJob(jobId).catch((err) => {
+      job.synthesisStatus = "failed";
+      console.error(`[${jobId}] [synthesis] unexpected error: ${err.message}`);
+    });
+  }
+
   if (pgPool) {
     pgPool.query(`DELETE FROM analyze_tasks WHERE job_id = $1`, [jobId]).catch(err =>
       console.error(`[poller] Failed to cleanup tasks for ${jobId}: ${err.message}`)
@@ -2176,6 +2369,8 @@ app.get("/api/status/:jobId", (req, res) => {
     duration: job.videoDuration?.secs || null,
     queuePosition: currentQueuePosition,
     thumbnailDataUrl: job.thumbnailDataUrl || null,
+    synthesis: job.synthesis ?? null,
+    synthesisStatus: job.synthesisStatus ?? null,
   });
 });
 
@@ -2333,6 +2528,11 @@ async function runWarmup() {
 
 // ── Start ─────────────────────────────────────────────────────
 let server;
+// Entry-point guard: boot (DB, poller, warmup, HTTP listen) ONLY when run directly
+// as `node server.js`. When imported (unit test / dry-run harness) this is skipped,
+// so importing server.js is side-effect-free — no DB, no network, no open socket.
+const isEntryPoint = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isEntryPoint) (async () => {
 try {
   await initDb();
   const saved = await loadSubmissionLog();
@@ -2367,7 +2567,10 @@ try {
   server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`PreviewPanel backend running on http://localhost:${PORT}`);
     console.log(`TwelveLabs key: ${process.env.TWELVELABS_API_KEY ? "✓" : "✗ MISSING"}`);
-    console.log(`Anthropic key:  ${process.env.ANTHROPIC_API_KEY ? "✓" : "– not set (Claude fallback disabled)"}`);
+    const fallbackArmed = process.env.JUDGE_CLAUDE_FALLBACK_ENABLED === "true" && !!process.env.ANTHROPIC_API_KEY;
+    console.log(`Judge Claude fallback: ${fallbackArmed ? "⚠ ARMED (JUDGE_CLAUDE_FALLBACK_ENABLED=true + key present)" : "– disabled (study-safe default)"}`);
+    console.log(`Synthesis key:  ${process.env.SYNTHESIS_ANTHROPIC_API_KEY ? "✓" : "– not set (panel synthesis disabled, results degrade to judges)"}`);
+    console.log(`Synthesis model: ${SYNTHESIS_MODEL}`);
   });
 
   server.on("error", (err) => {
@@ -2393,4 +2596,5 @@ try {
   console.error("[startup] Fatal error during server initialization:", err);
   process.exit(1);
 }
+})();
 
