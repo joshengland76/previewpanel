@@ -70,7 +70,7 @@ export default function VerdictPreview() {
             <DisagreementCard synthesis={status.synthesis} />
             <PerformanceRadar results={status.results} />
             <ToolkitSection results={status.results} />
-            <JudgeDeepDives results={status.results} openIds={openJudges} onToggle={toggleJudge} />
+            <JudgeDeepDives results={status.results} duration={status.duration} openIds={openJudges} onToggle={toggleJudge} />
           </>
         ) : (
           // Graceful fallback: synthesis null/failed → no synthesis overview; show
@@ -80,7 +80,7 @@ export default function VerdictPreview() {
           <>
             <PerformanceRadar results={status.results} />
             <ToolkitSection results={status.results} />
-            <JudgeDeepDives results={status.results} openIds={openJudges} onToggle={toggleJudge} />
+            <JudgeDeepDives results={status.results} duration={status.duration} openIds={openJudges} onToggle={toggleJudge} />
           </>
         )}
 

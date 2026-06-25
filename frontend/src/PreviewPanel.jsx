@@ -1151,7 +1151,7 @@ export default function PreviewPanel() {
                 <DisagreementCard synthesis={synthesis} />
                 <PerformanceRadar results={judgeResults} />
                 <ToolkitSection results={judgeResults} />
-                <JudgeDeepDives results={judgeResults} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
+                <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
             )}
 
@@ -1170,7 +1170,7 @@ export default function PreviewPanel() {
               <>
                 <PerformanceRadar results={judgeResults} />
                 <ToolkitSection results={judgeResults} />
-                <JudgeDeepDives results={judgeResults} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
+                <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
             )}
           </div>

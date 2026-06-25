@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { B, JUDGES, VALENCE } from "../brand.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,6 +28,57 @@ function momentMark(type) {
   return { ch: "•", c: B.grey };
 }
 
+const toSecs = (ts) => { const p = String(ts).split(":").map(Number); return p.length === 2 ? p[0] * 60 + p[1] : p[0]; };
+const fmtSecs = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+
+// Per-judge attention map — the judge's timestamped notes as dots on a track,
+// coloured by sentiment (peak/drop/note). Tap a dot to read that note.
+function MomentTimeline({ moments, duration }) {
+  const [active, setActive] = useState(null);
+  const pts = moments.map((m, i) => ({ ...m, i, secs: toSecs(m.timestamp) })).filter((p) => Number.isFinite(p.secs));
+  if (pts.length === 0) return null;
+  const maxT = Math.max(Number(duration) || 0, ...pts.map((p) => p.secs), 1);
+  const VB_W = 600, VB_H = 40, Y = 20, PAD = 46;
+  const xOf = (s) => PAD + (Math.min(s, maxT) / maxT) * (VB_W - PAD * 2);
+  const sel = active != null ? pts.find((q) => q.i === active) : null;
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <svg viewBox={`0 0 ${VB_W} ${VB_H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        <line x1={PAD} y1={Y} x2={VB_W - PAD} y2={Y} stroke={B.border} strokeWidth="2" />
+        {pts.map((p) => {
+          const c = momentMark(p.type).c, x = xOf(p.secs), on = active === p.i;
+          return (
+            <g key={p.i} style={{ cursor: "pointer" }}
+              onMouseEnter={() => setActive(p.i)} onMouseLeave={() => setActive(null)}
+              onClick={() => setActive(on ? null : p.i)}>
+              {on && <circle cx={x} cy={Y} r="9" fill={c} opacity="0.18" />}
+              <circle cx={x} cy={Y} r={on ? 6 : 5} fill={c} stroke="#fff" strokeWidth="1.6" />
+              <rect x={x - 11} y={Y - 13} width="22" height="26" fill="transparent" />
+            </g>
+          );
+        })}
+      </svg>
+      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "'Courier New', monospace", fontSize: 10.5, color: "#aaa", marginTop: 1 }}>
+        <span>0:00</span><span>{fmtSecs(maxT)}</span>
+      </div>
+      {sel && (
+        <div style={{ marginTop: 7, display: "flex", gap: 8, alignItems: "flex-start", background: B.bg,
+          border: `1px solid ${B.border}`, borderRadius: 8, padding: "7px 10px" }}>
+          <span style={{ fontFamily: "'Courier New', monospace", fontSize: 10.5, fontWeight: 700, color: momentMark(sel.type).c, flexShrink: 0 }}>{sel.timestamp}</span>
+          <span style={{ fontSize: 11.5, lineHeight: 1.4, color: "#5c544a" }}>{sel.note}</span>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 12, marginTop: 8, flexWrap: "wrap" }}>
+        {[["peak", "Peak"], ["drop", "Drop"], ["note", "Note"]].map(([t, label]) => (
+          <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: "#9C9281", fontWeight: 700 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: momentMark(t).c }} />{label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Section({ label, children }) {
   return (
     <div style={{ marginTop: 15 }}>
@@ -37,7 +89,7 @@ function Section({ label, children }) {
   );
 }
 
-function JudgeCard({ judge, result, open, onToggle }) {
+function JudgeCard({ judge, result, duration, open, onToggle }) {
   const data = result && result.status === "done" ? result.data : null;
 
   // Didn't-return card (partial) — collapsed, greyed, no retry.
@@ -131,6 +183,7 @@ function JudgeCard({ judge, result, open, onToggle }) {
 
           {Array.isArray(data.moments) && data.moments.length > 0 && (
             <Section label={`Every moment the ${judge.name.replace("The ", "")} noted`}>
+              <MomentTimeline moments={data.moments} duration={duration} />
               {data.moments.map((m, i) => {
                 const mk = momentMark(m.type);
                 return (
@@ -166,13 +219,13 @@ function JudgeCard({ judge, result, open, onToggle }) {
   );
 }
 
-export function JudgeDeepDives({ results, openIds, onToggle }) {
+export function JudgeDeepDives({ results, duration, openIds, onToggle }) {
   return (
     <section style={{ marginTop: 26 }}>
       <div style={{ fontWeight: 800, fontSize: 16, color: B.body, margin: "0 2px 2px" }}>The full panel</div>
       <div style={{ fontSize: 11, color: B.grey, margin: "0 2px 12px" }}>Tap a judge for their complete read.</div>
       {JUDGES.filter((j) => results && results[j.id]).map((j) => (
-        <JudgeCard key={j.id} judge={j} result={results?.[j.id]}
+        <JudgeCard key={j.id} judge={j} result={results?.[j.id]} duration={duration}
           open={!!openIds && openIds.has(j.id)} onToggle={() => onToggle && onToggle(j.id)} />
       ))}
     </section>
