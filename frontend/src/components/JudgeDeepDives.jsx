@@ -145,6 +145,21 @@ function JudgeCard({ judge, result, open, onToggle }) {
               })}
             </Section>
           )}
+
+          {Array.isArray(data.suggestions) && data.suggestions.length > 0 && (
+            <Section label="Suggestions">
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {data.suggestions.map((s, i) => (
+                  <div key={i} style={{ display: "flex", gap: 9, alignItems: "flex-start" }}>
+                    <div style={{ width: 18, height: 18, borderRadius: "50%", background: judge.color, color: "#fff",
+                      fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center",
+                      flexShrink: 0, marginTop: 1 }}>{i + 1}</div>
+                    <span style={{ fontSize: 12.5, lineHeight: 1.5, color: B.body }}>{s}</span>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
         </div>
       )}
     </div>
