@@ -62,87 +62,6 @@ function useElapsed(running) {
 }
 
 
-function TimestampPill({ ts, color }) {
-  return (
-    <span style={{
-      display: "inline-block", background: color + "15", color,
-      border: `1px solid ${color}35`, borderRadius: "4px",
-      padding: "1px 7px", fontSize: "10px", fontWeight: "700",
-      fontFamily: "'Courier New', monospace", letterSpacing: "0.04em",
-      whiteSpace: "nowrap", flexShrink: 0,
-    }}>{ts}</span>
-  );
-}
-
-function momentTypeColor(type, judgeColor) {
-  if (type === "drop") return "#E53935";
-  if (type === "note") return "#FB8C00";
-  return judgeColor;
-}
-
-function momentsToTimelinePoints(moments, totalSecs) {
-  if (!moments?.length) return [];
-  const toSecs = ts => { const [m, s = 0] = String(ts).split(":").map(Number); return m * 60 + s; };
-  const times = moments.map(m => toSecs(m.timestamp));
-  const duration = totalSecs || Math.max(...times, 1);
-  return moments.map((m, i) => ({
-    timestamp: m.timestamp,
-    position: Math.min(99, Math.max(1, Math.round((toSecs(m.timestamp) / duration) * 100))),
-    type: m.type || (i === 0 ? "peak" : "note"),
-    note: m.note,
-  }));
-}
-
-function TimelineDots({ points, color }) {
-  const [hovered, setHovered] = useState(null);
-  if (!points?.length) return null;
-  return (
-    <div style={{ marginTop: "16px" }}>
-      <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "8px", fontWeight: "700" }}>
-        Attention Map
-      </div>
-      <div style={{ position: "relative", height: "8px", background: B.border, borderRadius: "99px", marginBottom: "6px" }}>
-        {points.map((p, i) => (
-          <div key={i}
-            onMouseEnter={() => setHovered(i)}
-            onMouseLeave={() => setHovered(null)}
-            style={{
-              position: "absolute", left: `${Math.min(Math.max(p.position, 2), 96)}%`,
-              top: "-4px", width: "16px", height: "16px", borderRadius: "50%",
-              background: p.type === "peak" ? color : p.type === "drop" ? "#E53935" : "#FB8C00",
-              border: "2px solid white", transform: "translateX(-50%)",
-              boxShadow: "0 1px 4px rgba(0,0,0,0.15)", cursor: "pointer",
-            }}>
-            {hovered === i && (
-              <div style={{
-                position: "absolute", bottom: "22px",
-                ...(p.position < 30 ? { left: 0 } : p.position > 70 ? { right: 0 } : { left: "50%", transform: "translateX(-50%)" }),
-                background: "#212121", color: "#fff", borderRadius: "6px",
-                padding: "5px 10px", fontSize: "11px", lineHeight: "1.4",
-                whiteSpace: "nowrap", pointerEvents: "none", zIndex: 20,
-                boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
-              }}>
-                <span style={{ fontWeight: "700", fontFamily: "'Courier New', monospace", marginRight: "6px" }}>{p.timestamp}</span>
-                {p.note}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9px", color: "#bbb", marginBottom: "8px" }}>
-        <span>0:00</span><span>end</span>
-      </div>
-      <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
-        {[{label:"peak",col:color},{label:"drop risk",col:"#E53935"},{label:"note",col:"#FB8C00"}].map(l => (
-          <span key={l.label} style={{ fontSize: "10px", color: "#aaa", display: "flex", alignItems: "center", gap: "4px" }}>
-            <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: l.col, display: "inline-block" }}/>
-            {l.label}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ── Issue #6: Animated status messages while waiting ─────────
 const WAITING_MESSAGES = [
@@ -272,24 +191,6 @@ function HistoryPanel({ history, onRestore, onClose }) {
   );
 }
 
-const DIMENSION_META = {
-  hook_strength:        { label: "Hook Strength", tooltip: "Research across TikTok, Instagram, and YouTube consistently identifies the first 3 seconds as the single most predictive factor for video performance. Platform algorithms measure what percentage of viewers continue past this threshold — on TikTok, videos need ~70% of viewers to pass the 3-second mark to receive broad distribution. A strong hook uses a pattern interrupt, curiosity gap, bold claim, direct question, or immediate visual action to prevent the scroll reflex. Videos that open with slow builds, logos, or greetings are algorithmically penalized before the content even begins." },
-  completion_likelihood:{ label: "Completion",    tooltip: "Completion rate — the percentage of viewers who watch to the end — is weighted at 40-50% of TikTok's ranking algorithm and is the #1 confirmed factor for Instagram Reels distribution. Platforms use completion as a proxy for content quality: if people finish watching, the content delivered on its promise. Completion is driven by consistent pacing (no dead air or slow sections), a clear value proposition established in the hook, and an ending that feels earned rather than abrupt. Editing with a \"value-per-second\" mindset — ensuring each 5-8 second block delivers new information, emotion, or visual novelty — is the most reliable method for improving completion." },
-  share_save_worthiness:{ label: "Share & Save",  tooltip: "Shares and saves are the deepest engagement signals available to platform algorithms — they indicate that content delivered enough value for a viewer to act beyond passive watching. On Instagram, DM shares (sending a Reel to a friend) are weighted 3-5x higher than likes by the ranking algorithm. On TikTok, saves and shares now outrank likes as distribution signals. Content gets shared when it triggers a \"I need to send this to someone\" reaction — usually through humor, surprise, emotional resonance, or highly practical value. Content gets saved when it is reference-worthy — a tutorial, a recipe, an insight someone wants to return to." },
-  rewatch_potential:    { label: "Rewatch",        tooltip: "TikTok's algorithm heavily weights re-watch events — when a user watches a video multiple times in succession, it registers as one of the strongest possible signals of genuine engagement. The platform interprets re-watches as evidence that the content is either entertaining enough to experience again or complex enough to require a second viewing. Videos that loop seamlessly (where the end connects naturally back to the beginning, making the restart unnoticeable) capture re-watches passively without requiring the viewer to consciously choose to replay. Re-watch rate is particularly impactful because it is a subconscious behavior that the algorithm treats as a high-confidence quality signal." },
-  seo_strength:         { label: "SEO",            tooltip: "TikTok has functioned increasingly as a search engine since 2024, with approximately 40% of Gen Z preferring TikTok over Google for certain searches. The platform's algorithm scans captions, on-screen text overlays, and spoken audio (via automatic transcription) for keyword relevance, matching content to user search queries. Videos optimized for TikTok SEO — using searchable keywords naturally in all three locations — receive both algorithmic distribution via the For You Page and direct search traffic. This dual distribution channel makes keyword presence a compounding advantage: the same video benefits from recommendation and search simultaneously." },
-  dm_share_potential:   { label: "DM Share",       tooltip: "Direct message shares — when a viewer sends a Reel to someone via Instagram DM — are the single strongest signal in Instagram's ranking algorithm for reaching new audiences. The algorithm weights DM shares at 3-5x the value of a like because they represent a deliberate, high-intent action: the viewer saw enough value in the content to personally recommend it to someone they know. Content that triggers the \"I need to send this to [specific person]\" reaction — through humor, relatability, practical value, or emotional resonance — consistently outperforms content that earns passive likes." },
-  originality:          { label: "Originality",    tooltip: "In December 2025, Instagram made its largest algorithmic shift in years: original content creators saw 40-60% increases in reach while accounts reposting or aggregating content from other platforms saw 60-80% reach collapses. The platform's AI now actively identifies and penalizes watermarked content (videos downloaded from TikTok or other platforms and re-uploaded) and rewards content that appears to be filmed and produced natively. Beyond watermarks, the algorithm uses visual and audio fingerprinting to identify repurposed content. Originality is scored here based on visual and production cues that suggest native creation versus content that appears derivative or recycled." },
-  watch_time_potential: { label: "Watch Time",     tooltip: "YouTube's algorithm prioritizes two distinct watch time metrics: relative watch time (the percentage of a video watched) and absolute watch time (the total minutes spent watching). Both are used because they capture different quality signals — relative watch time rewards content that retains viewers proportionally, while absolute watch time rewards content that keeps viewers engaged for longer total durations. Research shows that 2-3 minute YouTube Shorts achieve the strongest combined performance across both metrics. The algorithm also measures session depth — whether a viewer continues watching additional videos after yours — rewarding content that creates momentum rather than ending a viewing session." },
-  swipe_resistance:     { label: "Swipe Resistance", tooltip: "YouTube Shorts viewers decide within the first 0.5–1 seconds whether to swipe past. Swipe Resistance scores how well this video holds attention in that critical window — based on opening-frame visual hook strength, sound or music impact in the first second, motion or movement that immediately captures attention, clarity of subject (the viewer instantly understands what they're watching), and the absence of slow-build openings that bleed viewers before the content begins." },
-  objective_fit:        { label: "Objective Fit",  tooltip: "Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance. A high score means the video clearly delivers on its stated objective; a low score means it misses the mark." },
-};
-const DIMENSION_ORDER = [
-  "hook_strength", "completion_likelihood", "share_save_worthiness",
-  "rewatch_potential", "seo_strength",
-  "dm_share_potential", "originality",
-  "watch_time_potential", "swipe_resistance",
-];
 
 
 // ── Issue #5 & #6: Big waiting banner ────────────────────────
@@ -411,7 +312,6 @@ export default function PreviewPanel() {
   const [largeFileWarning, setLargeFileWarning] = useState(null);
   const [largeSizeRiskWarning, setLargeSizeRiskWarning] = useState(false);
   const [uploadZoneError, setUploadZoneError] = useState(null);
-  const [judgeArrivalOrder, setJudgeArrivalOrder] = useState([]);
   const pollRef = useRef(null);
   const synthWaitRef = useRef(0);
   const objDropRef = useRef(null);
@@ -420,7 +320,6 @@ export default function PreviewPanel() {
   const xhrRef = useRef(null);
   const notifiedRef = useRef(false);
   const savedRef = useRef(false);
-  const prevResultsRef = useRef({});
   const plat = PLATFORMS.find(p => p.id === platform);
   const isFinished = jobStatus === "done" || jobStatus === "partial";
   const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== "timeout" && jobStatus !== null;
@@ -486,18 +385,7 @@ export default function PreviewPanel() {
           return;
         }
         setJobStatus(data.status);
-        const newResults = data.results || {};
-        const newArrivals = Object.entries(newResults)
-          .filter(([id, r]) => r.status === "done" && prevResultsRef.current[id]?.status !== "done")
-          .map(([id]) => id);
-        if (newArrivals.length > 0) {
-          setJudgeArrivalOrder(prev => {
-            const toAdd = newArrivals.filter(id => !prev.includes(id));
-            return toAdd.length ? [...prev, ...toAdd] : prev;
-          });
-        }
-        prevResultsRef.current = newResults;
-        setJudgeResults(newResults);
+        setJudgeResults(data.results || {});
         if (data.duration) setVideoDurationSecs(data.duration);
         setSynthesis(data.synthesis ?? null);
         setSynthesisStatus(data.synthesisStatus ?? null);
@@ -657,10 +545,9 @@ export default function PreviewPanel() {
     setShowNotifPrimer(false);
     notifiedRef.current = false;
     savedRef.current = false;
-    prevResultsRef.current = {};
-    setJudgeArrivalOrder([]);
     setStep(2);
     setJudgeResults({});
+    setSynthesis(null); setSynthesisStatus(null); setOpenJudgeIds(new Set());
     setJobStatus("uploading");
     setUploadProgress(0);
     setUploadProgressIndeterminate(false);
@@ -756,7 +643,7 @@ export default function PreviewPanel() {
     clearInterval(pollRef.current);
     if (xhrRef.current) { xhrRef.current.abort(); xhrRef.current = null; }
     setStep(1); setJobId(null); setJobStatus(null);
-    setJudgeResults({}); setJudgeArrivalOrder([]); prevResultsRef.current = {};
+    setJudgeResults({});
     setSynthesis(null); setSynthesisStatus(null); setOpenJudgeIds(new Set()); synthWaitRef.current = 0;
     setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
     setVideoDurationSecs(null);
