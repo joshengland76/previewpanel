@@ -2,6 +2,13 @@ import { useState, useRef, useEffect } from "react";
 import TikTokLogo from "./components/TikTokLogo";
 import InstagramLogo from "./components/InstagramLogo";
 import YouTubeLogo from "./components/YouTubeLogo";
+import { B, JUDGES } from "./brand.js";
+import { VerdictPanel } from "./components/VerdictHero.jsx";
+import { WhatsWorkingFixes } from "./components/WhatsWorkingFixes.jsx";
+import { DisagreementCard } from "./components/DisagreementCard.jsx";
+import { PerformanceRadar } from "./components/PerformanceRadar.jsx";
+import { ToolkitSection } from "./components/ToolkitSection.jsx";
+import { JudgeDeepDives } from "./components/JudgeDeepDives.jsx";
 
 const PLATFORM_LOGOS = { youtube: YouTubeLogo, tiktok: TikTokLogo, instagram: InstagramLogo };
 function PlatformIcon({ id, size }) {
@@ -11,13 +18,6 @@ function PlatformIcon({ id, size }) {
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
-const B = {
-  bg: "#FAFAFA", black: "#121212", body: "#212121",
-  brown: "#795548", grey: "#90A4AE", beige: "#D7CCC8",
-  action: "#4E342E", actionHover: "#3E2723",
-  lightBrown: "#EFEBE9", midBrown: "#BCAAA4", border: "#E0D6D3",
-};
-
 const PLATFORMS = [
   { id: "youtube", label: "Shorts", pillLabel: "Shorts", color: "#CC0000",
     hint: "TwelveLabs watches your full video — analyzing delivery, energy, pacing, and hook strength." },
@@ -25,18 +25,6 @@ const PLATFORMS = [
     hint: "Judges evaluate hook strength, loop-ability, audio sync, and scroll-stopping moments." },
   { id: "instagram", label: "Reels", pillLabel: "Reels", color: "#C13584",
     hint: "Judges evaluate aesthetic cohesion, first frame, audio choice, and shareability." },
-];
-
-const JUDGES = [
-  { id: "critic", name: "The Editor", color: B.brown, softBg: "#EFEBE9",
-    tagline: "Sharp-eyed. Focused on craft, cuts, and execution.", scoreLabel: "The Editor's Cut",
-    avatar: "/owl-editor.png?v=2", avatarScale: 1.1 },
-  { id: "cool", name: "The Trendsetter", color: "#546E7A", softBg: "#ECEFF1",
-    tagline: "Platform-native, trend-aware, discerning.", scoreLabel: "The Trendsetter's Take",
-    avatar: "/owl-trendsetter.png?v=3", avatarScale: 1.1 },
-  { id: "connector", name: "The Connector", color: "#8D6E63", softBg: "#FBF8F7",
-    tagline: "Human-first. Finds the moments that make people share.", scoreLabel: "The Connector's Take",
-    avatar: "/owl-connector.png?v=1" },
 ];
 
 // ── Issue #9: Local history helpers ──────────────────────────
@@ -73,22 +61,6 @@ function useElapsed(running) {
   return elapsed;
 }
 
-function ScoreRing({ score, color, size = 52 }) {
-  const r = (size - 8) / 2, circ = 2 * Math.PI * r, fill = ((score || 0) / 10) * circ;
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={B.border} strokeWidth="4"/>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="4"
-        strokeDasharray={`${fill} ${circ}`} strokeLinecap="round"
-        transform={`rotate(-90 ${size/2} ${size/2})`}
-        style={{ transition: "stroke-dasharray 0.8s cubic-bezier(0.16,1,0.3,1)" }}/>
-      <text x="50%" y="50%" dominantBaseline="middle" textAnchor="middle"
-        fontSize="13" fontWeight="800" fill={color} fontFamily="Montserrat, sans-serif">
-        {score ?? "–"}
-      </text>
-    </svg>
-  );
-}
 
 function TimestampPill({ ts, color }) {
   return (
@@ -319,345 +291,6 @@ const DIMENSION_ORDER = [
   "watch_time_potential", "swipe_resistance",
 ];
 
-function JudgeCard({ judge, judgeResult, videoDurationSecs, platform }) {
-  const [open, setOpen] = useState(false);
-  const [tooltipDim, setTooltipDim] = useState(null);
-  const [tooltipPos, setTooltipPos] = useState(null); // null = bottom sheet, {top,left} = desktop popover
-  const loading = judgeResult?.status === "pending";
-  const result = judgeResult?.data;
-  const has = !!result && judgeResult?.status === "done";
-  // Normalise clip format: new API returns clips[] array; old API returned clip{}
-  const editorClips = result
-    ? (result.clips?.length > 0 ? result.clips : result.clip?.start ? [result.clip] : [])
-    : [];
-  // Dimension rows — filter to only keys with non-null values, append objective_fit if present
-  const dims = has
-    ? [
-        ...DIMENSION_ORDER
-          .map(key => ({ key, meta: DIMENSION_META[key], score: result.dimensions?.[key] ?? null }))
-          .filter(d => d.score != null),
-        ...(result.objective_fit?.score != null
-          ? [{ key: "objective_fit", meta: DIMENSION_META.objective_fit, score: result.objective_fit.score }]
-          : []),
-      ]
-    : [];
-
-  function handleInfoClick(e, dimKey) {
-    e.stopPropagation();
-    if (tooltipDim === dimKey) {
-      setTooltipDim(null);
-      setTooltipPos(null);
-      return;
-    }
-    if (window.innerWidth < 640) {
-      setTooltipPos(null); // bottom sheet on mobile
-    } else {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const pw = 300, ph = 260;
-      let top = rect.bottom + 8;
-      if (top + ph > window.innerHeight - 16) top = rect.top - ph - 8;
-      let left = rect.left - pw / 2 + 8;
-      if (left < 16) left = 16;
-      if (left + pw > window.innerWidth - 16) left = window.innerWidth - pw - 16;
-      setTooltipPos({ top, left });
-    }
-    setTooltipDim(dimKey);
-  }
-  return (
-    <>
-    <div style={{
-      border: `1.5px solid ${has ? judge.color+"45" : B.border}`,
-      borderRadius: "14px", background: "#fff", overflow: "hidden",
-      boxShadow: has ? `0 2px 18px ${judge.color}10` : "none", transition: "box-shadow 0.3s",
-    }}>
-      {/* ── Issue #8: More obvious expand affordance ── */}
-      <div style={{
-        background: judge.softBg, padding: "16px 18px",
-        display: "flex", alignItems: "center", gap: "12px",
-        cursor: has ? "pointer" : "default",
-        borderBottom: `1px solid ${judge.color}18`, userSelect: "none",
-      }} onClick={() => has && setOpen(o => !o)}>
-        <div style={{ background: judge.softBg, borderRadius: "8px", flexShrink: 0 }}>
-          <img src={judge.avatar} alt={judge.name}
-            style={{ width: "52px", height: "52px", objectFit: "contain", display: "block", background: judge.softBg, transform: judge.avatarScale ? `scale(${judge.avatarScale})` : undefined }} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: "800", fontSize: "14px", color: has ? judge.color : "#bbb" }}>{judge.name}</div>
-          <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px" }}>{judge.scoreLabel}</div>
-          {has && open && (
-            <div style={{ fontSize: "10px", color: "#aaa", marginTop: "3px", fontWeight: "700", letterSpacing: "0.04em" }}>
-              TAP TO COLLAPSE ↑
-            </div>
-          )}
-        </div>
-        {loading && (
-          <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-            {[0,1,2].map(i => (
-              <div key={i} style={{
-                width: "6px", height: "6px", borderRadius: "50%", background: judge.color,
-                animation: `pp-pulse 1.1s ease-in-out ${i*0.18}s infinite`,
-              }}/>
-            ))}
-          </div>
-        )}
-        {has && <ScoreRing score={result.overall} color={judge.color} size={52}/>}
-      </div>
-
-      {has && (
-        <div style={{ padding: "14px 18px 0", display: "flex", flexDirection: "column", gap: "10px" }}>
-          <div style={{
-            background: judge.softBg, borderLeft: `3px solid ${judge.color}`,
-            borderRadius: "0 8px 8px 0", padding: "11px 14px",
-            fontSize: "13px", color: B.body, lineHeight: "1.6", fontStyle: "italic",
-          }}>"{result.reaction}"</div>
-          {result.positives && (
-            <div style={{
-              background: "#F1F8F1", border: "1px solid #C8E6C9",
-              borderRadius: "8px", padding: "10px 14px",
-              display: "flex", gap: "9px", alignItems: "flex-start",
-            }}>
-              <span style={{ fontSize: "13px", flexShrink: 0, marginTop: "1px" }}>✓</span>
-              <span style={{ fontSize: "12px", color: "#2E7D32", lineHeight: "1.55" }}>{result.positives}</span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Performance Signals — always visible when has data, above expand button */}
-      {has && dims.length > 0 && (
-        <div style={{ padding: "8px 18px 6px" }}>
-          <div style={{ height: "1px", background: judge.softBg, marginBottom: "6px" }} />
-          <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "5px", fontWeight: "700" }}>
-            Performance Signals
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-            {dims.map(({ key, meta, score }) => (
-              <div key={key} style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "16px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "2px", flex: "0 0 115px", overflow: "hidden" }}>
-                  <span style={{ fontSize: "11px", color: "#999", lineHeight: 1, whiteSpace: "nowrap" }}>{meta.label}</span>
-                  <button
-                    onClick={e => handleInfoClick(e, key)}
-                    style={{ background: "none", border: "none", cursor: "pointer", padding: "0 1px", color: "#ccc", fontSize: "10px", lineHeight: 1, flexShrink: 0, touchAction: "manipulation" }}
-                  >ⓘ</button>
-                </div>
-                <div style={{ flex: 1, maxWidth: "calc(40% - 25px)", height: "6px", background: judge.softBg, borderRadius: "3px", overflow: "hidden" }}>
-                  <div style={{
-                    height: "100%", width: `${(score / 10) * 100}%`,
-                    background: judge.color, opacity: 0.7, borderRadius: "3px",
-                  }} />
-                </div>
-                <span style={{ fontSize: "11px", fontWeight: "700", color: judge.color, width: "20px", textAlign: "right", flexShrink: 0 }}>{score}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {has && open && (
-        <div style={{ padding: "16px 18px 20px", animation: "pp-fade 0.22s ease" }}>
-          {result.objective_fit && (
-            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-                <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: "700" }}>Objective Fit</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{
-                    fontSize: "10px", fontWeight: "700", padding: "2px 8px", borderRadius: "10px",
-                    background: result.objective_fit.verdict === "hits" ? "#E8F5E9" : result.objective_fit.verdict === "partial" ? "#FFF3E0" : "#FFEBEE",
-                    color: result.objective_fit.verdict === "hits" ? "#2E7D32" : result.objective_fit.verdict === "partial" ? "#E65100" : "#C62828",
-                    textTransform: "capitalize", letterSpacing: "0.04em",
-                  }}>
-                    {result.objective_fit.verdict}
-                  </span>
-                  <span style={{ fontSize: "13px", fontWeight: "700", color: judge.color }}>{result.objective_fit.score}/10</span>
-                </div>
-              </div>
-              <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.objective_fit.reasoning}</div>
-            </div>
-          )}
-          {(result.delivery || result.content) && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px" }}>
-              {[{label:"Delivery — How it's presented", val:result.delivery},
-                {label:"Content — What's said or shown", val:result.content}].map(item => (
-                <div key={item.label} style={{ background: judge.softBg, borderRadius: "8px", padding: "12px" }}>
-                  <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px", fontWeight: "700" }}>
-                    {item.label}
-                  </div>
-                  <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{item.val}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {result.platformFit && (
-            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px", fontWeight: "700" }}>Platform Fit</div>
-              <div style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{result.platformFit}</div>
-            </div>
-          )}
-
-          {/* Editor — Clip Suggestion(s) only */}
-          {judge.id === "critic" && editorClips.length > 0 && (
-            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>
-                Clip Suggestion{editorClips.length > 1 ? "s" : ""}
-              </div>
-              {editorClips.map((clip, idx) => (
-                <div key={idx}>
-                  {idx > 0 && <div style={{ height: "1px", background: B.border, margin: "8px 0" }} />}
-                  <div style={{
-                    background: judge.color + "10", border: `1px solid ${judge.color}25`,
-                    borderRadius: "8px", padding: "10px 12px",
-                    display: "flex", gap: "8px", alignItems: "flex-start",
-                  }}>
-                    <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px" }}>✂️</span>
-                    <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "3px", flexWrap: "wrap" }}>
-                        <span style={{ fontSize: "13px", fontWeight: "800", color: judge.color, fontFamily: "monospace" }}>
-                          {clip.start} — {clip.end}
-                        </span>
-                        <span style={{ fontSize: "12px", fontWeight: "700", color: B.body }}>{clip.label}</span>
-                      </div>
-                      <div style={{ fontSize: "11px", color: "#666", lineHeight: "1.4" }}>{clip.reason}</div>
-                      <div style={{ fontSize: "10px", color: "#bbb", marginTop: "5px" }}>(timestamps are approximate)</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Trendsetter — Hashtags only */}
-          {judge.id === "cool" && result?.hashtags?.length > 0 && (
-            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Hashtags</div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                {result.hashtags.map((tag, i) => (
-                  <span key={i} style={{
-                    background: judge.color + "15", color: judge.color,
-                    border: `1px solid ${judge.color}35`, borderRadius: "99px",
-                    padding: "4px 12px", fontSize: "12px", fontWeight: "700",
-                  }}>#{tag}</span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Connector — Caption Ideas only */}
-          {judge.id === "connector" && result?.captions?.length > 0 && (
-            <div style={{ background: judge.softBg, borderRadius: "8px", padding: "12px", marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "8px", fontWeight: "700" }}>Caption Ideas</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {result.captions.map((cap, i) => (
-                  <div key={i} style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "8px", padding: "10px 12px" }}>
-                    <div style={{ fontSize: "10px", color: "#bbb", fontWeight: "700", letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: "5px" }}>{cap.tone}</div>
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
-                      <span style={{ fontSize: "12px", color: B.body, lineHeight: "1.5", flex: 1 }}>{cap.text}</span>
-                      <button
-                        onClick={() => navigator.clipboard?.writeText(cap.text)}
-                        title="Copy caption"
-                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 4px", flexShrink: 0, color: "#bbb", fontSize: "15px", lineHeight: 1 }}
-                      >⧉</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {result.moments?.length > 0 && (
-            <div style={{ marginBottom: "16px" }}>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "10px", fontWeight: "700" }}>
-                Timestamped Notes — from watching your video
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {result.moments.map((m, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
-                    <TimestampPill ts={m.timestamp} color={momentTypeColor(m.type, judge.color)}/>
-                    <span style={{ fontSize: "12px", color: B.body, lineHeight: "1.5", paddingTop: "1px" }}>{m.note}</span>
-                  </div>
-                ))}
-              </div>
-              <TimelineDots points={momentsToTimelinePoints(result.moments, videoDurationSecs)} color={judge.color}/>
-            </div>
-          )}
-          {result.suggestions?.length > 0 && (
-            <div>
-              <div style={{ fontSize: "10px", color: "#aaa", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: "10px", fontWeight: "700" }}>Suggestions</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {result.suggestions.map((s, i) => (
-                  <div key={i} style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
-                    <div style={{
-                      width: "20px", height: "20px", borderRadius: "50%",
-                      background: judge.color, color: "#fff", fontSize: "10px", fontWeight: "800",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      flexShrink: 0, marginTop: "1px",
-                    }}>{i+1}</div>
-                    <span style={{ fontSize: "12px", color: B.body, lineHeight: "1.55" }}>{s}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Issue #8: Bottom tap hint when collapsed and has results */}
-      {has && !open && (
-        <div onClick={() => setOpen(true)} style={{
-          padding: "10px 18px", borderTop: `1px solid ${judge.color}18`,
-          textAlign: "center", cursor: "pointer",
-          fontSize: "11px", fontWeight: "700", color: judge.color,
-          background: judge.softBg, letterSpacing: "0.04em",
-        }}>
-          TAP TO READ FULL FEEDBACK ↓
-        </div>
-      )}
-    </div>
-    {tooltipDim && (
-      <div
-        onClick={() => { setTooltipDim(null); setTooltipPos(null); }}
-        style={{ position: "fixed", inset: 0, zIndex: 9998, background: "rgba(0,0,0,0.28)" }}
-      >
-        <div
-          onClick={e => e.stopPropagation()}
-          style={tooltipPos ? {
-            position: "fixed", top: tooltipPos.top, left: tooltipPos.left,
-            width: "300px", background: "#fff", borderRadius: "14px",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.18)", padding: "18px", zIndex: 9999,
-          } : {
-            position: "fixed", bottom: 0, left: 0, right: 0,
-            background: "#fff", borderRadius: "16px 16px 0 0",
-            boxShadow: "0 -4px 24px rgba(0,0,0,0.15)",
-            padding: "24px 20px 40px", zIndex: 9999,
-            maxHeight: "65vh", overflowY: "auto",
-          }}
-        >
-          <button
-            onClick={() => { setTooltipDim(null); setTooltipPos(null); }}
-            style={{
-              position: "absolute", top: "10px", right: "10px",
-              background: "none", border: "none", cursor: "pointer",
-              color: "#aaa", fontSize: "20px", lineHeight: 1, padding: "4px 6px",
-              touchAction: "manipulation",
-            }}
-          >×</button>
-          {!tooltipPos && (
-            <div style={{ width: "36px", height: "4px", background: B.border, borderRadius: "2px", margin: "0 auto 18px" }} />
-          )}
-          <div style={{ fontSize: "10px", color: "#bbb", fontWeight: "700", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "8px" }}>
-            Why judges use this signal
-          </div>
-          <div style={{ fontSize: "14px", fontWeight: "800", color: judge.color, marginBottom: "12px" }}>
-            {DIMENSION_META[tooltipDim]?.label}
-          </div>
-          <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.65" }}>
-            {DIMENSION_META[tooltipDim]?.tooltip}
-          </div>
-        </div>
-      </div>
-    )}
-    </>
-  );
-}
 
 // ── Issue #5 & #6: Big waiting banner ────────────────────────
 function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploadComplete, timeEstimate }) {
@@ -761,6 +394,9 @@ export default function PreviewPanel() {
   const [jobId, setJobId] = useState(null);
   const [jobStatus, setJobStatus] = useState(null);
   const [judgeResults, setJudgeResults] = useState({});
+  const [synthesis, setSynthesis] = useState(null);
+  const [synthesisStatus, setSynthesisStatus] = useState(null);
+  const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
   const [statusMessage, setStatusMessage] = useState("");
   const [videoDurationSecs, setVideoDurationSecs] = useState(null);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -777,6 +413,7 @@ export default function PreviewPanel() {
   const [uploadZoneError, setUploadZoneError] = useState(null);
   const [judgeArrivalOrder, setJudgeArrivalOrder] = useState([]);
   const pollRef = useRef(null);
+  const synthWaitRef = useRef(0);
   const objDropRef = useRef(null);
   const objInputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -822,8 +459,22 @@ export default function PreviewPanel() {
 
   const toggleJudge = id => setSelectedJudges(p => p.includes(id) ? p.filter(j => j !== id) : [...p, id]);
 
+  // Deep-dive card open/close (results view) — independent of judge selection.
+  const toggleJudgeCard = (id) => setOpenJudgeIds(prev => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+  });
+  // verdict mini-scores / sticky chips jump to + expand the matching judge card.
+  const jumpToJudge = (id) => {
+    setOpenJudgeIds(prev => new Set(prev).add(id));
+    setTimeout(() => {
+      const el = document.getElementById(`judge-${id}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
+
   useEffect(() => {
     if (!jobId) return;
+    synthWaitRef.current = 0;
     const poll = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/status/${jobId}`);
@@ -848,10 +499,27 @@ export default function PreviewPanel() {
         prevResultsRef.current = newResults;
         setJudgeResults(newResults);
         if (data.duration) setVideoDurationSecs(data.duration);
+        setSynthesis(data.synthesis ?? null);
+        setSynthesisStatus(data.synthesisStatus ?? null);
 
-        if (data.status === "done" || data.status === "partial" || data.status === "error" || data.status === "timeout") {
+        const jobDone = data.status === "done" || data.status === "partial";
+        const jobErrored = data.status === "error" || data.status === "timeout";
+        // App submissions get a fire-and-forget synthesis that lands shortly AFTER
+        // the judges finish. Keep polling while it's still "pending" (capped ~40s)
+        // so the "assembling" state can swap to the real overview when it arrives.
+        // null status on a just-finished job = the brief gap before the backend
+        // marks synthesis "pending"; treat it as pending so we don't flash the
+        // fallback. Either way it's bounded by the wait cap.
+        const synthPending = data.synthesisStatus === "pending" || data.synthesisStatus == null;
+        if (jobDone && synthPending) synthWaitRef.current++;
+        const waitingForSynth = jobDone && synthPending && synthWaitRef.current < 14;
+        if (waitingForSynth) setStatusMessage("Assembling the panel…");
+
+        if ((jobDone && !waitingForSynth) || jobErrored) {
           clearInterval(pollRef.current);
-          if (data.status === "done" || data.status === "partial") {
+          // Synthesis never resolved within the cap → degrade to the fallback view.
+          if (jobDone && synthPending) setSynthesisStatus("failed");
+          if (jobDone) {
             const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
             const total = Object.keys(data.results||{}).length;
             setStatusMessage(data.status === "done" ? "Analysis complete!" : `${succeeded} of ${total} judges completed.`);
@@ -874,6 +542,8 @@ export default function PreviewPanel() {
                 savedAt: Date.now(),
                 scores,
                 results: data.results,
+                synthesis: data.synthesis ?? null,
+                synthesisStatus: synthPending ? "failed" : data.synthesisStatus,
                 videoDuration: data.duration,
                 selectedJudges,
                 thumbnailDataUrl: data.thumbnailDataUrl || null,
@@ -1087,6 +757,7 @@ export default function PreviewPanel() {
     if (xhrRef.current) { xhrRef.current.abort(); xhrRef.current = null; }
     setStep(1); setJobId(null); setJobStatus(null);
     setJudgeResults({}); setJudgeArrivalOrder([]); prevResultsRef.current = {};
+    setSynthesis(null); setSynthesisStatus(null); setOpenJudgeIds(new Set()); synthWaitRef.current = 0;
     setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
     setVideoDurationSecs(null);
     setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
@@ -1101,15 +772,15 @@ export default function PreviewPanel() {
     setPlatform(entry.platform);
     setSelectedJudges(entry.selectedJudges || ["critic","cool","connector"]);
     setJudgeResults(entry.results || {});
+    // Older entries predate synthesis → no synthesis means the fallback view.
+    setSynthesis(entry.synthesis ?? null);
+    setSynthesisStatus(entry.synthesisStatus ?? (entry.synthesis ? "ready" : "failed"));
+    setOpenJudgeIds(new Set());
     if (entry.videoDuration) setVideoDurationSecs(entry.videoDuration);
     setJobStatus("done");
     setStatusMessage("Restored from history.");
     setStep(2);
   };
-
-  const doneResults = Object.values(judgeResults).filter(r => r.status === "done" && r.data?.overall);
-  const avgScore = doneResults.length > 0
-    ? Math.round(doneResults.reduce((s,r) => s + r.data.overall, 0) / doneResults.length) : null;
 
   return (
     <div style={{ minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
@@ -1120,6 +791,7 @@ export default function PreviewPanel() {
         @keyframes pp-fade { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
         @keyframes pp-slide { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
         @keyframes pp-indeterminate { 0%{transform:translateX(-250%)} 100%{transform:translateX(600%)} }
+        @keyframes pp-spin { to { transform: rotate(360deg) } }
         .pp-btn:hover:not(:disabled) { background: ${B.actionHover} !important; transform: translateY(-1px); }
         .pp-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .drop-zone:hover { border-color: ${B.brown} !important; background: ${B.lightBrown} !important; }
@@ -1582,45 +1254,37 @@ export default function PreviewPanel() {
               <span>Powered by <strong style={{ color: B.body }}>TwelveLabs Pegasus</strong> — the AI watches your full video, analyzing visuals, delivery, audio, and pacing together.</span>
             </div>
 
-            {/* Panel Verdict */}
-            {avgScore !== null && (
-              <div style={{ background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "14px", padding: "20px 24px", marginBottom: "18px", display: "flex", alignItems: "center", justifyContent: "space-between", boxShadow: "0 2px 14px rgba(0,0,0,0.04)" }}>
-                <div>
-                  <div style={{ fontWeight: "800", fontSize: "15px", color: B.black }}>Panel Verdict</div>
-                  <div style={{ fontSize: "12px", color: "#bbb", marginTop: "3px" }}>{doneResults.length} of {selectedJudges.length} judges complete</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  {JUDGES.filter(j => selectedJudges.includes(j.id) && judgeResults[j.id]?.status==="done").map(j => (
-                    <ScoreRing key={j.id} score={judgeResults[j.id].data.overall} color={j.color} size={44}/>
-                  ))}
-                  <div style={{ fontSize: "50px", fontWeight: "800", letterSpacing: "-0.03em", lineHeight: 1, color: avgScore >= 7 ? "#43A047" : avgScore >= 5 ? "#FB8C00" : "#E53935" }}>
-                    {avgScore}<span style={{ fontSize: "20px", color: "#ccc", fontWeight: "400" }}>/10</span>
-                  </div>
-                </div>
+            {/* Results — consolidated panel synthesis (Part B). Renders only once
+                the job is finished; this overview replaces the old per-judge tiles
+                + signal bars entirely. */}
+            {isFinished && synthesisStatus === "ready" && synthesis && (
+              <>
+                <VerdictPanel synthesis={synthesis} results={judgeResults} onJumpToJudge={jumpToJudge} />
+                <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
+                <DisagreementCard synthesis={synthesis} />
+                <PerformanceRadar results={judgeResults} />
+                <ToolkitSection results={judgeResults} />
+                <JudgeDeepDives results={judgeResults} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
+              </>
+            )}
+
+            {/* Synthesis still generating (judges done, fire-and-forget pending). */}
+            {isFinished && synthesisStatus === "pending" && (
+              <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "16px", padding: "30px 24px", marginBottom: "18px", textAlign: "center", boxShadow: "0 1px 2px rgba(60,40,20,.04)" }}>
+                <div style={{ width: "30px", height: "30px", margin: "0 auto 14px", border: `3px solid ${B.border}`, borderTopColor: B.brown, borderRadius: "50%", animation: "pp-spin 0.9s linear infinite" }} />
+                <div style={{ fontWeight: "800", fontSize: "15px", color: B.body }}>Assembling your panel</div>
+                <div style={{ fontSize: "12.5px", color: B.grey, marginTop: "5px", lineHeight: 1.5 }}>The judges are in — we're pulling their reads into one verdict. Just a moment…</div>
               </div>
             )}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              {[
-                ...judgeArrivalOrder.filter(id => selectedJudges.includes(id)),
-                ...selectedJudges.filter(id => !judgeArrivalOrder.includes(id)),
-              ].map(jid => (
-                <JudgeCard key={jid} judge={JUDGES.find(j=>j.id===jid)} judgeResult={judgeResults[jid]} videoDurationSecs={videoDurationSecs} platform={platform}/>
-              ))}
-            </div>
-
-            {/* Partial result explanation */}
-            {jobStatus === "partial" && (
-              <div style={{
-                marginTop: "16px", padding: "12px 16px",
-                background: "#F5F5F5", border: "1px solid #E0E0E0", borderRadius: "10px",
-                display: "flex", gap: "10px", alignItems: "flex-start",
-              }}>
-                <span style={{ fontSize: "14px", flexShrink: 0, marginTop: "1px", color: "#9E9E9E" }}>ℹ</span>
-                <span style={{ fontSize: "12px", color: "#757575", lineHeight: "1.55" }}>
-                  Note: One or more judges were unable to complete their review for this submission. The verdict reflects only the judges who responded.
-                </span>
-              </div>
+            {/* Graceful fallback — synthesis failed/unavailable: show what the judges
+                still produced via the new components (no synthesis overview). */}
+            {isFinished && synthesisStatus !== "ready" && synthesisStatus !== "pending" && (
+              <>
+                <PerformanceRadar results={judgeResults} />
+                <ToolkitSection results={judgeResults} />
+                <JudgeDeepDives results={judgeResults} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
+              </>
             )}
           </div>
         )}
