@@ -1361,7 +1361,7 @@ function synthAnthropic() {
   if (!_synthAnthropic) _synthAnthropic = new Anthropic({ apiKey: process.env.SYNTHESIS_ANTHROPIC_API_KEY });
   return _synthAnthropic;
 }
-const SYNTHESIS_MODEL = process.env.SYNTHESIS_MODEL || "claude-haiku-4-5-20251001";
+const SYNTHESIS_MODEL = process.env.SYNTHESIS_MODEL || "claude-sonnet-4-6";
 const SYNTHESIS_PROMPT_VERSION = "synthesis-v2.3";
 let SYNTHESIS_SYSTEM_PROMPT = null;
 try {
@@ -2489,6 +2489,8 @@ app.get("/version", (_, res) => res.json({
   sha: BUILD_SHA,
   shortSha: BUILD_SHA === "unknown" ? "unknown" : BUILD_SHA.slice(0, 7),
   startedAt: STARTED_AT,
+  synthesisModel: SYNTHESIS_MODEL,
+  synthesisPromptVersion: SYNTHESIS_PROMPT_VERSION,
 }));
 
 // ── TwelveLabs warm-up — keeps infrastructure warm, prevents cold-start delays ─
