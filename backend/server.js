@@ -1362,7 +1362,7 @@ function synthAnthropic() {
   return _synthAnthropic;
 }
 const SYNTHESIS_MODEL = process.env.SYNTHESIS_MODEL || "claude-sonnet-4-6";
-const SYNTHESIS_PROMPT_VERSION = "synthesis-v2.3";
+const SYNTHESIS_PROMPT_VERSION = "synthesis-v2.4";
 let SYNTHESIS_SYSTEM_PROMPT = null;
 try {
   SYNTHESIS_SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, "synthesisSystemPrompt.txt"), "utf8");
