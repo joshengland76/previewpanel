@@ -401,7 +401,7 @@ export default function PreviewPanel() {
         const synthPending = data.synthesisStatus === "pending" || data.synthesisStatus == null;
         if (jobDone && synthPending) synthWaitRef.current++;
         const waitingForSynth = jobDone && synthPending && synthWaitRef.current < 14;
-        if (waitingForSynth) setStatusMessage("Assembling the panel…");
+        if (waitingForSynth) setStatusMessage("Assembling your panel results…");
 
         if ((jobDone && !waitingForSynth) || jobErrored) {
           clearInterval(pollRef.current);
@@ -1135,6 +1135,16 @@ export default function PreviewPanel() {
               </div>
             )}
 
+            {/* Synthesis still generating (judges done, fire-and-forget pending) —
+                shown ABOVE the attribution so the big box leads, like the waiting screen. */}
+            {isFinished && synthesisStatus === "pending" && (
+              <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "16px", padding: "30px 24px", marginBottom: "18px", textAlign: "center", boxShadow: "0 1px 2px rgba(60,40,20,.04)" }}>
+                <div style={{ width: "30px", height: "30px", margin: "0 auto 14px", border: `3px solid ${B.border}`, borderTopColor: B.brown, borderRadius: "50%", animation: "pp-spin 0.9s linear infinite" }} />
+                <div style={{ fontWeight: "800", fontSize: "15px", color: B.body }}>Assembling your panel results</div>
+                <div style={{ fontSize: "12.5px", color: B.grey, marginTop: "5px", lineHeight: 1.5 }}>The judges are in — we're pulling their reads into one verdict. Just a moment…</div>
+              </div>
+            )}
+
             {/* TwelveLabs attribution */}
             <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "8px", padding: "10px 16px", fontSize: "11px", color: "#aaa", display: "flex", alignItems: "center", gap: "8px", marginBottom: "18px" }}>
               <span style={{ fontSize: "16px" }}>👁</span>
@@ -1153,15 +1163,6 @@ export default function PreviewPanel() {
                 <ToolkitSection results={judgeResults} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
-            )}
-
-            {/* Synthesis still generating (judges done, fire-and-forget pending). */}
-            {isFinished && synthesisStatus === "pending" && (
-              <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "16px", padding: "30px 24px", marginBottom: "18px", textAlign: "center", boxShadow: "0 1px 2px rgba(60,40,20,.04)" }}>
-                <div style={{ width: "30px", height: "30px", margin: "0 auto 14px", border: `3px solid ${B.border}`, borderTopColor: B.brown, borderRadius: "50%", animation: "pp-spin 0.9s linear infinite" }} />
-                <div style={{ fontWeight: "800", fontSize: "15px", color: B.body }}>Assembling your panel</div>
-                <div style={{ fontSize: "12.5px", color: B.grey, marginTop: "5px", lineHeight: 1.5 }}>The judges are in — we're pulling their reads into one verdict. Just a moment…</div>
-              </div>
             )}
 
             {/* Graceful fallback — synthesis failed/unavailable: show what the judges
