@@ -287,6 +287,7 @@ export default function PreviewPanel() {
   const [videoFile, setVideoFile] = useState(null);
   const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
   const [objective, setObjective] = useState("");
+  const [restoredFileName, setRestoredFileName] = useState(null);
   const [objDropOpen, setObjDropOpen] = useState(false);
   const [objFilter, setObjFilter] = useState("");
   const [objDropAbove, setObjDropAbove] = useState(false);
@@ -426,6 +427,7 @@ export default function PreviewPanel() {
                 .map(([id, v]) => ({ id, score: v.data?.overall }));
               const entry = {
                 platform,
+                objective,
                 fileName: videoFile?.name || "video",
                 savedAt: Date.now(),
                 scores,
@@ -548,6 +550,7 @@ export default function PreviewPanel() {
     setStep(2);
     setJudgeResults({});
     setSynthesis(null); setSynthesisStatus(null); setOpenJudgeIds(new Set());
+    setRestoredFileName(null);
     setJobStatus("uploading");
     setUploadProgress(0);
     setUploadProgressIndeterminate(false);
@@ -646,6 +649,7 @@ export default function PreviewPanel() {
     setJudgeResults({});
     setSynthesis(null); setSynthesisStatus(null); setOpenJudgeIds(new Set()); synthWaitRef.current = 0;
     setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
+    setRestoredFileName(null);
     setVideoDurationSecs(null);
     setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
     setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
@@ -657,6 +661,8 @@ export default function PreviewPanel() {
   const restoreFromHistory = (entry) => {
     setShowHistory(false);
     setPlatform(entry.platform);
+    setObjective(entry.objective || "");
+    setRestoredFileName(entry.fileName || null);
     setSelectedJudges(entry.selectedJudges || ["critic","cool","connector"]);
     setJudgeResults(entry.results || {});
     // Older entries predate synthesis → no synthesis means the fallback view.
@@ -1126,17 +1132,16 @@ export default function PreviewPanel() {
                     🎯 {objective}
                   </div>
                 )}
-                {videoFile && (
+                {(videoFile?.name || restoredFileName) && (
                   <div style={{ padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: "#888", fontFamily: "'Courier New', monospace" }}>
-                    {videoFile.name}
+                    {videoFile?.name || restoredFileName}
                   </div>
                 )}
                 <span style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}>{statusMessage}</span>
               </div>
             )}
 
-            {/* Synthesis still generating (judges done, fire-and-forget pending) —
-                shown ABOVE the attribution so the big box leads, like the waiting screen. */}
+            {/* Synthesis still generating (judges done, fire-and-forget pending). */}
             {isFinished && synthesisStatus === "pending" && (
               <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "16px", padding: "30px 24px", marginBottom: "18px", textAlign: "center", boxShadow: "0 1px 2px rgba(60,40,20,.04)" }}>
                 <div style={{ width: "30px", height: "30px", margin: "0 auto 14px", border: `3px solid ${B.border}`, borderTopColor: B.brown, borderRadius: "50%", animation: "pp-spin 0.9s linear infinite" }} />
@@ -1144,12 +1149,6 @@ export default function PreviewPanel() {
                 <div style={{ fontSize: "12.5px", color: B.grey, marginTop: "5px", lineHeight: 1.5 }}>The judges are in — we're pulling their reads into one verdict. Just a moment…</div>
               </div>
             )}
-
-            {/* TwelveLabs attribution */}
-            <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "8px", padding: "10px 16px", fontSize: "11px", color: "#aaa", display: "flex", alignItems: "center", gap: "8px", marginBottom: "18px" }}>
-              <span style={{ fontSize: "16px" }}>👁</span>
-              <span>Powered by <strong style={{ color: B.body }}>TwelveLabs Pegasus</strong> — the AI watches your full video, analyzing visuals, delivery, audio, and pacing together.</span>
-            </div>
 
             {/* Results — consolidated panel synthesis (Part B). Renders only once
                 the job is finished; this overview replaces the old per-judge tiles
@@ -1174,6 +1173,12 @@ export default function PreviewPanel() {
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
             )}
+
+            {/* TwelveLabs attribution — at the bottom (identical for live results + history). */}
+            <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: "8px", padding: "10px 16px", fontSize: "11px", color: "#aaa", display: "flex", alignItems: "center", gap: "8px", marginTop: "18px" }}>
+              <span style={{ fontSize: "16px" }}>👁</span>
+              <span>Powered by <strong style={{ color: B.body }}>TwelveLabs Pegasus</strong> — the AI watches your full video, analyzing visuals, delivery, audio, and pacing together.</span>
+            </div>
           </div>
         )}
       </main>
