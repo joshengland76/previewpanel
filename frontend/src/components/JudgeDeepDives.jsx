@@ -191,7 +191,11 @@ function JudgeCard({ judge, result, duration, open, onToggle }) {
                     borderTop: i === 0 ? "none" : `1px dashed ${B.lightBrown}` }}>
                     <span style={{ fontFamily: "'Courier New', monospace", fontSize: 10.5, fontWeight: 700, color: judge.color,
                       background: judge.color + "14", borderRadius: 5, padding: "2px 6px", flexShrink: 0 }}>{m.timestamp}</span>
-                    <span style={{ color: mk.c, flexShrink: 0, marginTop: 1, fontSize: 10 }}>{mk.ch}</span>
+                    <svg width="11" height="11" viewBox="0 0 12 12" style={{ flexShrink: 0, marginTop: 3, display: "block" }}>
+                      {m.type === "peak" ? <path d="M6 1.5 11 10.5 1 10.5Z" fill={mk.c} />
+                        : m.type === "drop" ? <path d="M6 10.5 1 1.5 11 1.5Z" fill={mk.c} />
+                        : <circle cx="6" cy="6" r="4.7" fill={mk.c} />}
+                    </svg>
                     <span style={{ fontSize: 11.5, lineHeight: 1.4, color: "#5c544a" }}>{m.note}</span>
                   </div>
                 );
