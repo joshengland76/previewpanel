@@ -117,9 +117,13 @@ export function WhatsWorkingFixes({ synthesis, duration }) {
   });
   const placed = [];
   clusters.forEach((g) => {
-    const n = g.length;
-    const cx = g.reduce((s, m) => s + m.x0, 0) / n;
-    const ordered = g.slice().sort((a, b) => (KIND_TIER[a.t.kind] ?? 1) - (KIND_TIER[b.t.kind] ?? 1));
+    const cx = g.reduce((s, m) => s + m.x0, 0) / g.length;
+    // At most ONE mark per kind on the timeline (checkmark / wrench / exclamation) —
+    // even if several takeaways of that kind share the point. The cards below list them all.
+    const byKind = {};
+    g.forEach((m) => { if (!byKind[m.t.kind]) byKind[m.t.kind] = m; });
+    const ordered = Object.values(byKind).sort((a, b) => (KIND_TIER[a.t.kind] ?? 1) - (KIND_TIER[b.t.kind] ?? 1));
+    const n = ordered.length;
     ordered.forEach((m, i) => placed.push({ t: m.t, x: cx, cy: BASE + (i - (n - 1) / 2) * STACK_OFF }));
   });
   const toggle = (i) => setOpen((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
