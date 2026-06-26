@@ -108,14 +108,10 @@ export function ToolkitSection({ results }) {
 
         {hashtags.length > 0 && (
           <Card judge={TREND} title="Hashtags" by="from The Trendsetter">
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {Array.from({ length: Math.ceil(hashtags.length / 3) }, (_, r) => hashtags.slice(r * 3, r * 3 + 3)).map((row, r) => (
-                <div key={r} style={{ display: "flex", gap: 6 }}>
-                  {row.map((t, i) => (
-                    <span key={i} style={{ fontSize: 11, fontWeight: 600, color: "#8C6710", background: TREND.color + "1f",
-                      borderRadius: 999, padding: "4px 10px" }}>#{t}</span>
-                  ))}
-                </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {hashtags.map((t, i) => (
+                <span key={i} style={{ fontSize: 11, fontWeight: 600, color: "#8C6710", background: TREND.color + "1f",
+                  borderRadius: 999, padding: "4px 10px", maxWidth: "100%", overflowWrap: "anywhere" }}>#{t}</span>
               ))}
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 11 }}>

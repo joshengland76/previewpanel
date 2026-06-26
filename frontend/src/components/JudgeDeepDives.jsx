@@ -25,7 +25,7 @@ const OF = {
 function momentMark(type) {
   if (type === "peak") return { ch: "▲", c: VALENCE.strength };
   if (type === "drop") return { ch: "▼", c: VALENCE.risk };
-  return { ch: "•", c: B.grey };
+  return { ch: "●", c: "#1F1B16" };
 }
 
 const toSecs = (ts) => { const p = String(ts).split(":").map(Number); return p.length === 2 ? p[0] * 60 + p[1] : p[0]; };

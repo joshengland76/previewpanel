@@ -22,8 +22,12 @@ const IMPACT = {
   medium: { c: "#B05E14", bg: "#FB8C0020", label: "Medium" },
 };
 
-const VB_W = 600, VB_H = 60, PAD = 56, BASE = 30;
-const ICON_GAP = 24; // min center-to-center spacing so colliding icons sit side by side
+const VB_W = 600, VB_H = 88, PAD = 56, BASE = 44;
+const STACK_GAP = 22; // x-distance under which marks count as the SAME point
+const STACK_OFF = 23; // vertical spacing when same-point marks stack above/on/below
+// Vertical tier per kind: checkmark/strength stays on or above the line,
+// exclamation/watchout on or below, wrench/fix in the middle.
+const KIND_TIER = { strength: 0, fix: 1, watchout: 2 };
 const WRENCH_D = "M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73z";
 
 function fmt(sec) { const s = Math.max(0, Math.round(Number(sec) || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
@@ -100,28 +104,23 @@ export function WhatsWorkingFixes({ synthesis, duration }) {
   const maxT = onTrack.reduce((m, t) => Math.max(m, t.t_seconds), 0);
   const trackMax = Math.max(Number(duration) || 0, maxT, 1);
   const xOf = (t, r) => Math.max(PAD + r, Math.min(VB_W - PAD - r, PAD + (t / trackMax) * (VB_W - PAD * 2)));
-  // One icon per takeaway, always ON the line — we never merge in the UI (the
-  // synthesis already collapses same-moment flags into one multi-judge takeaway,
-  // so two takeaways = two genuinely distinct points). When icons fall close
-  // enough to overlap, spread them HORIZONTALLY so they read as separate points
-  // side by side (matching their separate minicards), never stacked. Chain
-  // neighbours within ICON_GAP into a cluster, then lay it out evenly, centred on
-  // the cluster mean and clamped to the track.
+  // One icon per takeaway, on the line. When several land on (or very near) the
+  // SAME point they'd overlap, so stack them VERTICALLY around the line by kind:
+  // checkmark (strength) on/above, exclamation (watchout) on/below, wrench (fix)
+  // in the middle — 1 on the line, 2 → above+below, 3 → above/on/below.
   const sortedMarks = onTrack.map((t) => ({ t, x0: xOf(t.t_seconds, 14) })).sort((a, b) => a.x0 - b.x0);
   const clusters = [];
   sortedMarks.forEach((m) => {
     const g = clusters[clusters.length - 1];
-    if (g && m.x0 - g[g.length - 1].x0 < ICON_GAP) g.push(m);
+    if (g && m.x0 - g[g.length - 1].x0 < STACK_GAP) g.push(m);
     else clusters.push([m]);
   });
   const placed = [];
   clusters.forEach((g) => {
     const n = g.length;
-    const half = ((n - 1) / 2) * ICON_GAP;
-    const lo = PAD + 12 + half, hi = VB_W - PAD - 12 - half;
-    let mean = g.reduce((s, m) => s + m.x0, 0) / n;
-    mean = Math.max(lo, Math.min(hi, mean));
-    g.forEach((m, i) => placed.push({ t: m.t, x: mean + (i - (n - 1) / 2) * ICON_GAP, cy: BASE }));
+    const cx = g.reduce((s, m) => s + m.x0, 0) / n;
+    const ordered = g.slice().sort((a, b) => (KIND_TIER[a.t.kind] ?? 1) - (KIND_TIER[b.t.kind] ?? 1));
+    ordered.forEach((m, i) => placed.push({ t: m.t, x: cx, cy: BASE + (i - (n - 1) / 2) * STACK_OFF }));
   });
   const toggle = (i) => setOpen((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
   const endLabel = { position: "absolute", top: `${(BASE / VB_H) * 100}%`, transform: "translateY(-50%)",
@@ -147,7 +146,7 @@ export function WhatsWorkingFixes({ synthesis, duration }) {
                   <g key={t.i} style={{ cursor: "pointer" }} onMouseEnter={() => setActive(t.i)} onMouseLeave={() => setActive(null)} onClick={() => toggle(t.i)}>
                     {on && <circle cx={x} cy={cy} r="15" fill="#2a26200d" />}
                     <Icon cx={x} cy={cy} s={S} color="#1F1B16" />
-                    <rect x={x - 14} y={2} width="28" height={VB_H - 6} fill="transparent" />
+                    <rect x={x - 12} y={cy - 13} width="24" height="26" fill="transparent" />
                   </g>
                 );
               })}
