@@ -59,10 +59,10 @@ function CopyButton({ text, variant = "icon" }) {
   );
 }
 
-function Card({ judge, title, by, badge, children }) {
+function Card({ judge, title, by, badge, children, style }) {
   return (
     <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderLeft: `4px solid ${judge.color}`,
-      borderRadius: 16, boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)", padding: "14px 15px" }}>
+      borderRadius: 16, boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)", padding: "14px 15px", ...style }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 11 }}>
         <img src={judge.avatar} alt={judge.name} style={{ width: 26, height: 26, objectFit: "contain", flexShrink: 0,
           transform: judge.avatarScale ? `scale(${judge.avatarScale})` : undefined }} />
@@ -121,8 +121,8 @@ export function ToolkitSection({ results, trim }) {
           </Card>
         )}
 
-        {/* Clips — Editor-only, conditional; always shown (populated or empty). */}
-        <Card judge={EDITOR} title="Shorts candidates" by="from The Editor">
+        {/* Clips — Editor-only; always shown. order:-1 floats it above captions/hashtags. */}
+        <Card judge={EDITOR} title="Shorts candidates" by="from The Editor" style={{ order: -1 }}>
           {clips.length > 0 ? (
             <>
               <div style={{ fontSize: 10.5, color: B.grey, fontStyle: "italic", margin: "-12px 0 8px", textAlign: "right" }}>Timestamps are approximate</div>

@@ -199,7 +199,12 @@ export default function TrimClip({ clip, trim }) {
               style={{ flex: 1, fontSize: 13, fontWeight: 800, color: "#fff", background: EDITOR.color,
                 border: "none", borderRadius: 8, padding: "10px 12px", cursor: "pointer", fontFamily: "inherit",
                 opacity: status === "working" || !(end > start) ? 0.55 : 1 }}>
-              {status === "working" ? "Trimming…" : "Download clip"}
+              {status === "working" ? (
+                <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.45)", borderTopColor: "#fff", borderRadius: "50%", animation: "pp-spin 0.8s linear infinite", display: "inline-block" }} />
+                  Trimming…
+                </span>
+              ) : "Download clip"}
             </button>
             <button type="button" onClick={() => { const v = videoRef.current; if (v) v.pause(); setOpen(false); setPlaying(false); setStatus("idle"); setMsg(""); }}
               style={{ fontSize: 12, fontWeight: 700, color: B.grey, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
