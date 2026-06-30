@@ -73,7 +73,9 @@ export default function TrimClip({ clip, trim }) {
     const move = (e) => {
       if (!dragRef.current) return;
       const t = timeFromX(e.clientX); if (t == null) return;
-      seek(dragRef.current === "start" ? applyStart(t) : applyEnd(t));
+      if (dragRef.current === "start") seek(applyStart(t));
+      else if (dragRef.current === "end") seek(applyEnd(t));
+      else seek(clamp(t, startRef.current, endRef.current)); // playhead, locked to selection
       e.preventDefault();
     };
     const up = () => { dragRef.current = null; };
@@ -176,8 +178,21 @@ export default function TrimClip({ clip, trim }) {
           <div ref={trackRef} style={{ position: "relative", height: 28, margin: "10px 8px 2px", touchAction: "none" }}>
             <div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: 5, transform: "translateY(-50%)", background: B.lightBrown, borderRadius: 99 }} />
             <div style={{ position: "absolute", top: "50%", height: 5, transform: "translateY(-50%)", left: pct(start), width: `${((end - start) / (winHi - winLo)) * 100}%`, background: EDITOR.color, borderRadius: 99 }} />
-            {/* Playhead — current position as it plays */}
-            <div style={{ position: "absolute", top: 1, bottom: 1, left: pct(clamp(cur, winLo, winHi)), width: 3, transform: "translateX(-50%)", background: "#1F1B16", borderRadius: 2, zIndex: 1, pointerEvents: "none" }} />
+            {/* Playhead — current position; draggable to set the resume point. Near
+                a handle it yields (pointer-events off) so the handle stays grabbable. */}
+            {(() => {
+              const span = winHi - winLo || 1;
+              const nearHandle = (cur - start) / span < 0.1 || (end - cur) / span < 0.1;
+              return (
+                <div
+                  onPointerDown={nearHandle ? undefined : (e) => { pause(); dragRef.current = "playhead"; e.preventDefault(); }}
+                  style={{ position: "absolute", top: 0, bottom: 0, left: pct(clamp(cur, start, end)), width: 22,
+                    transform: "translateX(-50%)", zIndex: 1, display: "flex", justifyContent: "center",
+                    touchAction: "none", pointerEvents: nearHandle ? "none" : "auto", cursor: nearHandle ? "default" : "grab" }}>
+                  <div style={{ width: 3, height: "100%", background: "#1F1B16", borderRadius: 2 }} />
+                </div>
+              );
+            })()}
             {thumb("start", start, (e) => { dragRef.current = "start"; e.preventDefault(); })}
             {thumb("end", end, (e) => { dragRef.current = "end"; e.preventDefault(); })}
           </div>
@@ -190,8 +205,18 @@ export default function TrimClip({ clip, trim }) {
 
           {/* Playback locked to the selection — play/pause + restart (no skip). */}
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button type="button" onClick={togglePlay} style={playBtn}>{playing ? "❙❙ Pause" : "▶ Play"}</button>
-            <button type="button" onClick={restart} style={playBtn} title="Back to start">↺ Restart</button>
+            <button type="button" onClick={togglePlay} style={playBtn}>
+              {playing ? (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+              )}
+              {playing ? "Pause" : "Play"}
+            </button>
+            <button type="button" onClick={restart} style={playBtn} title="Back to start">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+              Restart
+            </button>
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
@@ -232,4 +257,5 @@ const stepBtn = {
 const playBtn = {
   flex: 1, fontSize: 12.5, fontWeight: 700, color: EDITOR.color, background: EDITOR.color + "12",
   border: `1px solid ${EDITOR.color}40`, borderRadius: 8, padding: "9px", cursor: "pointer", fontFamily: "inherit",
+  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7,
 };
