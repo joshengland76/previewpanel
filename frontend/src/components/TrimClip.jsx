@@ -160,7 +160,7 @@ export default function TrimClip({ clip, trim }) {
         </div>
       ) : (
         <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: 12, padding: 12, marginTop: 2 }}>
-          <video ref={videoRef} playsInline muted preload="metadata"
+          <video ref={videoRef} playsInline preload="metadata"
             onLoadedMetadata={() => seek(start)} onTimeUpdate={onTime}
             onClick={togglePlay} onEnded={() => setPlaying(false)}
             style={{ width: "100%", maxHeight: 240, background: "#000", borderRadius: 8, display: "block", cursor: "pointer" }} />
@@ -176,6 +176,8 @@ export default function TrimClip({ clip, trim }) {
           <div ref={trackRef} style={{ position: "relative", height: 28, margin: "10px 8px 2px", touchAction: "none" }}>
             <div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: 5, transform: "translateY(-50%)", background: B.lightBrown, borderRadius: 99 }} />
             <div style={{ position: "absolute", top: "50%", height: 5, transform: "translateY(-50%)", left: pct(start), width: `${((end - start) / (winHi - winLo)) * 100}%`, background: EDITOR.color, borderRadius: 99 }} />
+            {/* Playhead — current position as it plays */}
+            <div style={{ position: "absolute", top: 1, bottom: 1, left: pct(clamp(cur, winLo, winHi)), width: 3, transform: "translateX(-50%)", background: "#1F1B16", borderRadius: 2, zIndex: 1, pointerEvents: "none" }} />
             {thumb("start", start, (e) => { dragRef.current = "start"; e.preventDefault(); })}
             {thumb("end", end, (e) => { dragRef.current = "end"; e.preventDefault(); })}
           </div>
