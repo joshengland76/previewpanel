@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { B, JUDGE_BY_ID } from "../brand.js";
+import TrimClip from "./TrimClip.jsx";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Part B — "Ready to use" toolkit. Reads STRAIGHT from judge data (.results),
@@ -78,7 +79,7 @@ function Card({ judge, title, by, badge, children }) {
   );
 }
 
-export function ToolkitSection({ results }) {
+export function ToolkitSection({ results, trim }) {
   const captions = results?.connector?.data?.captions || [];
   const hashtags = results?.cool?.data?.hashtags || [];
   const clips = results?.critic?.data?.clips || [];
@@ -142,6 +143,7 @@ export function ToolkitSection({ results }) {
                       {c.label && <span style={{ fontWeight: 700, fontSize: 13.5, color: B.body }}>{c.label}</span>}
                     </div>
                     {c.reason && <div style={{ fontSize: 12, lineHeight: 1.45, color: "#5c544a", marginTop: 6 }}>{c.reason}</div>}
+                    {trim?.available && trim?.videoFile && <TrimClip clip={c} trim={trim} />}
                   </div>
                 );
               })}

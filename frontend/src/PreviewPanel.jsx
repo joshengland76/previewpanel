@@ -298,6 +298,7 @@ export default function PreviewPanel() {
   const [judgeResults, setJudgeResults] = useState({});
   const [synthesis, setSynthesis] = useState(null);
   const [synthesisStatus, setSynthesisStatus] = useState(null);
+  const [trimAvailable, setTrimAvailable] = useState(false);
   const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
   const [statusMessage, setStatusMessage] = useState("");
   const [videoDurationSecs, setVideoDurationSecs] = useState(null);
@@ -390,6 +391,7 @@ export default function PreviewPanel() {
         if (data.duration) setVideoDurationSecs(data.duration);
         setSynthesis(data.synthesis ?? null);
         setSynthesisStatus(data.synthesisStatus ?? null);
+        setTrimAvailable(!!data.trimAvailable);
 
         const jobDone = data.status === "done" || data.status === "partial";
         const jobErrored = data.status === "error" || data.status === "timeout";
@@ -549,7 +551,7 @@ export default function PreviewPanel() {
     savedRef.current = false;
     setStep(2);
     setJudgeResults({});
-    setSynthesis(null); setSynthesisStatus(null); setOpenJudgeIds(new Set());
+    setSynthesis(null); setSynthesisStatus(null); setTrimAvailable(false); setOpenJudgeIds(new Set());
     setRestoredFileName(null);
     setJobStatus("uploading");
     setUploadProgress(0);
@@ -647,7 +649,7 @@ export default function PreviewPanel() {
     if (xhrRef.current) { xhrRef.current.abort(); xhrRef.current = null; }
     setStep(1); setJobId(null); setJobStatus(null);
     setJudgeResults({});
-    setSynthesis(null); setSynthesisStatus(null); setOpenJudgeIds(new Set()); synthWaitRef.current = 0;
+    setSynthesis(null); setSynthesisStatus(null); setTrimAvailable(false); setOpenJudgeIds(new Set()); synthWaitRef.current = 0;
     setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
     setRestoredFileName(null);
     setVideoDurationSecs(null);
@@ -670,10 +672,16 @@ export default function PreviewPanel() {
     setSynthesisStatus(entry.synthesisStatus ?? (entry.synthesis ? "ready" : "failed"));
     setOpenJudgeIds(new Set());
     if (entry.videoDuration) setVideoDurationSecs(entry.videoDuration);
+    setTrimAvailable(false); // history restore has no in-memory file → no trim
     setJobStatus("done");
     setStatusMessage("Restored from history.");
     setStep(2);
   };
+
+  // Live-session trim context for the Editor's clip cards. TrimClip self-hides
+  // when videoFile is absent (e.g. restored history); available reflects the
+  // server's 30-min retention window via /api/status.
+  const trimCtx = { available: trimAvailable, videoFile, jobId, apiBase: API_BASE, durationSecs: videoDurationSecs };
 
   return (
     <div style={{ minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
@@ -1159,7 +1167,7 @@ export default function PreviewPanel() {
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
                 <PerformanceRadar results={judgeResults} />
-                <ToolkitSection results={judgeResults} />
+                <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
             )}
@@ -1169,7 +1177,7 @@ export default function PreviewPanel() {
             {isFinished && synthesisStatus !== "ready" && synthesisStatus !== "pending" && (
               <>
                 <PerformanceRadar results={judgeResults} />
-                <ToolkitSection results={judgeResults} />
+                <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
             )}
