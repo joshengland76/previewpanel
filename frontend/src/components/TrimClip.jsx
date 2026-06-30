@@ -40,7 +40,7 @@ export default function TrimClip({ clip, trim }) {
   const [start, setStart] = useState(round1(sugStart));
   const [end, setEnd] = useState(round1(sugEnd));
   const [cur, setCur] = useState(sugStart);
-  const [previewing, setPreviewing] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const [status, setStatus] = useState("idle"); // idle | working | error | done
   const [msg, setMsg] = useState("");
 
@@ -49,7 +49,7 @@ export default function TrimClip({ clip, trim }) {
   const dragRef = useRef(null);   // "start" | "end" | null
   const startRef = useRef(start); startRef.current = start;
   const endRef = useRef(end); endRef.current = end;
-  const previewRef = useRef(previewing); previewRef.current = previewing;
+  const playingRef = useRef(playing); playingRef.current = playing;
 
   useEffect(() => {
     if (!open || !videoFile) return;
@@ -83,20 +83,26 @@ export default function TrimClip({ clip, trim }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Playback is locked to the selection: it never plays past `end`, and pressing
+  // play from outside the window restarts at `start`. (No native controls, so the
+  // viewer can't scrub/skip beyond what's selected.)
   const onTime = () => {
     const v = videoRef.current; if (!v) return;
     setCur(v.currentTime);
-    if (previewRef.current && v.currentTime >= endRef.current - 0.03) { v.pause(); setPreviewing(false); }
+    if (!v.paused && v.currentTime >= endRef.current - 0.03) { v.pause(); setPlaying(false); }
   };
-  const previewSelection = () => {
+  const play = () => {
     const v = videoRef.current; if (!v) return;
-    v.currentTime = start; setCur(start);
-    v.play().then(() => setPreviewing(true)).catch(() => {});
+    if (v.currentTime < startRef.current || v.currentTime >= endRef.current - 0.03) { v.currentTime = startRef.current; setCur(startRef.current); }
+    v.play().then(() => setPlaying(true)).catch(() => {});
   };
+  const pause = () => { const v = videoRef.current; if (v) v.pause(); setPlaying(false); };
+  const togglePlay = () => { const v = videoRef.current; if (v) (v.paused ? play() : pause()); };
+  const restart = () => { const v = videoRef.current; if (!v) return; v.currentTime = startRef.current; setCur(startRef.current); v.play().then(() => setPlaying(true)).catch(() => {}); };
 
   const download = async () => {
     if (!(end > start)) { setStatus("error"); setMsg("Start must be before end."); return; }
-    const v = videoRef.current; if (v) { v.pause(); setPreviewing(false); }
+    const v = videoRef.current; if (v) { v.pause(); setPlaying(false); }
     setStatus("working"); setMsg("");
     const body = JSON.stringify({ jobId, start: Number(start.toFixed(2)), end: Number(end.toFixed(2)), mode: "reencode" });
     const hit = () => fetch(`${apiBase}/api/trim`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
@@ -154,14 +160,15 @@ export default function TrimClip({ clip, trim }) {
         </div>
       ) : (
         <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: 12, padding: 12, marginTop: 2 }}>
-          <video ref={videoRef} controls playsInline muted preload="metadata"
+          <video ref={videoRef} playsInline muted preload="metadata"
             onLoadedMetadata={() => seek(start)} onTimeUpdate={onTime}
-            style={{ width: "100%", maxHeight: 240, background: "#000", borderRadius: 8, display: "block" }} />
+            onClick={togglePlay} onEnded={() => setPlaying(false)}
+            style={{ width: "100%", maxHeight: 240, background: "#000", borderRadius: 8, display: "block", cursor: "pointer" }} />
 
           {/* Persistent time readout — always visible (native controls auto-hide). */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8,
             fontFamily: "'Courier New', monospace", fontSize: 12.5, fontWeight: 700 }}>
-            <span style={{ color: previewing ? EDITOR.color : B.grey }}>▶ {fmtMs(cur)}</span>
+            <span style={{ color: playing ? EDITOR.color : B.grey }}>⏱ {fmtMs(cur)}</span>
             <span style={{ color: B.body }}>{fmtMs(start)} – {fmtMs(end)} · {len.toFixed(1)}s</span>
           </div>
 
@@ -179,12 +186,11 @@ export default function TrimClip({ clip, trim }) {
             {stepper("End", end, () => seek(applyEnd(end - STEP)), () => seek(applyEnd(end + STEP)), Math.max(endMin, start + GAP), endMax)}
           </div>
 
-          <button type="button" onClick={previewSelection}
-            style={{ width: "100%", marginTop: 12, fontSize: 12.5, fontWeight: 700, color: EDITOR.color,
-              background: EDITOR.color + "12", border: `1px solid ${EDITOR.color}40`, borderRadius: 8,
-              padding: "9px", cursor: "pointer", fontFamily: "inherit" }}>
-            {previewing ? "Previewing…" : "▶ Preview selection"}
-          </button>
+          {/* Playback locked to the selection — play/pause + restart (no skip). */}
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button type="button" onClick={togglePlay} style={playBtn}>{playing ? "❙❙ Pause" : "▶ Play"}</button>
+            <button type="button" onClick={restart} style={playBtn} title="Back to start">↺ Restart</button>
+          </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
             <button type="button" onClick={download} disabled={status === "working" || !(end > start)}
@@ -193,7 +199,7 @@ export default function TrimClip({ clip, trim }) {
                 opacity: status === "working" || !(end > start) ? 0.55 : 1 }}>
               {status === "working" ? "Trimming…" : "Download clip"}
             </button>
-            <button type="button" onClick={() => { const v = videoRef.current; if (v) v.pause(); setOpen(false); setPreviewing(false); setStatus("idle"); setMsg(""); }}
+            <button type="button" onClick={() => { const v = videoRef.current; if (v) v.pause(); setOpen(false); setPlaying(false); setStatus("idle"); setMsg(""); }}
               style={{ fontSize: 12, fontWeight: 700, color: B.grey, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
               Cancel
             </button>
@@ -215,4 +221,8 @@ export default function TrimClip({ clip, trim }) {
 const stepBtn = {
   width: 30, height: 30, borderRadius: 7, border: `1px solid ${EDITOR.color}55`, background: EDITOR.color + "10",
   color: EDITOR.color, fontSize: 18, fontWeight: 800, lineHeight: 1, cursor: "pointer", fontFamily: "inherit", flexShrink: 0,
+};
+const playBtn = {
+  flex: 1, fontSize: 12.5, fontWeight: 700, color: EDITOR.color, background: EDITOR.color + "12",
+  border: `1px solid ${EDITOR.color}40`, borderRadius: 8, padding: "9px", cursor: "pointer", fontFamily: "inherit",
 };
