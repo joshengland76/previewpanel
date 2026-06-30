@@ -113,6 +113,7 @@ export default function TrimClip({ clip, trim }) {
       if (res.status === 429) { await new Promise((r) => setTimeout(r, 1500)); res = await hit(); }
       if (res.status === 429) { setStatus("error"); setMsg("Server busy — try again in a moment."); return; }
       if (res.status === 404) { setStatus("error"); setMsg("This clip is no longer available. Analysis results older than 30 minutes can't be trimmed — please re-run the analysis."); return; }
+      if (res.status === 503) { let m = "This clip is too large to trim quickly — try a shorter selection or a smaller video."; try { m = (await res.json()).error || m; } catch { /* keep default */ } setStatus("error"); setMsg(m); return; }
       if (!res.ok) { setStatus("error"); setMsg("Trim failed. Please try again."); return; }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -221,15 +222,20 @@ export default function TrimClip({ clip, trim }) {
 
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
             <button type="button" onClick={download} disabled={status === "working" || !(end > start)}
-              style={{ flex: 1, fontSize: 13, fontWeight: 800, color: "#fff", background: EDITOR.color,
+              style={{ position: "relative", overflow: "hidden", flex: 1, fontSize: 13, fontWeight: 800, color: "#fff", background: EDITOR.color,
                 border: "none", borderRadius: 8, padding: "10px 12px", cursor: "pointer", fontFamily: "inherit",
-                opacity: status === "working" || !(end > start) ? 0.55 : 1 }}>
+                opacity: !(end > start) ? 0.55 : 1 }}>
               {status === "working" ? (
                 <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                   <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.45)", borderTopColor: "#fff", borderRadius: "50%", animation: "pp-spin 0.8s linear infinite", display: "inline-block" }} />
                   Trimming…
                 </span>
               ) : "Download clip"}
+              {status === "working" && (
+                <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 3, overflow: "hidden" }}>
+                  <span style={{ position: "absolute", height: "100%", width: "35%", background: "rgba(255,255,255,.9)", borderRadius: 99, animation: "pp-indeterminate 1.3s ease-in-out infinite" }} />
+                </span>
+              )}
             </button>
             <button type="button" onClick={() => { const v = videoRef.current; if (v) v.pause(); setOpen(false); setPlaying(false); setStatus("idle"); setMsg(""); }}
               style={{ fontSize: 12, fontWeight: 700, color: B.grey, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>

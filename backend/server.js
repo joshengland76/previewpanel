@@ -2479,11 +2479,17 @@ app.post("/api/trim", async (req, res) => {
     // "reencode" (default for the UI): full-res, post-quality H.264 from the
     // original — no scale, CRF 20, yuv420p for broad device/platform compatibility.
     // "copy": fast keyframe stream copy (original codec/res), kept for flexibility.
+    // -ss BEFORE -i = fast input seek (do NOT decode the file from 0 to the clip)
+    // — accurate for re-encode and far faster on a large/long source. -nostats /
+    // -loglevel error keep stderr tiny so it can't overflow execFile's buffer on
+    // a slow CPU (the original "Trim failed" on big videos).
+    const head = ["-ss", String(s), "-i", entry.path, "-t", String(clipLen)];
+    const tail = ["-movflags", "+faststart", "-nostats", "-loglevel", "error", "-y", outPath];
     const args = mode === "copy"
-      ? ["-ss", String(s), "-i", entry.path, "-t", String(clipLen), "-c", "copy", "-movflags", "+faststart", "-y", outPath]
-      : ["-i", entry.path, "-ss", String(s), "-t", String(clipLen), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-y", outPath];
+      ? [...head, "-c", "copy", ...tail]
+      : [...head, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", ...tail];
     console.log(`[trim] ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode}`);
-    await execFileAsync(FFMPEG, args);
+    await execFileAsync(FFMPEG, args, { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
     if (!fs.existsSync(outPath)) throw new Error("ffmpeg produced no output file");
 
     const { size } = fs.statSync(outPath);
@@ -2499,9 +2505,12 @@ app.post("/api/trim", async (req, res) => {
     stream.on("close", cleanupOut); // delete the temp output once fully sent/aborted
     stream.pipe(res);
   } catch (err) {
-    console.error(`[trim] ffmpeg failed ${jobId}: ${err.message}`);
+    const tooHeavy = err.killed || /timed out|maxBuffer/i.test(err.message || ""); // execFile timeout → SIGTERM (killed)
+    console.error(`[trim] ffmpeg failed ${jobId}${tooHeavy ? " (timeout/too-heavy)" : ""}: ${err.message}`);
     cleanupOut();
-    if (!res.headersSent) res.status(500).json({ error: "Trim failed. Please try again." });
+    if (!res.headersSent) res.status(tooHeavy ? 503 : 500).json({ error: tooHeavy
+      ? "This clip is taking too long to trim — try a shorter selection, or a smaller / lower-resolution video."
+      : "Trim failed. Please try again." });
   }
 });
 
