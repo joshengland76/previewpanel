@@ -176,6 +176,49 @@ function anthropic() {
 // ── In-memory job store ───────────────────────────────────────
 const jobs = {};
 
+// ── App-only trim retention ───────────────────────────────────────────────────
+// After analysis, keep the CONVERTED mp4 (what the judges actually saw, so the
+// Editor's clip timestamps line up) for a short window so the user can download a
+// trimmed clip via POST /api/trim. Best-effort + session-scoped: the file lives on
+// Render's ephemeral disk and this in-memory map — BOTH are lost on any deploy /
+// restart, so a trim can legitimately 404 mid-session (handled with a clear error,
+// never silently). Research submissions retain NOTHING (no trim UX + must not add
+// disk pressure during the 5 AM pipeline run).
+const TRIM_RETAIN_MS = Number(process.env.TRIM_RETAIN_MS) || 30 * 60 * 1000; // 30 min; env-overridable for tests
+const MAX_TRIM_CLIP_SECS = 180;     // caps re-encode cost; copy mode is cheap regardless of length
+const MAX_CONCURRENT_TRIMS = 2;     // protect the single Render CPU + the 5 AM research pipeline
+const retainedTrims = new Map();    // jobId -> { path, durationSecs, timer }
+let activeTrims = 0;
+
+function expireTrimFile(jobId) {
+  const entry = retainedTrims.get(jobId);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  retainedTrims.delete(jobId);
+  fs.unlink(entry.path, (err) => {
+    if (err && err.code !== "ENOENT") console.warn(`[trim] expire unlink failed ${jobId}: ${err.message}`);
+    else console.log(`[trim] retained clip removed for ${jobId}`);
+  });
+}
+
+// Register a retained converted file. Arms the expiry timer immediately so the
+// file can never leak even if the job never finalizes; checkJobCompletion re-arms
+// it to exactly TRIM_RETAIN_MS-from-completion on success (or drops it on failure).
+function retainTrimFile(jobId, filePath, durationSecs) {
+  const prev = retainedTrims.get(jobId);
+  if (prev) clearTimeout(prev.timer);
+  const timer = setTimeout(() => expireTrimFile(jobId), TRIM_RETAIN_MS);
+  retainedTrims.set(jobId, { path: filePath, durationSecs: durationSecs ?? null, timer });
+  console.log(`[trim] retaining converted clip for ${jobId} (${(TRIM_RETAIN_MS / 60000).toFixed(0)} min window)`);
+}
+
+function rearmTrimExpiry(jobId) {
+  const entry = retainedTrims.get(jobId);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => expireTrimFile(jobId), TRIM_RETAIN_MS);
+}
+
 // ── Submission log — PostgreSQL if DATABASE_URL is set, else file ────────────
 const SUBMISSIONS_PATH = path.join(__dirname, "submissions.ndjson");
 let pgPool = null;
@@ -1913,9 +1956,17 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     }
     jobs[jobId].timings.uploadMs = Date.now() - t_upload;
 
-    // Local files no longer needed — TwelveLabs holds the asset
+    // Raw original no longer needed — TwelveLabs holds the asset. Keep the
+    // CONVERTED mp4 for APP submissions so the user can trim a clip (best-effort,
+    // ~30 min from completion; see retainTrimFile). Research retains nothing.
     if (filePath) fs.unlink(filePath, () => {});
-    if (activeConvertedPath) fs.unlink(activeConvertedPath, () => {});
+    if (activeConvertedPath) {
+      if (jobs[jobId].source !== "research_api") {
+        retainTrimFile(jobId, activeConvertedPath, videoDuration?.secs ?? null);
+      } else {
+        fs.unlink(activeConvertedPath, () => {});
+      }
+    }
 
     if (jobs[jobId].finalized) {
       // Pipeline timeout fired during upload
@@ -2005,7 +2056,8 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     jobs[jobId].error = err.message;
     console.error(`[${jobId}] Pipeline error: ${err.message}`, err);
     if (filePath) fs.unlink(filePath, () => {});
-    if (activeConvertedPath) fs.unlink(activeConvertedPath, () => {});
+    if (activeConvertedPath && !retainedTrims.has(jobId)) fs.unlink(activeConvertedPath, () => {});
+    expireTrimFile(jobId); // drop any retained clip + cancel its timer on pipeline error
     await recordSubmissionForJob(jobId, "error");
   }
 }
@@ -2182,6 +2234,14 @@ async function checkJobCompletion(jobId) {
   }
 
   await recordSubmissionForJob(jobId, finalStatus);
+
+  // Trim retention (app only): on success, re-arm the window to exactly
+  // TRIM_RETAIN_MS from completion; on failure, drop the retained file now
+  // (no results → nothing to trim). Research never retains.
+  if (job.source !== "research_api") {
+    if (finalStatus === "done" || finalStatus === "partial") rearmTrimExpiry(jobId);
+    else expireTrimFile(jobId);
+  }
 
   // Panel synthesis — APP submissions ONLY, never research (constraint 1.3).
   // Fire-and-forget: never blocks job completion, the status response, or the
@@ -2371,7 +2431,76 @@ app.get("/api/status/:jobId", (req, res) => {
     thumbnailDataUrl: job.thumbnailDataUrl || null,
     synthesis: job.synthesis ?? null,
     synthesisStatus: job.synthesisStatus ?? null,
+    trimAvailable: retainedTrims.has(req.params.jobId),
   });
+});
+
+// ── POST /api/trim — download a trimmed clip from the retained converted file ──
+// App-only, best-effort. Body: { jobId, start, end, mode?: "copy"|"reencode" }.
+// "copy" (default) is a keyframe-accurate stream copy — near-zero CPU, no decode,
+// well-matched to the ±3s nudge UX. "reencode" is frame-accurate but heavier.
+app.post("/api/trim", async (req, res) => {
+  const { jobId, start, end, mode = "copy" } = req.body || {};
+  const entry = jobId ? retainedTrims.get(jobId) : null;
+
+  // Availability: expired window, restart/deploy wiped the file, or never an app job.
+  if (!entry || !fs.existsSync(entry.path)) {
+    return res.status(404).json({ error: "This clip is no longer available. Please re-run the analysis to trim." });
+  }
+
+  // Validate the range.
+  const s = Number(start), e = Number(end);
+  if (!Number.isFinite(s) || !Number.isFinite(e) || s < 0 || e <= s) {
+    return res.status(400).json({ error: "Invalid range — need 0 ≤ start < end (seconds)." });
+  }
+  if (entry.durationSecs != null && e > entry.durationSecs + 0.5) {
+    return res.status(400).json({ error: `end (${e}s) exceeds the video duration (${entry.durationSecs}s).` });
+  }
+  const clipLen = e - s;
+  if (clipLen > MAX_TRIM_CLIP_SECS) {
+    return res.status(400).json({ error: `Clip too long (${clipLen.toFixed(1)}s). Maximum is ${MAX_TRIM_CLIP_SECS}s.` });
+  }
+  if (mode !== "copy" && mode !== "reencode") {
+    return res.status(400).json({ error: 'mode must be "copy" or "reencode".' });
+  }
+
+  // Concurrency gate — protect the single Render CPU and the 5 AM research pipeline.
+  if (activeTrims >= MAX_CONCURRENT_TRIMS) {
+    res.set("Retry-After", "5");
+    return res.status(429).json({ error: "Server is busy trimming another clip. Please try again in a few seconds." });
+  }
+  activeTrims++;
+  let released = false;
+  const release = () => { if (!released) { released = true; activeTrims--; } };
+  res.on("close", release); // fires once when the response ends (success, abort, or error)
+
+  const outPath = path.join(__dirname, "uploads", `trim_${jobId}_${Date.now()}.mp4`);
+  const cleanupOut = () => fs.unlink(outPath, () => {});
+  try {
+    const args = mode === "copy"
+      ? ["-ss", String(s), "-i", entry.path, "-t", String(clipLen), "-c", "copy", "-movflags", "+faststart", "-y", outPath]
+      : ["-i", entry.path, "-ss", String(s), "-t", String(clipLen), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-movflags", "+faststart", "-y", outPath];
+    console.log(`[trim] ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode}`);
+    await execFileAsync(FFMPEG, args);
+    if (!fs.existsSync(outPath)) throw new Error("ffmpeg produced no output file");
+
+    const { size } = fs.statSync(outPath);
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", 'attachment; filename="clip.mp4"');
+    res.setHeader("Content-Length", size);
+    const stream = fs.createReadStream(outPath);
+    stream.on("error", (err) => {
+      console.error(`[trim] stream error ${jobId}: ${err.message}`);
+      if (!res.headersSent) res.status(500).json({ error: "Failed to stream the clip." });
+      res.destroy();
+    });
+    stream.on("close", cleanupOut); // delete the temp output once fully sent/aborted
+    stream.pipe(res);
+  } catch (err) {
+    console.error(`[trim] ffmpeg failed ${jobId}: ${err.message}`);
+    cleanupOut();
+    if (!res.headersSent) res.status(500).json({ error: "Trim failed. Please try again." });
+  }
 });
 
 // ── GET /admin/logs — submission dashboard ────────────────────
