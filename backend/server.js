@@ -1956,17 +1956,16 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     }
     jobs[jobId].timings.uploadMs = Date.now() - t_upload;
 
-    // Raw original no longer needed — TwelveLabs holds the asset. Keep the
-    // CONVERTED mp4 for APP submissions so the user can trim a clip (best-effort,
-    // ~30 min from completion; see retainTrimFile). Research retains nothing.
-    if (filePath) fs.unlink(filePath, () => {});
-    if (activeConvertedPath) {
-      if (jobs[jobId].source !== "research_api") {
-        retainTrimFile(jobId, activeConvertedPath, videoDuration?.secs ?? null);
-      } else {
-        fs.unlink(activeConvertedPath, () => {});
-      }
-    }
+    // TwelveLabs holds the asset now. For APP submissions, retain the FULL-RES
+    // ORIGINAL upload (what the user scrubs) so trimmed clips are post-quality —
+    // the converted mp4 can be downscaled to 854px on the re-encode path. URL
+    // submissions have no local original → fall back to the converted file.
+    // Research retains nothing. Delete whichever file we don't keep.
+    const isApp = jobs[jobId].source !== "research_api";
+    const retainPath = isApp ? (filePath || activeConvertedPath) : null;
+    if (filePath && filePath !== retainPath) fs.unlink(filePath, () => {});
+    if (activeConvertedPath && activeConvertedPath !== retainPath) fs.unlink(activeConvertedPath, () => {});
+    if (retainPath) retainTrimFile(jobId, retainPath, videoDuration?.secs ?? null);
 
     if (jobs[jobId].finalized) {
       // Pipeline timeout fired during upload
@@ -2477,9 +2476,12 @@ app.post("/api/trim", async (req, res) => {
   const outPath = path.join(__dirname, "uploads", `trim_${jobId}_${Date.now()}.mp4`);
   const cleanupOut = () => fs.unlink(outPath, () => {});
   try {
+    // "reencode" (default for the UI): full-res, post-quality H.264 from the
+    // original — no scale, CRF 20, yuv420p for broad device/platform compatibility.
+    // "copy": fast keyframe stream copy (original codec/res), kept for flexibility.
     const args = mode === "copy"
       ? ["-ss", String(s), "-i", entry.path, "-t", String(clipLen), "-c", "copy", "-movflags", "+faststart", "-y", outPath]
-      : ["-i", entry.path, "-ss", String(s), "-t", String(clipLen), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-movflags", "+faststart", "-y", outPath];
+      : ["-i", entry.path, "-ss", String(s), "-t", String(clipLen), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-y", outPath];
     console.log(`[trim] ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode}`);
     await execFileAsync(FFMPEG, args);
     if (!fs.existsSync(outPath)) throw new Error("ffmpeg produced no output file");
