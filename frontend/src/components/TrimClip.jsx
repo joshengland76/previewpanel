@@ -137,7 +137,7 @@ export default function TrimClip({ clip, trim }) {
   );
   const stepper = (label, val, onMinus, onPlus, lo, hi) => (
     <div style={{ flex: 1 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: B.grey, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 800, color: B.body, marginBottom: 4, textAlign: "center" }}>{label}</div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button type="button" onClick={onMinus} disabled={val <= lo + 1e-6} style={stepBtn}>−</button>
         <span style={{ fontFamily: "'Courier New', monospace", fontSize: 13, fontWeight: 700, color: EDITOR.color, minWidth: 56, textAlign: "center" }}>{fmtMs(val)}</span>
