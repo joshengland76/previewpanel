@@ -124,7 +124,7 @@ export default function TrimClip({ clip, trim }) {
         const pr = await fetch(`${apiBase}/api/trim/${trimId}/progress`);
         if (!pr.ok) return fail("Trim failed. Please try again.");
         const j = await pr.json();
-        if (j.status === "queued") { setPhase(j.queuePos > 1 ? `Queued (#${j.queuePos})…` : "Queued…"); setProgress(0); }
+        if (j.status === "queued") { setPhase("Waiting…"); setProgress(0); }
         else if (j.status === "processing") { setPhase(`Trimming ${Math.round((j.progress || 0) * 100)}%`); setProgress(j.progress || 0); }
         else if (j.status === "error") return fail(j.error === "too_heavy" ? "This clip is too heavy to trim (very long or high-resolution). Try a shorter selection." : "Trim failed. Please try again.");
         else if (j.status === "done") { setProgress(1); break; }
@@ -245,13 +245,13 @@ export default function TrimClip({ clip, trim }) {
               style={{ position: "relative", overflow: "hidden", flex: 1, fontSize: 13, fontWeight: 800, color: "#fff", background: EDITOR.color,
                 border: "none", borderRadius: 8, padding: "10px 12px", cursor: "pointer", fontFamily: "inherit",
                 opacity: !(end > start) ? 0.55 : 1 }}>
-              <span style={{ position: "relative", zIndex: 1 }}>{status === "working" ? phase : "Download clip"}</span>
-              {/* Determinate progress bar built into the button (upload-bar style). */}
-              {status === "working" && (
-                <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 4, background: "rgba(255,255,255,.25)" }}>
-                  <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${Math.round(progress * 100)}%`, background: "#fff", borderRadius: "0 2px 2px 0", transition: "width .3s ease" }} />
-                </span>
+              {/* Determinate progress fills the button as it trims (clearly visible
+                  on the brown button — a translucent fill + a bright leading edge). */}
+              {status === "working" && progress > 0 && (
+                <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${Math.round(progress * 100)}%`,
+                  background: "rgba(255,255,255,.32)", borderRight: "2px solid rgba(255,255,255,.95)", boxSizing: "border-box", transition: "width .3s ease" }} />
               )}
+              <span style={{ position: "relative", zIndex: 1 }}>{status === "working" ? phase : "Download clip"}</span>
             </button>
             <button type="button" onClick={() => { const v = videoRef.current; if (v) v.pause(); setOpen(false); setPlaying(false); setStatus("idle"); setMsg(""); }}
               style={{ fontSize: 12, fontWeight: 700, color: B.grey, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
