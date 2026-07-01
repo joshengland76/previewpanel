@@ -42,6 +42,8 @@ export default function TrimClip({ clip, trim }) {
   const [cur, setCur] = useState(sugStart);
   const [playing, setPlaying] = useState(false);
   const [status, setStatus] = useState("idle"); // idle | working | error | done
+  const [phase, setPhase] = useState("");       // button label while working
+  const [progress, setProgress] = useState(0);  // 0..1 for the progress fill
   const [msg, setMsg] = useState("");
 
   const videoRef = useRef(null);
@@ -102,20 +104,38 @@ export default function TrimClip({ clip, trim }) {
   const togglePlay = () => { const v = videoRef.current; if (v) (v.paused ? play() : pause()); };
   const restart = () => { const v = videoRef.current; if (!v) return; v.currentTime = startRef.current; setCur(startRef.current); v.play().then(() => setPlaying(true)).catch(() => {}); };
 
+  const fail = (m) => { setStatus("error"); setMsg(m); };
   const download = async () => {
-    if (!(end > start)) { setStatus("error"); setMsg("Start must be before end."); return; }
+    if (!(end > start)) { return fail("Start must be before end."); }
     const v = videoRef.current; if (v) { v.pause(); setPlaying(false); }
-    setStatus("working"); setMsg("");
-    const body = JSON.stringify({ jobId, start: Number(start.toFixed(2)), end: Number(end.toFixed(2)), mode: "reencode" });
-    const hit = () => fetch(`${apiBase}/api/trim`, { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    setStatus("working"); setMsg(""); setProgress(0); setPhase("Starting…");
     try {
-      let res = await hit();
-      if (res.status === 429) { await new Promise((r) => setTimeout(r, 1500)); res = await hit(); }
-      if (res.status === 429) { setStatus("error"); setMsg("Server busy — try again in a moment."); return; }
-      if (res.status === 404) { setStatus("error"); setMsg("This clip is no longer available. Analysis results older than 30 minutes can't be trimmed — please re-run the analysis."); return; }
-      if (res.status === 503) { let m = "This clip is too large to trim quickly — try a shorter selection or a smaller video."; try { m = (await res.json()).error || m; } catch { /* keep default */ } setStatus("error"); setMsg(m); return; }
-      if (!res.ok) { setStatus("error"); setMsg("Trim failed. Please try again."); return; }
-      const blob = await res.blob();
+      // 1. enqueue the trim
+      const post = await fetch(`${apiBase}/api/trim`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, start: Number(start.toFixed(2)), end: Number(end.toFixed(2)), mode: "reencode" }) });
+      if (post.status === 404) return fail("This clip is no longer available. Analysis results older than 30 minutes can't be trimmed — please re-run the analysis.");
+      if (post.status === 429) return fail("Server busy — try again in a moment.");
+      if (!post.ok) return fail("Trim failed. Please try again.");
+      const { trimId } = await post.json();
+
+      // 2. poll progress (server hard-caps the encode, so this terminates)
+      for (let i = 0; i < 600; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const pr = await fetch(`${apiBase}/api/trim/${trimId}/progress`);
+        if (!pr.ok) return fail("Trim failed. Please try again.");
+        const j = await pr.json();
+        if (j.status === "queued") { setPhase(j.queuePos > 1 ? `Queued (#${j.queuePos})…` : "Queued…"); setProgress(0); }
+        else if (j.status === "processing") { setPhase(`Trimming ${Math.round((j.progress || 0) * 100)}%`); setProgress(j.progress || 0); }
+        else if (j.status === "error") return fail(j.error === "too_heavy" ? "This clip is too heavy to trim (very long or high-resolution). Try a shorter selection." : "Trim failed. Please try again.");
+        else if (j.status === "done") { setProgress(1); break; }
+      }
+
+      // 3. download the finished clip
+      setPhase("Downloading…"); setProgress(1);
+      const dl = await fetch(`${apiBase}/api/trim/${trimId}/download`);
+      if (dl.status === 503) { let m = "This clip is too heavy to trim. Try a shorter selection."; try { m = (await dl.json()).error || m; } catch { /* default */ } return fail(m); }
+      if (!dl.ok) return fail("Trim failed. Please try again.");
+      const blob = await dl.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = "clip.mp4";
@@ -123,7 +143,7 @@ export default function TrimClip({ clip, trim }) {
       setTimeout(() => URL.revokeObjectURL(url), 15000);
       setStatus("done"); setMsg("Clip downloaded.");
     } catch {
-      setStatus("error"); setMsg("Network error. Please try again.");
+      fail("Network error. Please try again.");
     }
   };
 
@@ -225,15 +245,11 @@ export default function TrimClip({ clip, trim }) {
               style={{ position: "relative", overflow: "hidden", flex: 1, fontSize: 13, fontWeight: 800, color: "#fff", background: EDITOR.color,
                 border: "none", borderRadius: 8, padding: "10px 12px", cursor: "pointer", fontFamily: "inherit",
                 opacity: !(end > start) ? 0.55 : 1 }}>
-              {status === "working" ? (
-                <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                  <span style={{ width: 16, height: 16, border: "3px solid rgba(255,255,255,.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "pp-spin 0.9s linear infinite", display: "inline-block" }} />
-                  Trimming…
-                </span>
-              ) : "Download clip"}
+              <span style={{ position: "relative", zIndex: 1 }}>{status === "working" ? phase : "Download clip"}</span>
+              {/* Determinate progress bar built into the button (upload-bar style). */}
               {status === "working" && (
-                <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 3, overflow: "hidden" }}>
-                  <span style={{ position: "absolute", height: "100%", width: "35%", background: "rgba(255,255,255,.9)", borderRadius: 99, animation: "pp-indeterminate 1.3s ease-in-out infinite" }} />
+                <span style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 4, background: "rgba(255,255,255,.25)" }}>
+                  <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${Math.round(progress * 100)}%`, background: "#fff", borderRadius: "0 2px 2px 0", transition: "width .3s ease" }} />
                 </span>
               )}
             </button>

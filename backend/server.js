@@ -18,7 +18,8 @@ import cors from "cors";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
+import os from "os";
 import { promisify } from "util";
 import { fileURLToPath } from "url";
 import https from "https";
@@ -186,9 +187,7 @@ const jobs = {};
 // disk pressure during the 5 AM pipeline run).
 const TRIM_RETAIN_MS = Number(process.env.TRIM_RETAIN_MS) || 30 * 60 * 1000; // 30 min; env-overridable for tests
 const MAX_TRIM_CLIP_SECS = 180;     // caps re-encode cost; copy mode is cheap regardless of length
-const MAX_CONCURRENT_TRIMS = 2;     // protect the single Render CPU + the 5 AM research pipeline
 const retainedTrims = new Map();    // jobId -> { path, durationSecs, timer }
-let activeTrims = 0;
 
 function expireTrimFile(jobId) {
   const entry = retainedTrims.get(jobId);
@@ -217,6 +216,77 @@ function rearmTrimExpiry(jobId) {
   if (!entry) return;
   clearTimeout(entry.timer);
   entry.timer = setTimeout(() => expireTrimFile(jobId), TRIM_RETAIN_MS);
+}
+
+// ── Async trim jobs (progress-pollable) ───────────────────────────────────────
+// A trim runs as a background ffmpeg job so the client can poll accurate progress
+// and we never hold a long request open (heavy encodes were dropping the
+// connection → "Network error"). Trims are DELIBERATELY LOWER PRIORITY than
+// regular analyze work: serialized to one at a time and run at max niceness so
+// the OS scheduler gives the event loop + analyze-path ffmpeg the CPU first.
+const MAX_CONCURRENT_TRIMS = 1;         // serialize; niced below analyze work
+const MAX_TRIM_QUEUE = 6;               // reject beyond this (429)
+const TRIM_JOB_TTL_MS = 5 * 60 * 1000;  // reap finished/abandoned trim outputs
+const TRIM_HARD_TIMEOUT_MS = 150_000;   // kill a runaway encode (niced → generous)
+const trimJobs = new Map();             // trimId -> { status, progress, outPath, args, clipLen, proc, error, createdAt }
+const trimQueue = [];
+let activeTrimProc = 0;
+let trimIdSeq = 0;
+
+function pumpTrimQueue() {
+  while (activeTrimProc < MAX_CONCURRENT_TRIMS && trimQueue.length) {
+    const trimId = trimQueue.shift();
+    const job = trimJobs.get(trimId);
+    if (job && job.status === "queued") startTrim(trimId, job);
+  }
+}
+
+function startTrim(trimId, job) {
+  activeTrimProc++;
+  job.status = "processing";
+  // Spawn ffmpeg directly, then drop its scheduling priority (niceness 19) so it
+  // yields to the event loop and any analyze-path ffmpeg. -progress pipe:1 streams
+  // out_time for accurate progress.
+  const proc = spawn(FFMPEG, job.args, { stdio: ["ignore", "pipe", "pipe"] });
+  job.proc = proc;
+  try { os.setPriority(proc.pid, 19); } catch { /* best-effort deprioritize */ }
+  let buf = "", stderr = "";
+  proc.stdout.on("data", (d) => {
+    buf += d.toString();
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      const m = /^out_time_us=(\d+)/.exec(line) || /^out_time_ms=(\d+)/.exec(line);
+      if (m) job.progress = Math.max(0, Math.min(0.99, (Number(m[1]) / 1e6) / job.clipLen));
+      else if (line.startsWith("progress=end")) job.progress = 1;
+    }
+  });
+  proc.stderr.on("data", (d) => { stderr = (stderr + d.toString()).slice(-2000); });
+  const killer = setTimeout(() => { job.timedOut = true; try { proc.kill("SIGKILL"); } catch {} }, TRIM_HARD_TIMEOUT_MS);
+  const finish = (ok) => {
+    clearTimeout(killer);
+    activeTrimProc--;
+    if (ok && fs.existsSync(job.outPath)) { job.status = "done"; job.progress = 1; }
+    else {
+      job.status = "error";
+      job.error = job.timedOut ? "too_heavy" : "failed";
+      if (!job.timedOut) console.error(`[trim] ${trimId} failed: ${stderr.slice(-300)}`);
+      fs.unlink(job.outPath, () => {});
+    }
+    pumpTrimQueue();
+  };
+  proc.on("close", (code) => finish(code === 0));
+  proc.on("error", (err) => { console.error(`[trim] ${trimId} spawn error: ${err.message}`); finish(false); });
+}
+
+function sweepTrimJobs() {
+  const now = Date.now();
+  for (const [id, j] of trimJobs) {
+    if (now - j.createdAt < TRIM_JOB_TTL_MS) continue;
+    if (j.status === "processing" && j.proc) { try { j.proc.kill("SIGKILL"); } catch {} }
+    if (j.outPath) fs.unlink(j.outPath, () => {});
+    trimJobs.delete(id);
+  }
 }
 
 // ── Submission log — PostgreSQL if DATABASE_URL is set, else file ────────────
@@ -2438,16 +2508,16 @@ app.get("/api/status/:jobId", (req, res) => {
 // App-only, best-effort. Body: { jobId, start, end, mode?: "copy"|"reencode" }.
 // "copy" (default) is a keyframe-accurate stream copy — near-zero CPU, no decode,
 // well-matched to the ±3s nudge UX. "reencode" is frame-accurate but heavier.
-app.post("/api/trim", async (req, res) => {
-  const { jobId, start, end, mode = "copy" } = req.body || {};
+// ── POST /api/trim — enqueue an async trim; returns { trimId }. ────────────────
+// The client then polls /api/trim/:id/progress and finally GETs /download. This
+// keeps the request short (no dropped connections on heavy encodes) and lets us
+// stream accurate progress. Body: { jobId, start, end, mode?: "copy"|"reencode" }.
+app.post("/api/trim", (req, res) => {
+  const { jobId, start, end, mode = "reencode" } = req.body || {};
   const entry = jobId ? retainedTrims.get(jobId) : null;
-
-  // Availability: expired window, restart/deploy wiped the file, or never an app job.
   if (!entry || !fs.existsSync(entry.path)) {
     return res.status(404).json({ error: "This clip is no longer available. Please re-run the analysis to trim." });
   }
-
-  // Validate the range.
   const s = Number(start), e = Number(end);
   if (!Number.isFinite(s) || !Number.isFinite(e) || s < 0 || e <= s) {
     return res.status(400).json({ error: "Invalid range — need 0 ≤ start < end (seconds)." });
@@ -2462,61 +2532,57 @@ app.post("/api/trim", async (req, res) => {
   if (mode !== "copy" && mode !== "reencode") {
     return res.status(400).json({ error: 'mode must be "copy" or "reencode".' });
   }
-
-  // Concurrency gate — protect the single Render CPU and the 5 AM research pipeline.
-  if (activeTrims >= MAX_CONCURRENT_TRIMS) {
-    res.set("Retry-After", "5");
-    return res.status(429).json({ error: "Server is busy trimming another clip. Please try again in a few seconds." });
+  if (trimQueue.length + activeTrimProc >= MAX_TRIM_QUEUE) {
+    res.set("Retry-After", "10");
+    return res.status(429).json({ error: "Server is busy trimming. Please try again shortly." });
   }
-  activeTrims++;
-  let released = false;
-  const release = () => { if (!released) { released = true; activeTrims--; } };
-  res.on("close", release); // fires once when the response ends (success, abort, or error)
 
-  const outPath = path.join(__dirname, "uploads", `trim_${jobId}_${Date.now()}.mp4`);
-  const cleanupOut = () => fs.unlink(outPath, () => {});
-  try {
-    // "reencode" (default for the UI): full-res, post-quality H.264 from the
-    // original — no scale, CRF 20, yuv420p for broad device/platform compatibility.
-    // "copy": fast keyframe stream copy (original codec/res), kept for flexibility.
-    // -ss BEFORE -i = fast input seek (do NOT decode the file from 0 to the clip)
-    // — accurate for re-encode and far faster on a large/long source. -nostats /
-    // -loglevel error keep stderr tiny so it can't overflow execFile's buffer on
-    // a slow CPU (the original "Trim failed" on big videos).
-    const head = ["-ss", String(s), "-i", entry.path, "-t", String(clipLen)];
-    const tail = ["-movflags", "+faststart", "-nostats", "-loglevel", "error", "-y", outPath];
-    // Cap output at 1080p-class (long edge ≤ 1920) — standard posting resolution.
-    // A full-4K re-encode on the single Render CPU is slow enough that the clip
-    // connection drops ("Network error"); downscaling to 1080p keeps it fast and
-    // post-worthy. Sources ≤1080p pass through unchanged (decrease only shrinks).
-    const capRes = "scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2";
-    const args = mode === "copy"
-      ? [...head, "-c", "copy", ...tail]
-      : [...head, "-vf", capRes, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", ...tail];
-    console.log(`[trim] ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode}`);
-    await execFileAsync(FFMPEG, args, { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
-    if (!fs.existsSync(outPath)) throw new Error("ffmpeg produced no output file");
+  const trimId = `trim_${Date.now()}_${(trimIdSeq++).toString(36)}`;
+  const outPath = path.join(__dirname, "uploads", `${trimId}.mp4`);
+  // -ss BEFORE -i = fast input seek; cap output at 1080p-class (long edge ≤ 1920);
+  // -progress pipe:1 streams out_time for the progress bar. See the job runner.
+  const head = ["-ss", String(s), "-i", entry.path, "-t", String(clipLen)];
+  const tail = ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats", "-loglevel", "error", "-y", outPath];
+  const capRes = "scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2";
+  const args = mode === "copy"
+    ? [...head, "-c", "copy", ...tail]
+    : [...head, "-vf", capRes, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", ...tail];
 
-    const { size } = fs.statSync(outPath);
-    res.setHeader("Content-Type", "video/mp4");
-    res.setHeader("Content-Disposition", 'attachment; filename="clip.mp4"');
-    res.setHeader("Content-Length", size);
-    const stream = fs.createReadStream(outPath);
-    stream.on("error", (err) => {
-      console.error(`[trim] stream error ${jobId}: ${err.message}`);
-      if (!res.headersSent) res.status(500).json({ error: "Failed to stream the clip." });
-      res.destroy();
-    });
-    stream.on("close", cleanupOut); // delete the temp output once fully sent/aborted
-    stream.pipe(res);
-  } catch (err) {
-    const tooHeavy = err.killed || /timed out|maxBuffer/i.test(err.message || ""); // execFile timeout → SIGTERM (killed)
-    console.error(`[trim] ffmpeg failed ${jobId}${tooHeavy ? " (timeout/too-heavy)" : ""}: ${err.message}`);
-    cleanupOut();
-    if (!res.headersSent) res.status(tooHeavy ? 503 : 500).json({ error: tooHeavy
-      ? "This clip is taking too long to trim — try a shorter selection, or a smaller / lower-resolution video."
+  trimJobs.set(trimId, { status: "queued", progress: 0, outPath, args, clipLen, proc: null, error: null, createdAt: Date.now() });
+  trimQueue.push(trimId);
+  console.log(`[trim] queued ${trimId} for ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode} (queue=${trimQueue.length}, active=${activeTrimProc})`);
+  pumpTrimQueue();
+  res.status(202).json({ trimId });
+});
+
+// ── GET /api/trim/:trimId/progress ────────────────────────────────────────────
+app.get("/api/trim/:trimId/progress", (req, res) => {
+  const job = trimJobs.get(req.params.trimId);
+  if (!job) return res.status(404).json({ error: "unknown trim" });
+  const queuePos = job.status === "queued" ? trimQueue.indexOf(req.params.trimId) + 1 : 0;
+  res.json({ status: job.status, progress: job.progress, queuePos, error: job.error });
+});
+
+// ── GET /api/trim/:trimId/download — stream the finished clip, then reap it. ───
+app.get("/api/trim/:trimId/download", (req, res) => {
+  const job = trimJobs.get(req.params.trimId);
+  if (!job) return res.status(404).json({ error: "This clip is no longer available. Please trim again." });
+  if (job.status === "error") {
+    return res.status(job.error === "too_heavy" ? 503 : 500).json({ error: job.error === "too_heavy"
+      ? "This clip is too heavy to trim (very long or high-resolution). Try a shorter selection."
       : "Trim failed. Please try again." });
   }
+  if (job.status !== "done" || !fs.existsSync(job.outPath)) {
+    return res.status(409).json({ error: "Trim not ready yet." });
+  }
+  const { size } = fs.statSync(job.outPath);
+  res.setHeader("Content-Type", "video/mp4");
+  res.setHeader("Content-Disposition", 'attachment; filename="clip.mp4"');
+  res.setHeader("Content-Length", size);
+  const stream = fs.createReadStream(job.outPath);
+  stream.on("error", () => { if (!res.headersSent) res.status(500).end(); });
+  stream.on("close", () => { fs.unlink(job.outPath, () => {}); trimJobs.delete(req.params.trimId); }); // one-shot
+  stream.pipe(res);
 });
 
 // ── GET /admin/logs — submission dashboard ────────────────────
@@ -2688,6 +2754,7 @@ try {
   await resumeInFlightTasks();
   setInterval(pollAnalyzeTasks, 15_000);
   console.log(`[startup] Background poller started — checking TwelveLabs every 15s`);
+  setInterval(sweepTrimJobs, 60_000); // reap finished/abandoned trim outputs
 
   // Warm-up: generate file once at startup, ping immediately, then every 14 minutes
   console.log("[warmup] Warmup initialized on startup");
