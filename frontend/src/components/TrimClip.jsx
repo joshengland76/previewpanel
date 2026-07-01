@@ -227,7 +227,7 @@ export default function TrimClip({ clip, trim }) {
                 opacity: !(end > start) ? 0.55 : 1 }}>
               {status === "working" ? (
                 <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-                  <span style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.45)", borderTopColor: "#fff", borderRadius: "50%", animation: "pp-spin 0.8s linear infinite", display: "inline-block" }} />
+                  <span style={{ width: 16, height: 16, border: "3px solid rgba(255,255,255,.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "pp-spin 0.9s linear infinite", display: "inline-block" }} />
                   Trimming…
                 </span>
               ) : "Download clip"}

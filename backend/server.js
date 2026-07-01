@@ -2485,9 +2485,14 @@ app.post("/api/trim", async (req, res) => {
     // a slow CPU (the original "Trim failed" on big videos).
     const head = ["-ss", String(s), "-i", entry.path, "-t", String(clipLen)];
     const tail = ["-movflags", "+faststart", "-nostats", "-loglevel", "error", "-y", outPath];
+    // Cap output at 1080p-class (long edge ≤ 1920) — standard posting resolution.
+    // A full-4K re-encode on the single Render CPU is slow enough that the clip
+    // connection drops ("Network error"); downscaling to 1080p keeps it fast and
+    // post-worthy. Sources ≤1080p pass through unchanged (decrease only shrinks).
+    const capRes = "scale=w=1920:h=1920:force_original_aspect_ratio=decrease:force_divisible_by=2";
     const args = mode === "copy"
       ? [...head, "-c", "copy", ...tail]
-      : [...head, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", ...tail];
+      : [...head, "-vf", capRes, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", ...tail];
     console.log(`[trim] ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode}`);
     await execFileAsync(FFMPEG, args, { maxBuffer: 64 * 1024 * 1024, timeout: 90_000 });
     if (!fs.existsSync(outPath)) throw new Error("ffmpeg produced no output file");
