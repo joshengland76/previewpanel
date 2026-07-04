@@ -360,6 +360,7 @@ async function initDb() {
   } catch (e) {
     console.log(`[db] Could not parse DATABASE_URL host: ${e.message}`);
   }
+  let client = null;
   try {
     pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
     console.log("[db] Pool created — testing connection…");
@@ -367,7 +368,16 @@ async function initDb() {
     const { rows } = await pgPool.query("SHOW default_transaction_read_only");
     console.log(`[db] default_transaction_read_only after SELECT 1: ${rows[0].default_transaction_read_only}`);
     console.log("[db] Connection OK — creating table if needed…");
-    await pgPool.query(`
+    // Run every migration statement through ONE checked-out client, in ONE
+    // transaction, forced read-write via SET LOCAL — same reasoning as
+    // queryRW (see its comment): Neon's pooled endpoint can hand any given
+    // query a tainted backend session, and this boot sequence used to make
+    // ~50 separate pgPool.query() calls, each independently exposed to that.
+    // One transaction means one taint check, not fifty.
+    client = await pgPool.connect();
+    await client.query("BEGIN");
+    await client.query("SET LOCAL default_transaction_read_only = off");
+    await client.query(`
       CREATE TABLE IF NOT EXISTS submissions (
         id            SERIAL PRIMARY KEY,
         job_id        TEXT,
@@ -389,9 +399,9 @@ async function initDb() {
         avg_score     NUMERIC
       )
     `);
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS file_name TEXT`);
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
-    await pgPool.query(`
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS file_name TEXT`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
+    await client.query(`
       CREATE TABLE IF NOT EXISTS analyze_tasks (
         id                  SERIAL PRIMARY KEY,
         job_id              TEXT NOT NULL,
@@ -409,22 +419,22 @@ async function initDb() {
         created_at          TIMESTAMPTZ DEFAULT NOW()
       )
     `);
-    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
-    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_name TEXT`);
-    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
-    await pgPool.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS ip TEXT`);
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
+    await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
+    await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_name TEXT`);
+    await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
+    await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS ip TEXT`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
     // Dimension score columns — universal (per judge, using display names)
     for (const judge of ["critic", "trendsetter", "connector"]) {
       for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
-        await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_${dim} NUMERIC`);
+        await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_${dim} NUMERIC`);
       }
     }
     // Rename dreamer_* columns to connector_* (judge rename: The Dreamer → The Connector)
     for (const col of ["ms", "score"]) {
-      await pgPool.query(`
+      await client.query(`
         DO $$ BEGIN
           IF EXISTS (SELECT 1 FROM information_schema.columns
                      WHERE table_name='submissions' AND column_name='dreamer_${col}')
@@ -437,7 +447,7 @@ async function initDb() {
       `);
     }
     for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
-      await pgPool.query(`
+      await client.query(`
         DO $$ BEGIN
           IF EXISTS (SELECT 1 FROM information_schema.columns
                      WHERE table_name='submissions' AND column_name='dreamer_${dim}')
@@ -451,7 +461,7 @@ async function initDb() {
     }
     // Rename legacy cool_* columns to trendsetter_* if they exist and target doesn't
     for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
-      await pgPool.query(`
+      await client.query(`
         DO $$ BEGIN
           IF EXISTS (SELECT 1 FROM information_schema.columns
                      WHERE table_name='submissions' AND column_name='cool_${dim}')
@@ -471,32 +481,32 @@ async function initDb() {
       "youtube_watch_time_potential", "youtube_thumbnail_hook",
       "youtube_swipe_resistance",
     ]) {
-      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col} NUMERIC`);
+      await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${col} NUMERIC`);
     }
     // Remove legacy cool_* columns left over from before the cool→trendsetter rename
     for (const dim of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
-      await pgPool.query(`ALTER TABLE submissions DROP COLUMN IF EXISTS cool_${dim}`);
+      await client.query(`ALTER TABLE submissions DROP COLUMN IF EXISTS cool_${dim}`);
     }
     // Objective fit columns (9 new)
     for (const judge of ["critic", "trendsetter", "connector"]) {
-      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_score INTEGER`);
-      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_verdict TEXT`);
-      await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_reasoning TEXT`);
+      await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_score INTEGER`);
+      await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_verdict TEXT`);
+      await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_objective_fit_reasoning TEXT`);
     }
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS thumbnail_data_url TEXT`);
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS objective TEXT`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS thumbnail_data_url TEXT`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS objective TEXT`);
     // Pegasus model provenance (which TwelveLabs model produced each score). New
     // rows populate it from PEGASUS_MODEL at insert time. One-time backfill: every
     // row scored before the 2026-06-20 pin ran on the API default, pegasus1.2.
     // Date-bounded so it can never mislabel post-cutover rows (those are set
     // explicitly on insert; any NULL there stays NULL = genuinely unknown).
-    await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS pegasus_model TEXT`);
-    await pgPool.query(`UPDATE submissions SET pegasus_model = 'pegasus1.2' WHERE pegasus_model IS NULL AND created_at < '2026-06-21'`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS pegasus_model TEXT`);
+    await client.query(`UPDATE submissions SET pegasus_model = 'pegasus1.2' WHERE pegasus_model IS NULL AND created_at < '2026-06-21'`);
     // Big-picture dimensions — 11 per judge × 3 judges = 33 columns.
     // polished is retained in the schema (Phase 1a data) but no longer written.
     for (const judge of ["critic", "trendsetter", "connector"]) {
       for (const dim of ["funny", "compelling", "authentic", "novel", "visually_engaging", "emotionally_resonant", "useful", "surprising", "relatable", "polished", "hook_strength", "emotion_intensity"]) {
-        await pgPool.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_big_${dim} INTEGER`);
+        await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS ${judge}_big_${dim} INTEGER`);
       }
     }
     // Ensure numeric columns aren't stranded as INTEGER from earlier deploys
@@ -509,7 +519,7 @@ async function initDb() {
       "instagram_dm_share_potential", "instagram_originality",
       "youtube_watch_time_potential", "youtube_swipe_resistance",
     ]) {
-      await pgPool.query(`
+      await client.query(`
         DO $$ BEGIN
           ALTER TABLE submissions ALTER COLUMN ${col} TYPE NUMERIC USING ${col}::NUMERIC;
         EXCEPTION WHEN others THEN NULL;
@@ -520,7 +530,7 @@ async function initDb() {
     // App-submission synthesis store. Idempotent. Touches no existing column and
     // no research table beyond a read-only FK to submissions(id). Mirrors
     // migrations/016_pp_synthesis.sql.
-    await pgPool.query(`
+    await client.query(`
       CREATE TABLE IF NOT EXISTS pp_synthesis (
         id             BIGSERIAL PRIMARY KEY,
         submission_id  INTEGER REFERENCES submissions(id),
@@ -531,14 +541,18 @@ async function initDb() {
         created_at     TIMESTAMPTZ DEFAULT now()
       )
     `);
-    await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_submission_id ON pp_synthesis(submission_id)`);
-    await pgPool.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_job_id ON pp_synthesis(job_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_submission_id ON pp_synthesis(submission_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_job_id ON pp_synthesis(job_id)`);
+    await client.query("COMMIT");
 
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
     console.error("[db] Full error:", err);
+    if (client) { try { await client.query("ROLLBACK"); } catch {} }
     pgPool = null;
+  } finally {
+    if (client) client.release();
   }
 }
 
