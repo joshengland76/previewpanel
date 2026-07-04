@@ -299,6 +299,35 @@ function sweepTrimJobs() {
 const SUBMISSIONS_PATH = path.join(__dirname, "submissions.ndjson");
 let pgPool = null;
 
+// Neon's pooled endpoint (PgBouncer-style transaction pooling) can hand any
+// given query a backend session that another client left with
+// `default_transaction_read_only=on` (e.g. an external script's leaked
+// session-level SET — see initDbWithRetry's comment for the boot-time version
+// of this). That taint is per-transaction, not per-pool-connection, so it can
+// silently break individual writes at ANY point during the process's life,
+// not just at boot (confirmed 2026-07-04: saveAnalyzeTask INSERTs failing with
+// code 25006 hours into a healthy-looking process, stranding jobs the poller
+// could never track). queryRW forces read-write for its own transaction via
+// SET LOCAL, which overrides whatever the inherited session state was,
+// regardless of what any other pooled client did. Use for every write on a
+// live request path; SELECTs don't need it since read-only mode doesn't
+// block reads.
+async function queryRW(sql, params = []) {
+  const client = await pgPool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SET LOCAL default_transaction_read_only = off");
+    const result = await client.query(sql, params);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // Neon's serverless compute can present a transient read-only window right
 // after scaling/resuming from idle (observed 2026-07-04: same host, same
 // connection string, "cannot execute CREATE TABLE in a read-only transaction"
@@ -628,7 +657,7 @@ async function saveSubmission(entry) {
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
     try {
-      const { rows } = await pgPool.query(`
+      const { rows } = await queryRW(`
         INSERT INTO submissions
           (job_id, ip, platform, file_size_mb, duration_secs, status,
            total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
@@ -665,7 +694,7 @@ async function saveSubmission(entry) {
       if (err.code === "42703") {
         console.warn(`[db] Dimension columns missing in schema — retrying with base 21-column INSERT`);
         try {
-          const { rows } = await pgPool.query(`
+          const { rows } = await queryRW(`
             INSERT INTO submissions
               (job_id, ip, platform, file_size_mb, duration_secs, status,
                total_ms, ffmpeg_ms, upload_ms, browser_upload_ms,
@@ -704,7 +733,7 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
   const baseValues = [jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null];
 
   try {
-    await pgPool.query(fullSql, fullValues);
+    await queryRW(fullSql, fullValues);
     console.log(`[db] Saved analyze task (full) — job=${jobId} judge=${judgeId} taskId=${taskId}`);
   } catch (err) {
     console.error(`[db] saveAnalyzeTask full INSERT failed — code=${err.code} message=${err.message} detail=${err.detail ?? ""}`);
@@ -712,7 +741,7 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
       // 42703 = undefined_column — schema migration hasn't run yet, fall back to base columns
       console.warn(`[db] Schema missing optional columns — retrying with base INSERT (run ALTER TABLE migration in Neon)`);
       try {
-        await pgPool.query(baseSql, baseValues);
+        await queryRW(baseSql, baseValues);
         console.log(`[db] Saved analyze task (base fallback) — job=${jobId} judge=${judgeId} taskId=${taskId}`);
       } catch (fallbackErr) {
         console.error(`[db] saveAnalyzeTask base INSERT also failed — code=${fallbackErr.code} message=${fallbackErr.message}`);
@@ -1640,7 +1669,7 @@ async function runSynthesisForJob(jobId) {
 
   if (pgPool) {
     try {
-      await pgPool.query(
+      await queryRW(
         `INSERT INTO pp_synthesis (submission_id, job_id, synthesis, model, prompt_version) VALUES ($1,$2,$3,$4,$5)`,
         [job.submissionId ?? null, jobId, JSON.stringify(syn), SYNTHESIS_MODEL, SYNTHESIS_PROMPT_VERSION]
       );
@@ -2357,7 +2386,7 @@ async function checkJobCompletion(jobId) {
   }
 
   if (pgPool) {
-    pgPool.query(`DELETE FROM analyze_tasks WHERE job_id = $1`, [jobId]).catch(err =>
+    queryRW(`DELETE FROM analyze_tasks WHERE job_id = $1`, [jobId]).catch(err =>
       console.error(`[poller] Failed to cleanup tasks for ${jobId}: ${err.message}`)
     );
   }
@@ -2383,14 +2412,14 @@ async function pollAnalyzeTasks() {
     await Promise.allSettled(rows.map(async row => {
       // Skip if the job was already finalized (e.g. timeout fired while tasks were being created)
       if (jobs[row.job_id]?.finalized) {
-        await pgPool.query(`UPDATE analyze_tasks SET status = 'cancelled' WHERE task_id = $1`, [row.task_id]).catch(() => {});
+        await queryRW(`UPDATE analyze_tasks SET status = 'cancelled' WHERE task_id = $1`, [row.task_id]).catch(() => {});
         return;
       }
       const ageMs = Date.now() - new Date(row.created_at).getTime();
 
       if (ageMs > STALE_TASK_MS) {
         console.warn(`[poller] Task ${row.task_id} (${row.judge_id}) stale after ${(ageMs/60000).toFixed(1)}min — marking as timeout`);
-        await pgPool.query(`UPDATE analyze_tasks SET status = 'stale', error = $1 WHERE task_id = $2`, ['Analysis timed out after 25 minutes', row.task_id]);
+        await queryRW(`UPDATE analyze_tasks SET status = 'stale', error = $1 WHERE task_id = $2`, ['Analysis timed out after 25 minutes', row.task_id]);
         delete taskStatusCache[row.task_id];
         if (jobs[row.job_id]) {
           jobs[row.job_id].results[row.judge_id] = {
@@ -2449,7 +2478,7 @@ async function pollAnalyzeTasks() {
             console.error(`[poller] Parse failed for ${row.task_id} (${row.judge_id}): ${parseErr.message}`);
             parsed = { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] };
           }
-          await pgPool.query(`UPDATE analyze_tasks SET status = 'ready', result = $1 WHERE task_id = $2`, [JSON.stringify(parsed), row.task_id]);
+          await queryRW(`UPDATE analyze_tasks SET status = 'ready', result = $1 WHERE task_id = $2`, [JSON.stringify(parsed), row.task_id]);
           delete taskStatusCache[row.task_id];
           if (!jobs[row.job_id]) {
             console.warn(`[poller] Task ${row.task_id} result for ${row.judge_id} arrived but job ${row.job_id} not in memory — skipping state update`);
@@ -2469,7 +2498,7 @@ async function pollAnalyzeTasks() {
         } else if (task.status === "failed") {
           const errMsg = task.error?.message || "TwelveLabs analysis task failed";
           console.error(`[poller] Task ${row.task_id} failed: ${errMsg}`);
-          await pgPool.query(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2`, [errMsg, row.task_id]);
+          await queryRW(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2`, [errMsg, row.task_id]);
           delete taskStatusCache[row.task_id];
           const judge = JUDGES.find(j => j.id === row.judge_id);
           if (jobs[row.job_id]) {
