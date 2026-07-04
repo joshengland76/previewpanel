@@ -745,6 +745,49 @@ async function saveSubmission(entry) {
   return null;
 }
 
+// Phase A (Pegasus migration eval, 2026-07-04): writes into
+// research_pp_runs_pegasus15, NEVER into submissions. entry.dimensions'
+// keys already match that table's column names 1:1 (same naming as
+// saveSubmission uses), so this is a generic key→column insert rather than
+// a hand-enumerated one. videoId links back to research_videos.id for the
+// Stage-1 roster join; externalVideoId/fileName carry through for
+// traceability. Table has a UNIQUE index on video_id — ON CONFLICT DO
+// NOTHING makes batch re-runs safely resumable without duplicating rows.
+async function saveEvalRun(entry, videoId, externalVideoId) {
+  if (!pgPool) {
+    console.error(`[db] saveEvalRun: no pgPool — eval row for job=${entry.jobId} NOT persisted`);
+    return null;
+  }
+  const d = entry.dimensions || {};
+  const cr = entry.contentRisk || {};
+  const cols = {
+    job_id: entry.jobId, video_id: videoId, external_video_id: externalVideoId ?? null,
+    file_name: entry.fileName ?? null, platform: entry.platform, objective: entry.objective ?? null,
+    duration_secs: entry.videoDurationSecs, status: entry.status, total_ms: toInt(entry.timings.totalMs),
+    pegasus_model: PEGASUS_MODEL,
+    critic_score: entry.scores.critic ?? null, trendsetter_score: entry.scores.cool ?? null,
+    connector_score: entry.scores.connector ?? null, avg_score: entry.avgScore,
+    risk_sexual_suggestive: cr.risk_sexual_suggestive ?? null, risk_violence_shock: cr.risk_violence_shock ?? null,
+    risk_hate_harassment: cr.risk_hate_harassment ?? null, risk_profanity: cr.risk_profanity ?? null,
+    risk_outrage_inflammatory: cr.risk_outrage_inflammatory ?? null, risk_dangerous_acts: cr.risk_dangerous_acts ?? null,
+    raw_entry: JSON.stringify(entry),
+  };
+  for (const [k, v] of Object.entries(d)) cols[k] = v;
+
+  const keys = Object.keys(cols);
+  const placeholders = keys.map((_, i) => `$${i + 1}`).join(",");
+  const sql = `INSERT INTO research_pp_runs_pegasus15 (${keys.join(",")}) VALUES (${placeholders})
+               ON CONFLICT (video_id) DO NOTHING RETURNING id`;
+  try {
+    const { rows } = await queryRW(sql, keys.map(k => cols[k]));
+    console.log(`[db] saveEvalRun — job=${entry.jobId} video_id=${videoId} id=${rows[0]?.id ?? "(conflict, skipped)"}`);
+    return rows[0]?.id ?? null;
+  } catch (err) {
+    console.error(`[db] saveEvalRun INSERT failed — job=${entry.jobId} video_id=${videoId} code=${err.code} message=${err.message}`);
+    return null;
+  }
+}
+
 async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs) {
   if (!pgPool) return;
   const job = jobs[jobId];
@@ -2054,6 +2097,141 @@ app.post("/api/research/submit", requireResearchAuth, (req, res, next) => {
   }
 });
 
+// POST /api/research/submit-eval — Phase A (Pegasus migration, 2026-07-04).
+// Byte-identical pipeline to /api/research/submit (same preprocessing,
+// upload, buildTLPrompt, task creation, polling, response parsing — zero
+// duplication, zero drift risk vs. the frozen production prompts) with ONE
+// difference: recordSubmissionForJob branches on job.isEvalRun and writes to
+// research_pp_runs_pegasus15 instead of submissions. Never touches
+// submissions or submissionLog. Accepts an extra `video_id` field
+// (research_videos.id) for joining back to the Stage-1 roster.
+app.post("/api/research/submit-eval", requireResearchAuth, (req, res, next) => {
+  upload.single("video")(req, res, (err) => {
+    if (err) {
+      console.error(`[research_eval] Multer error:`, err.message);
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
+  const tStart = Date.now();
+  const cleanupTempFile = () => {
+    if (req.file?.path) fs.unlink(req.file.path, () => {});
+  };
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "Missing required field: video (multipart file)" });
+    }
+
+    const platform = (req.body.platform || "").toString().trim();
+    if (!VALID_PLATFORMS.has(platform)) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid platform "${platform}" — must be one of: tiktok, instagram, youtube` });
+    }
+
+    const objective = (req.body.objective || "").toString();
+    if (!VALID_OBJECTIVES.has(objective)) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid objective "${objective}" — must exactly match one of the 19 PreviewPanel objective strings (case and punctuation sensitive)` });
+    }
+
+    const externalVideoId = (req.body.external_video_id || "").toString().trim();
+    const videoIdRaw = (req.body.video_id || "").toString().trim();
+    const videoId = videoIdRaw ? parseInt(videoIdRaw, 10) : null;
+    if (videoIdRaw && Number.isNaN(videoId)) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid video_id "${videoIdRaw}" — must be an integer` });
+    }
+
+    const originalName = (req.file.originalname || "").toString();
+    const ext = path.extname(originalName).toLowerCase();
+    if (!VALID_VIDEO_EXTS.has(ext)) {
+      cleanupTempFile();
+      return res.status(400).json({ error: `Invalid video extension "${ext}" — must be one of: .mp4, .mov, .webm` });
+    }
+
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const fileName = externalVideoId
+      ? `${platform}_${externalVideoId}${ext}`
+      : (originalName || `${platform}_${jobId}${ext}`);
+
+    jobs[jobId] = {
+      status: "uploading",
+      queuePosition: 0,
+      platform,
+      objective,
+      source: "research_api",
+      isEvalRun: true,
+      videoId,
+      externalVideoId: externalVideoId || null,
+      results: {},
+      error: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      timings: { conversionMs: null, uploadMs: null, browserUploadMs: null, judges: {} },
+      ip: (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map(s => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })(),
+      fileSizeMB: parseFloat((req.file.size / 1024 / 1024).toFixed(2)),
+      fileName,
+      browserUploadMs: null,
+    };
+
+    console.log(`[${jobId}] [research_eval] Job created — platform=${platform} objective="${objective}" file=${fileName} size=${jobs[jobId].fileSizeMB}MB video_id=${videoId ?? "—"}`);
+
+    const pre = await preprocessUploadedVideo(jobId, req.file.path);
+    if (!pre.ok) {
+      const isInternal = pre.status === "error";
+      return res.status(isInternal ? 500 : 400).json({
+        error: pre.error,
+        rejection_reason: pre.status,
+      });
+    }
+
+    enqueueJob(jobId, () => runPipeline(jobId, null, platform, objective, JUDGES));
+
+    try {
+      await waitForJobCompletion(jobId);
+    } catch (waitErr) {
+      console.error(`[${jobId}] [research_eval] Wait error: ${waitErr.message}`);
+      return res.status(500).json({ error: waitErr.message });
+    }
+
+    const job = jobs[jobId];
+    const scores = {
+      critic_score: typeof job.results?.critic?.data?.overall === "number" ? job.results.critic.data.overall : null,
+      trendsetter_score: typeof job.results?.cool?.data?.overall === "number" ? job.results.cool.data.overall : null,
+      connector_score: typeof job.results?.connector?.data?.overall === "number" ? job.results.connector.data.overall : null,
+    };
+    const validScores = Object.values(scores).filter(v => typeof v === "number");
+    scores.avg_score = validScores.length
+      ? parseFloat((validScores.reduce((a, b) => a + b, 0) / validScores.length).toFixed(1))
+      : null;
+
+    const responseStatus = job.status === "done" ? "complete" : job.status;
+    const completedAtIso = new Date(job.completedAt || Date.now()).toISOString();
+    const durationMs = Date.now() - tStart;
+
+    console.log(`[research_eval] eval_row_id=${job.submissionId ?? "null"} video_id=${videoId} platform=${platform} objective="${objective}" duration_ms=${durationMs}`);
+
+    const httpStatus = (responseStatus === "complete" || responseStatus === "partial") ? 200 : 500;
+    const body = {
+      eval_row_id: job.submissionId ?? null,
+      video_id: videoId,
+      status: responseStatus,
+      scores,
+      completed_at: completedAtIso,
+    };
+    if (httpStatus === 500) body.error = job.error || `Scoring ${responseStatus}`;
+    return res.status(httpStatus).json(body);
+  } catch (err) {
+    console.error(`[research_eval] Unexpected error:`, err);
+    cleanupTempFile();
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message || "Internal error" });
+    }
+  }
+});
+
 // Synchronous wait for a job to reach jobs[jobId].finalized = true (set inside
 // recordSubmissionForJob). Polls local memory every 1s; nudges the background
 // TwelveLabs poller every 5s to reduce response latency below the poller's
@@ -2345,9 +2523,17 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     thumbnailDataUrl: job.thumbnailDataUrl || null,
     objective: job.objective || null,
   };
-  submissionLog.unshift(entry);
-  if (submissionLog.length > 500) submissionLog.length = 500;
-  const submissionId = await saveSubmission(entry);
+  let submissionId;
+  if (job.isEvalRun) {
+    // Phase A (Pegasus migration eval) — writes to research_pp_runs_pegasus15
+    // ONLY. Never touches submissions or submissionLog (that log/table is
+    // reserved for real app/research traffic, not this evaluation batch).
+    submissionId = await saveEvalRun(entry, job.videoId, job.externalVideoId);
+  } else {
+    submissionLog.unshift(entry);
+    if (submissionLog.length > 500) submissionLog.length = 500;
+    submissionId = await saveSubmission(entry);
+  }
   if (submissionId != null) job.submissionId = submissionId;
   job.completedAt = Date.now();
   // Set AFTER submissionId/completedAt populate so waitForJobCompletion can
