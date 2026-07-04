@@ -156,11 +156,18 @@ async function drainQueue() {
   }
 }
 
-// Pegasus model version sent on every TwelveLabs analyze call. Cutover to
-// pegasus1.5 landed 2026-07-03, ahead of TwelveLabs' 2026-07-13 1.2 deprecation.
-// PEGASUS_MODEL env var still overrides if ever needed (e.g. a rollback).
+// Pegasus model version sent on every TwelveLabs analyze call. Rolled BACK to
+// pegasus1.2 on 2026-07-04 — the pegasus1.5 cutover (commit d0a7c08) caused
+// /api/research/submit to hang indefinitely (no analyze_tasks row, no response,
+// no error, across two real end-to-end smoke tests up to 400s) with no server
+// crash/restart, consistent with the single-job queue getting wedged on a
+// request that never reaches TwelveLabs task creation under 1.5. Root cause
+// not yet isolated — see reports/improve_v2_pegasus/STATUS.md in
+// correlation-research for the investigation. Still ~4 weeks of runway before
+// TwelveLabs' 2026-07-13 1.2 deprecation window closes end of July; fix forward
+// before re-attempting. PEGASUS_MODEL env var can force either value.
 // Accepted values: "pegasus1.2" | "pegasus1.5".
-const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.5";
+const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.2";
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
