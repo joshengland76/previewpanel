@@ -156,18 +156,18 @@ async function drainQueue() {
   }
 }
 
-// Pegasus model version sent on every TwelveLabs analyze call. Rolled BACK to
-// pegasus1.2 on 2026-07-04 — the pegasus1.5 cutover (commit d0a7c08) caused
-// /api/research/submit to hang indefinitely (no analyze_tasks row, no response,
-// no error, across two real end-to-end smoke tests up to 400s) with no server
-// crash/restart, consistent with the single-job queue getting wedged on a
-// request that never reaches TwelveLabs task creation under 1.5. Root cause
-// not yet isolated — see reports/improve_v2_pegasus/STATUS.md in
-// correlation-research for the investigation. Still ~4 weeks of runway before
-// TwelveLabs' 2026-07-13 1.2 deprecation window closes end of July; fix forward
-// before re-attempting. PEGASUS_MODEL env var can force either value.
+// Pegasus model version sent on every TwelveLabs analyze call. Re-cutover to
+// pegasus1.5 on 2026-07-04. The prior 1.5 attempt (d0a7c08) appeared to hang,
+// triggering a rollback (1f38fa9) — root-caused since to an unrelated Neon
+// connection-pooling bug (session-level `SET default_transaction_read_only`
+// leaking across pooled clients, see correlation-research
+// reports/Improve_v2_pegasus/STATUS.md), now fixed on both the app side
+// (initDbWithRetry, 763ae7d) and the research-scripts side (SET LOCAL).
+// Verified end-to-end on pegasus1.2 post-fix (submission 5171). This flips
+// back to 1.5 ahead of TwelveLabs' 2026-07-13 1.2 deprecation.
+// PEGASUS_MODEL env var can force either value (rollback = pegasus1.2).
 // Accepted values: "pegasus1.2" | "pegasus1.5".
-const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.2";
+const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.5";
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
