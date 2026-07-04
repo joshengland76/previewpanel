@@ -305,11 +305,18 @@ async function initDb() {
     console.log("[db] No DATABASE_URL — using file-based submission log");
     return;
   }
-  console.log("[db] Connecting to PostgreSQL…");
+  try {
+    const dbHost = new URL(process.env.DATABASE_URL).host;
+    console.log(`[db] Connecting to PostgreSQL host: ${dbHost}`);
+  } catch (e) {
+    console.log(`[db] Could not parse DATABASE_URL host: ${e.message}`);
+  }
   try {
     pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
     console.log("[db] Pool created — testing connection…");
     await pgPool.query("SELECT 1");
+    const { rows } = await pgPool.query("SHOW default_transaction_read_only");
+    console.log(`[db] default_transaction_read_only after SELECT 1: ${rows[0].default_transaction_read_only}`);
     console.log("[db] Connection OK — creating table if needed…");
     await pgPool.query(`
       CREATE TABLE IF NOT EXISTS submissions (
