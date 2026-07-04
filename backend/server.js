@@ -156,12 +156,11 @@ async function drainQueue() {
   }
 }
 
-// Pegasus model version sent on every TwelveLabs analyze call. Defaults to
-// pegasus1.2 — the same model the API defaulted to when unset — so pinning is a
-// no-op behavior change today. Flip to pegasus1.5 via the PEGASUS_MODEL env var
-// as a deliberate, dated cutover before TwelveLabs' 2026-07-13 1.2 deprecation.
+// Pegasus model version sent on every TwelveLabs analyze call. Cutover to
+// pegasus1.5 landed 2026-07-03, ahead of TwelveLabs' 2026-07-13 1.2 deprecation.
+// PEGASUS_MODEL env var still overrides if ever needed (e.g. a rollback).
 // Accepted values: "pegasus1.2" | "pegasus1.5".
-const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.2";
+const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.5";
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
