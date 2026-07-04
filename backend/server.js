@@ -354,15 +354,30 @@ async function initDb() {
     console.log("[db] No DATABASE_URL — using file-based submission log");
     return;
   }
+  // Use Neon's DIRECT (non-pooled) endpoint, not the "-pooler" host, even if
+  // DATABASE_URL was configured with one. Confirmed 2026-07-04 across many
+  // trials: the pooled endpoint (PgBouncer-style) does not reliably preserve
+  // one backend session across sequential statements from this app — even an
+  // explicit BEGIN/SET LOCAL default_transaction_read_only=off/COMMIT
+  // transaction (queryRW) intermittently still hit "read-only transaction"
+  // or silently lost writes, because the pooler can hand different
+  // statements in what we think is one transaction to different backend
+  // sessions. The direct endpoint was 100% reliable in every trial. This app
+  // is one long-running Node process — `pg.Pool`'s own connection reuse
+  // already gives us pooling; we don't need (and can't safely use) Neon's
+  // proxy-level pooling on top of it.
+  let directDbUrl = process.env.DATABASE_URL;
   try {
-    const dbHost = new URL(process.env.DATABASE_URL).host;
-    console.log(`[db] Connecting to PostgreSQL host: ${dbHost}`);
+    const u = new URL(process.env.DATABASE_URL);
+    u.host = u.host.replace(/-pooler(?=\.)/, "");
+    directDbUrl = u.toString();
+    console.log(`[db] Connecting to PostgreSQL host (direct, non-pooled): ${u.host}`);
   } catch (e) {
-    console.log(`[db] Could not parse DATABASE_URL host: ${e.message}`);
+    console.log(`[db] Could not parse/rewrite DATABASE_URL host: ${e.message}`);
   }
   let client = null;
   try {
-    pgPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+    pgPool = new Pool({ connectionString: directDbUrl, ssl: { rejectUnauthorized: false } });
     console.log("[db] Pool created — testing connection…");
     await pgPool.query("SELECT 1");
     const { rows } = await pgPool.query("SHOW default_transaction_read_only");
