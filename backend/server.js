@@ -299,6 +299,26 @@ function sweepTrimJobs() {
 const SUBMISSIONS_PATH = path.join(__dirname, "submissions.ndjson");
 let pgPool = null;
 
+// Neon's serverless compute can present a transient read-only window right
+// after scaling/resuming from idle (observed 2026-07-04: same host, same
+// connection string, "cannot execute CREATE TABLE in a read-only transaction"
+// on boot that cleared moments later from an external client). initDb() is
+// idempotent (CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS), so
+// retrying the whole thing is safe and rides through that window instead of
+// leaving pgPool permanently null until the next manual restart.
+async function initDbWithRetry(maxAttempts = 5) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    await initDb();
+    if (pgPool) return;
+    if (attempt < maxAttempts) {
+      const delayMs = attempt * 2000;
+      console.log(`[db] initDb attempt ${attempt}/${maxAttempts} failed — retrying in ${delayMs}ms`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  console.error(`[db] initDb failed after ${maxAttempts} attempts — falling back to file-based submission log`);
+}
+
 async function initDb() {
   console.log(`[db] DATABASE_URL present: ${!!process.env.DATABASE_URL}`);
   if (!process.env.DATABASE_URL) {
@@ -2760,7 +2780,7 @@ let server;
 const isEntryPoint = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isEntryPoint) (async () => {
 try {
-  await initDb();
+  await initDbWithRetry();
   const saved = await loadSubmissionLog();
   submissionLog.push(...saved);
   console.log(`[startup] Submission log loaded — ${submissionLog.length} entries`);
