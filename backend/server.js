@@ -1310,9 +1310,45 @@ async function getVideoContext(videoUrl, filePath) {
   }
   if (filePath) {
     const assetId = await uploadAssetDirect(filePath);
+    await waitForAssetReady(assetId);
     return { type: "asset_id", assetId };
   }
   throw new Error("No video source provided");
+}
+
+// uploadAssetDirect() returns as soon as TwelveLabs ACKNOWLEDGES the upload —
+// not once it's finished processing/indexing the asset. Calling
+// analyzeAsync.tasks.create() against an asset that isn't "ready" yet fails
+// with 400 parameter_invalid: "Asset is currently being processed." (root
+// cause of the 2026-07-07 08:23 UTC incident — every submission from that
+// point failed identically, 0/3 judge tasks created, no retry existed).
+// Poll the asset's own status (processing -> ready|failed) before returning
+// the videoContext, so every caller (judge task creation AND the warmup
+// ping) waits automatically — no per-call retry logic needed elsewhere.
+async function waitForAssetReady(assetId, { timeoutMs = 180_000, pollIntervalMs = 3000 } = {}) {
+  const tlClient = tl();
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    let detail;
+    try {
+      detail = await tlClient.assets.retrieve(assetId, { timeoutInSeconds: 15 });
+    } catch (e) {
+      console.warn(`[TwelveLabs] Asset status check failed for ${assetId}: ${e.message} — retrying`);
+      await new Promise(r => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    const status = detail.status;
+    if (status === "ready") {
+      console.log(`[TwelveLabs] Asset ${assetId} ready after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+      return;
+    }
+    if (status === "failed") {
+      throw new Error(`TwelveLabs asset ${assetId} failed processing`);
+    }
+    // status === "processing" (or transiently undefined) — keep polling
+    await new Promise(r => setTimeout(r, pollIntervalMs));
+  }
+  throw new Error(`TwelveLabs asset ${assetId} did not become ready within ${timeoutMs}ms`);
 }
 
 async function uploadAssetDirect(filePath) {
