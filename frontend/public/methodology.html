@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>How we validated the PreviewPanel score</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0; padding: 0; background: #FAFAFA; color: #212121;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 40px 20px 80px; }
+  h1 { font-size: 24px; font-weight: 800; margin: 0 0 6px; }
+  .subtitle { color: #90A4AE; font-size: 14px; margin-bottom: 32px; }
+  h2 { font-size: 16px; font-weight: 800; margin: 32px 0 8px; }
+  p { font-size: 15px; margin: 0 0 14px; }
+  .numbers {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;
+    background: #fff; border: 1px solid #E0D6D3; border-radius: 16px; padding: 18px;
+    margin: 28px 0;
+  }
+  .stat { text-align: left; }
+  .stat .value { font-size: 20px; font-weight: 800; color: #4E342E; }
+  .stat .label { font-size: 12px; color: #90A4AE; margin-top: 2px; }
+  .disclaimer {
+    margin-top: 36px; padding: 16px 18px; background: #EFEBE9; border-radius: 14px;
+    font-size: 13px; color: #212121;
+  }
+  a { color: #4E342E; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #121212; color: #E8E6E3; }
+    .subtitle { color: #9AA0A6; }
+    .numbers { background: #1B1B1B; border-color: #333; }
+    .stat .value { color: #D7B98E; }
+    .disclaimer { background: #262019; color: #E8E6E3; }
+    a { color: #D7B98E; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>How we validated the PreviewPanel score</h1>
+  <div class="subtitle">A plain explanation of the study behind the prediction — what we did, how we checked ourselves, and what it can't tell you.</div>
+
+  <h2>What we did</h2>
+  <p>We recruited 259 creators across 19 content niches — cooking, fitness,
+  comedy, travel, and 15 others — and collected their TikTok videos. Before
+  we ever looked at how those videos actually performed, our judging panel
+  scored each one on hook strength, emotional pull, pacing, clarity, and
+  related factors. Only after scoring was locked in did we track each
+  video's real 30-day engagement: likes, shares, and saves per view. The
+  prediction model was built from that pairing — judged qualities on one
+  side, real outcomes on the other.</p>
+
+  <h2>How we kept ourselves honest</h2>
+  <p>The model was tested only on creators it had never seen during
+  training — a stricter bar than testing on held-out videos from creators it
+  already knew. Before any of that testing began, we set aside a sealed
+  group of 30 creators — a "lockbox" — and didn't look at their data until
+  every modeling decision was final. We opened it exactly once. Every
+  analysis choice along the way was written down and dated before we saw
+  its result, not after; that log grew to 21 entries. And every video is
+  scored against its own creator's typical performance, not the whole
+  platform's — so one creator with an unusually large following can't skew
+  what "good" looks like for everyone else.</p>
+
+  <h2>What we found</h2>
+  <p>In that held-out lockbox test, videos the model ranked in its top tier
+  beat the creator's own typical engagement about 2 out of 3 times — well
+  ahead of a coin flip. That result held up reliably in 16 of the 19 niches
+  we studied. For the remaining 3 (Gaming, Educational/How-To, and Dancing),
+  we don't yet trust the numeric score enough to show it — you'll see
+  qualitative feedback there instead, while we keep collecting data.</p>
+
+  <h2>What it can't do</h2>
+  <p>This is not a virality predictor. It cannot tell you whether a specific
+  video will take off, and it makes no promises about any single outcome.
+  The patterns it's built on are correlational — things that tend to go
+  together with stronger performance — not causal instructions; it doesn't
+  tell you to make a video longer or shorter, for instance, just because
+  duration is one of the things it accounts for. And so far, this model has
+  only been validated against the historical study data described above —
+  validating it against real PreviewPanel users' own posted videos is
+  ongoing work, not yet complete.</p>
+
+  <div class="numbers">
+    <div class="stat"><div class="value">+0.25</div><div class="label">held-out rank correlation</div></div>
+    <div class="stat"><div class="value">~68%</div><div class="label">top-tier precision (~2 of 3)</div></div>
+    <div class="stat"><div class="value">~4,900</div><div class="label">videos studied</div></div>
+    <div class="stat"><div class="value">259</div><div class="label">creators</div></div>
+    <div class="stat"><div class="value">30 days</div><div class="label">real engagement window</div></div>
+    <div class="stat"><div class="value">16 / 19</div><div class="label">niches scored numerically</div></div>
+  </div>
+
+  <div class="disclaimer">
+    The score predicts relative standing against a baseline — your own
+    typical video, your niche, or PreviewPanel's growing pool of scored
+    videos — never an absolute or guaranteed outcome.
+  </div>
+</div>
+</body>
+</html>

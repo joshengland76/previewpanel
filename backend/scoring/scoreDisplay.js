@@ -1,23 +1,21 @@
-// scoring/scoreDisplay.js — user-facing score-display logic (Phase B3, Task
-// 5). Built and unit-tested behind DISPLAY_SCORE (default false) -- dark
-// launched. Nothing in server.js currently calls this in anger; it exists so
-// B3's user-facing review can evaluate the real logic before any UI ships.
+// scoring/scoreDisplay.js — user-facing score-display logic. Built in Phase
+// B3 behind DISPLAY_SCORE; Phase B3b (this revision) replaces the static
+// active_reference_by_objective grid lookups with the live, windowed pool
+// engine (percentilePools.js) for the niche and overall-app percentiles.
+// reference_distributions_v2.json's active_reference_by_objective is no
+// longer read from this file -- see percentilePools.js's header comment for
+// why it stays wired into shadowScore.js's separate, internal
+// calibrated_percentile field instead.
 
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { percentileFromGrid } from "./scorer.js";
 import { SCORE_DISPLAY_COPY } from "./scoreDisplayCopy.js";
+import { getPools, midrankPercentile, personalDisplay, PERSONAL_MIN_VIDEOS } from "./percentilePools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REF_PATH = path.join(__dirname, "reference_distributions_v2.json");
 const TIERS_PATH = path.join(__dirname, "tiers_v2_1.json");
 
-let _reference = null;
-export function loadReferenceDistributions() {
-  if (!_reference) _reference = JSON.parse(fs.readFileSync(REF_PATH, "utf8"));
-  return _reference;
-}
 let _tiers = null;
 export function loadTiers() {
   if (!_tiers) _tiers = JSON.parse(fs.readFileSync(TIERS_PATH, "utf8"));
@@ -28,57 +26,38 @@ export function tierForObjective(objective, tiers = loadTiers()) {
   return tiers.per_objective?.[objective]?.tier ?? null;
 }
 
-export function nichePercentile(objective, prediction, reference = loadReferenceDistributions()) {
-  const grid = reference.active_reference_by_objective?.[objective]?.quantiles;
-  if (!grid) return null;
-  return percentileFromGrid(prediction, grid);
-}
-
-// Minimum pool size (this video included) before a percentile is shown at
-// all -- below this, a percentile computed from too few points is noise, not
-// signal.
-export const PERSONAL_MIN_VIDEOS = 5;
-// Provisional -- no real production volume exists yet (Phase B3). Revisit
-// once shadow rows accrue in prod (see PROD_ENABLE_CHECKLIST.md).
-export const OVERALL_APP_MIN_VIDEOS = 30;
-
-// Empirical percentile of `value` within `pool` (`value` must already be
-// included in `pool` by the caller -- "their raw predictions, this one
-// included", per Task 5). Returns null below minCount.
-export function empiricalPercentile(value, pool, minCount) {
-  if (!pool || pool.length < minCount) return null;
-  const sorted = [...pool].sort((a, b) => a - b);
-  const nLessEq = sorted.filter((v) => v <= value).length;
-  return (nLessEq / sorted.length) * 100;
-}
+export { PERSONAL_MIN_VIDEOS };
 
 /**
  * getScoreDisplay(objective, prediction, userId, deps)
  *
+ * deps.fetchShadowRows() -> Promise<Array<{id, prediction, objective,
+ *   created_at}>>  every live shadow_scores row with a non-null prediction;
+ *   percentilePools.js unions this with the frozen corpus seed, windows it,
+ *   and caches the result (TTL or invalidated on write -- see shadowScore.js).
+ * deps.selfKey -- the just-written row's pool key (e.g. `shadow:${id}`), so
+ *   the niche/overall pools exclude the row being scored. Omit if the row
+ *   isn't in the pool yet (e.g. computing a display before persisting).
  * deps.fetchPersonalPredictions(userId) -> Promise<number[]>  raw predictions
  *   for this user's past shadow-scored videos, THIS ONE INCLUDED. Defaults to
  *   an empty-pool stub -- there is no user-identity system in the app yet
  *   (Phase C's handle-connect attribution is the eventual real source), so by
  *   default this always resolves to "not enough data," which is honest.
- * deps.fetchOverallAppPredictions(objective) -> Promise<number[]>  same
- *   convention, scoped to the same niche/objective, drawn ONLY from the app's
- *   own accumulated shadow_scores rows -- the static research corpus never
- *   feeds this number, by design (it's meant to eventually supersede the
- *   corpus-derived niche percentile as real usage accrues, not blend with it).
  *
- * Tier gate is deliberately BINARY (PREDICT vs everything else), per Task 5.
- * tiers_v2_1.json separately flags Gaming/Educational as having a positive,
- * reasonably confident RANK signal (within_creator_spearman positive, p_gt0
- * high) despite failing the absolute-precision bar that puts them in ABSTAIN
- * -- a real nuance that could justify a third display state later ("directionally
+ * Tier gate is deliberately BINARY (PREDICT vs everything else). ABSTAIN
+ * suppresses ALL THREE percentiles, not just niche. tiers_v2_1.json
+ * separately flags Gaming/Educational as having a positive, reasonably
+ * confident RANK signal (within_creator_spearman positive, p_gt0 high)
+ * despite failing the absolute-precision bar that puts them in ABSTAIN -- a
+ * real nuance that could justify a third display state later ("directionally
  * confident, absolute score still calibrating") rather than full suppression.
  * Not shipped this pass; binary logic only, per spec.
  */
 export async function getScoreDisplay(objective, prediction, userId, deps = {}) {
   const {
+    fetchShadowRows = async () => [],
+    selfKey = null,
     fetchPersonalPredictions = async () => [],
-    fetchOverallAppPredictions = async () => [],
-    reference = loadReferenceDistributions(),
     tiers = loadTiers(),
     copy = SCORE_DISPLAY_COPY,
   } = deps;
@@ -91,7 +70,7 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
       tier,
       showPercentile: false,
       nichePercentile: null,
-      personalPercentile: null,
+      personal: null,
       overallAppPercentile: null,
       headline: copy.abstainHeadline,
       honestLine: copy.abstainHonestLine,
@@ -99,22 +78,33 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     };
   }
 
-  const niche = nichePercentile(objective, prediction, reference);
-  const personalPool = userId ? await fetchPersonalPredictions(userId) : [];
-  const personal = empiricalPercentile(prediction, personalPool, PERSONAL_MIN_VIDEOS);
-  const overallPool = await fetchOverallAppPredictions(objective);
-  const overallApp = empiricalPercentile(prediction, overallPool, OVERALL_APP_MIN_VIDEOS);
+  const pools = await getPools(fetchShadowRows);
+  const objectivePool = pools.byObjective[objective] || [];
+  const niche = midrankPercentile(prediction, objectivePool, { excludeKey: selfKey });
+  const overallApp = midrankPercentile(prediction, pools.overall, { excludeKey: selfKey });
+  // Pool sizes reported to the user are the actual count used (self excluded
+  // when applicable), not the window ceiling -- a thin niche must say so.
+  const nichePoolSize = objectivePool.length - (selfKey && objectivePool.some((p) => p.key === selfKey) ? 1 : 0);
+  const overallPoolSize = pools.overall.length - (selfKey && pools.overall.some((p) => p.key === selfKey) ? 1 : 0);
+
+  const personalPreds = userId ? await fetchPersonalPredictions(userId) : [];
+  const personalPool = personalPreds.map((p) => ({ prediction: p }));
+  const personal = personalDisplay(prediction, personalPool);
 
   return {
     objective,
     tier,
     showPercentile: true,
     nichePercentile: niche,
-    personalPercentile: personal,
+    nichePoolSize,
+    personal,
     overallAppPercentile: overallApp,
-    headline: copy.predictHeadline(niche),
+    overallPoolSize,
+    headline: copy.predictHeadline(niche, objective),
+    sub: copy.predictSub(objective, nichePoolSize),
     personalHeadline: copy.personalHeadline(personal),
-    overallAppHeadline: copy.overallAppHeadline(overallApp),
+    overallAppHeadline: copy.overallAppHeadline(overallApp, overallPoolSize),
+    poolInfoTooltip: copy.poolInfoTooltip,
     trimNote: copy.trimNote,
   };
 }

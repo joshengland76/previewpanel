@@ -11,6 +11,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { scoreFeatures, calibratedYhat, percentileFromGrid, loadSpec } from "./scorer.js";
+import { invalidatePoolCache } from "./percentilePools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REF_PATH = path.join(__dirname, "reference_distributions_v2.json");
@@ -68,25 +69,30 @@ export async function recordShadowScore({
     const tiers = loadTiers();
     const tierAtScoreTime = tiers.per_objective?.[objective]?.tier ?? null;
 
-    await queryRW(
+    const { rows } = await queryRW(
       `INSERT INTO shadow_scores
         (submission_id, model_version, prompt_version, pegasus_model, spec_hash,
          input_features, prediction, calibrated_percentile, tier_at_score_time, extract_cdims_status,
          objective)
-       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       RETURNING id`,
       [
         submissionId ?? null, promptVersion ?? null, pegasusModel ?? null, specHash(),
         JSON.stringify(features), prediction, calibratedPercentile, tierAtScoreTime,
         cdimsStatus ?? null, objective ?? null,
       ]
     );
-    console.log(`[shadow_score] submission_id=${submissionId} pred=${prediction.toFixed(4)} `
+    const id = rows[0]?.id ?? null;
+    console.log(`[shadow_score] id=${id} submission_id=${submissionId} pred=${prediction.toFixed(4)} `
       + `pctile=${calibratedPercentile != null ? calibratedPercentile.toFixed(1) : "n/a"} tier=${tierAtScoreTime}`);
-    // Returned so a caller (e.g. the dark-launched score-display module, Task
-    // 5) can build a display without recomputing scoreFeatures a second time.
-    // Purely additive -- existing callers that ignore the return value are
-    // unaffected.
-    return { prediction, calibratedPercentile, tierAtScoreTime };
+    // Pool-based percentile engine (Phase B3b, Task 2) sources niche/overall
+    // percentiles from a live, windowed pool over shadow_scores -- invalidate
+    // so the very next read picks up this row rather than waiting out the TTL.
+    invalidatePoolCache();
+    // Returned so a caller (e.g. the score-display module) can build a
+    // display without recomputing scoreFeatures a second time, and so it can
+    // exclude this row's own id from the niche/overall pools it just joined.
+    return { id, prediction, calibratedPercentile, tierAtScoreTime };
   } catch (e) {
     // Backpressure guard: never let a shadow-scoring failure surface to the
     // caller or affect the user-facing response in any way.

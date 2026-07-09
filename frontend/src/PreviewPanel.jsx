@@ -299,7 +299,7 @@ export default function PreviewPanel() {
   const [judgeResults, setJudgeResults] = useState({});
   const [synthesis, setSynthesis] = useState(null);
   const [synthesisStatus, setSynthesisStatus] = useState(null);
-  const [scoreDisplay, setScoreDisplay] = useState(null); // dark-launched (Phase B3, Task 5); always null unless DISPLAY_SCORE_ENABLED
+  const [scoreDisplay, setScoreDisplay] = useState(null); // populated when the server's DISPLAY_SCORE flag is on
   const [trimAvailable, setTrimAvailable] = useState(false);
   const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
   const [statusMessage, setStatusMessage] = useState("");

@@ -1935,20 +1935,21 @@ async function runShadowScoringForJob(jobId) {
       cdimsStatus,
     });
 
-    // Score display (Phase B3, Task 5) — dark-launched, DISPLAY_SCORE default
-    // false. Reuses shadowResult.prediction rather than rescoring. There is
-    // no user-identity system yet, so fetchPersonalPredictions always resolves
-    // empty (honestly reports "not enough data" per scoreDisplay.js); the
-    // overall-app pool is real, scoped to this objective, sourced only from
-    // shadow_scores (never the research corpus).
+    // Score display (Phase B3/B3b, Task 5) — DISPLAY_SCORE default false.
+    // Reuses shadowResult.prediction rather than rescoring. Niche/overall
+    // percentiles come from the pool engine (corpus seed UNION shadow_scores,
+    // see percentilePools.js); selfKey excludes the row just written above
+    // from those two pools. There is no user-identity system yet, so
+    // fetchPersonalPredictions always resolves empty (honestly reports "not
+    // enough data" per scoreDisplay.js).
     if (process.env.DISPLAY_SCORE === "true" && shadowResult) {
       job.scoreDisplay = await getScoreDisplay(job.objective, shadowResult.prediction, null, {
-        fetchOverallAppPredictions: async (objective) => {
+        selfKey: shadowResult.id != null ? `shadow:${shadowResult.id}` : null,
+        fetchShadowRows: async () => {
           const { rows } = await pgPool.query(
-            `SELECT prediction FROM shadow_scores WHERE objective = $1 AND prediction IS NOT NULL`,
-            [objective]
+            `SELECT id, prediction, objective, created_at FROM shadow_scores WHERE prediction IS NOT NULL`
           );
-          return rows.map((r) => r.prediction);
+          return rows;
         },
       });
     }
