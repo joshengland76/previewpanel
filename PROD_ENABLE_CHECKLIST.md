@@ -1,47 +1,53 @@
 # Production Shadow-Scoring Enablement Checklist
 
-Prepared by Claude Code (Phase B3, Task 4). **CC does not flip these flags —
-Josh does**, after reading this. Everything below is invisible to users when
-done correctly; nothing in this checklist changes any user-facing response.
+**Status: EXECUTED — all flags live in production as of 2026-07-09**
+(`EXTRACT_CDIMS=true`, `SHADOW_SCORING=true`, `DISPLAY_SCORE=true`,
+`CDIMS_ANTHROPIC_API_KEY` set, reusing `SYNTHESIS_ANTHROPIC_API_KEY`'s
+underlying credential under its own env var name per Josh's decision).
+Originally prepared in Phase B3 as a flags-off dry-run guide; Phase B3b
+executed it. Kept as the reference doc for what "enabled" means and how to
+verify/roll back — re-read Step 3-4 below whenever `shadow_scores` or the
+score display looks wrong.
 
-## Prerequisites (should already be true before you start)
+## Prerequisites (confirmed true before enablement)
 
-- [ ] Phase B3's poller instance-scoping fix (Task 1) is deployed to Render
-      and confirmed live (check for `INSTANCE_ID=production` in Render's env
-      vars — without it, the poller falls back to a `dev-<hostname>` id and
-      the scoping logic still works, but it's safer to set it explicitly).
-- [ ] `node backend/scoring/goldenVectorTest.mjs` passes (421/421, gate PASS)
-      on the exact commit being deployed.
-- [ ] `node backend/scoring/durationClampTest.mjs` passes on the same commit.
+- [x] Poller instance-scoping fix deployed and live-verified (3/3 local
+      submissions against live prod, zero races — see `PHASEB3_READOUT.md`).
+      `INSTANCE_ID=production` set in Render.
+- [x] `node backend/scoring/goldenVectorTest.mjs` — 421/421, PASS.
+- [x] `node backend/scoring/durationClampTest.mjs` — PASS.
+- [x] `node backend/scoring/percentilePoolsTest.mjs` — PASS (Phase B3b).
+- [x] `node backend/scoring/scoreDisplayTest.mjs` — PASS (Phase B3b).
 
-## Step 1 — set the C_dims key in Render
+## Step 1 — C_dims key (done)
 
-- [ ] Render dashboard → previewpanel-backend → Environment →
-      `CDIMS_ANTHROPIC_API_KEY` = a real Anthropic API key. **Use a separate
-      key from `ANTHROPIC_API_KEY` / `SYNTHESIS_ANTHROPIC_API_KEY`** if your
-      Anthropic console supports per-key spend caps — this lets you cap C_dims
-      spend independently without touching judging or synthesis budgets. If
-      only one key is available, reusing `ANTHROPIC_API_KEY`'s value is safe
-      (the key-separation pattern is about failure isolation via a distinct
-      env var name, not necessarily a distinct underlying credential), but a
-      dedicated key is preferable.
+- [x] `CDIMS_ANTHROPIC_API_KEY` set in Render via the Render API, value
+      copied from `SYNTHESIS_ANTHROPIC_API_KEY` (Josh's explicit choice —
+      same underlying Anthropic credential, separate env var name, so a
+      C_dims outage/quota issue still can't touch the synthesis code path,
+      though spend isn't capped independently since it's one account).
 
-## Step 2 — flip the flags
+## Step 2 — flags (done)
 
-- [ ] `EXTRACT_CDIMS=true`
-- [ ] `SHADOW_SCORING=true`
-- [ ] Leave `CLAMP_DURATION` unset (defaults `true`) unless you have a
-      specific reason to see unclamped shadow predictions.
-- [ ] Deploy (Render auto-deploys on push to `main`, or trigger manually).
+- [x] `EXTRACT_CDIMS=true`
+- [x] `SHADOW_SCORING=true`
+- [x] `DISPLAY_SCORE=true` (Phase B3b — the score card is now live, not
+      dark-launched; the frontend-side `DISPLAY_SCORE_ENABLED` gate was
+      removed, so the backend flag is the only switch now)
+- [x] `CLAMP_DURATION` left unset (defaults `true`)
+- [x] Deployed (Render, commit `cbaf4ec`, manually triggered redeploy since
+      env-var-only changes don't auto-redeploy on Render — a code push does,
+      an API env-var PUT does not; use `POST /v1/services/{id}/deploys` or
+      the dashboard's manual deploy button after any future env-var-only change)
 
-## Step 3 — verify the first N shadow rows (recommend N=10-20, first day)
+## Step 3 — verify shadow rows
 
 Run against the production Neon DB (read-only checks, no writes):
 
 ```sql
 SELECT id, submission_id, created_at, model_version, prompt_version,
-       pegasus_model, extract_cdims_status, prediction, calibrated_percentile,
-       tier_at_score_time
+       pegasus_model, objective, extract_cdims_status, prediction,
+       calibrated_percentile, tier_at_score_time
 FROM shadow_scores
 ORDER BY id DESC
 LIMIT 20;
@@ -49,29 +55,24 @@ LIMIT 20;
 
 Confirm:
 - [ ] `prediction` and `calibrated_percentile` are populated (not all NULL).
-- [ ] `prompt_version` reads `judges-v1.0` (or whatever `JUDGE_PROMPT_VERSION`
-      is set to at deploy time — confirms Task 3's stamping reached prod).
-- [ ] `extract_cdims_status` is mostly `"ok"` — if it's mostly
-      `"failed: ..."`, check the reason string first (frame-sampling failures
-      were the actual bug found in B2's smoke test; a recurrence here means
-      something about the production file-retention path differs from local).
-- [ ] `input_features` (JSONB) has C_dims-derived keys populated (e.g.
-      `cl_big_funny`, `hook_strength_visual`) on the `"ok"` rows, confirming
-      the extractor actually ran, not just recorded a stub.
+- [ ] `objective` is populated (Phase B3b — needed for the pool engine's
+      per-niche window; a NULL here means that row won't contribute to any
+      objective's pool, only the overall-1000 pool).
+- [ ] `prompt_version` reads `judges-v1.0` (or current `JUDGE_PROMPT_VERSION`).
+- [ ] `extract_cdims_status` is mostly `"ok"` — if mostly `"failed: ..."`,
+      check the reason string first (frame-sampling failures were the actual
+      bug found in B2's smoke test, fixed via `retainedTrims`).
+- [ ] `input_features` (JSONB) has C_dims-derived keys populated on `"ok"` rows.
 
 ## Step 4 — verify cost
 
-- [ ] Anthropic console, filtered to the `CDIMS_ANTHROPIC_API_KEY` key (or the
-      shared key if reused) — confirm per-call cost lands near **$0.03/video**
-      (per Task 4's target; derived from 4 sampled frames + prompt text in,
-      ~$3/M-in + $15/M-out sonnet-4-6 pricing — see `cdims.js`'s cost-logging
-      line for the exact formula and per-call server logs for the observed
-      figure). A cost sharply above this (e.g. $0.10+/video) likely means
-      frame sampling or prompt construction regressed — stop and investigate
-      before letting it run at volume.
+- [ ] Anthropic console, filtered to the reused key — confirm per-call cost
+      lands near **$0.03/video** (4 sampled frames + prompt text in, ~$3/M-in
+      + $15/M-out sonnet-4-6 pricing). Sharply above this (e.g. $0.10+/video)
+      likely means frame sampling or prompt construction regressed.
 
 ### Projected monthly cost (C_dims only — TwelveLabs/judge cost is unchanged
-### by these flags and already billed regardless)
+### and already billed regardless of these flags)
 
 | Submissions/month | @ $0.03/video |
 |---|---|
@@ -79,29 +80,42 @@ Confirm:
 | 500  | ~$15/month |
 | 2,000 | ~$60/month |
 
-These are C_dims-extraction cost only. `SHADOW_SCORING`'s own compute
-(Node scoring function, one Postgres INSERT) is negligible — no added API
-cost, and storage growth is a few KB/row.
+## Step 5 (Phase B3b) — verify the pool engine and score card
 
-## Step 5 — confirm user-facing output is unchanged
+The static `active_reference_by_objective` grid no longer feeds the display
+(it stays wired only into `shadow_scores.calibrated_percentile`, an internal
+analytical field — see `percentilePools.js`'s header comment). Niche/overall
+percentiles now come from `corpus_reference_pool.json` (3,840-row frozen
+small+mid floor-5 seed, see `PHASEB3B_READOUT.md` Task 1) UNION live
+`shadow_scores` rows, windowed (objective: 100, overall: 1,000), refreshed on
+every shadow write or a 10-minute TTL.
 
-- [ ] Submit one real test video through the production app (or ask a
-      teammate to). Confirm the response looks exactly as it did before this
-      deploy — no new fields, no score/percentile shown anywhere. (This is
-      guaranteed by construction per `PHASEB2_READOUT.md`'s Task 5 finding:
-      `runShadowScoringForJob` never writes to any field `/api/status`
-      returns. Doing one live check anyway costs nothing and catches any
-      regression in that guarantee introduced by later changes.)
-- [ ] `DISPLAY_SCORE` stays `false` in production until B3's user-facing
-      review (Task 5's score-display module is dark-launched deliberately —
-      do not flip this flag as part of this checklist).
+- [ ] Submit a real video (Step 6 of Phase B3b — Josh submits one phone
+      video). Confirm the `/api/status` response's `scoreDisplay` field is
+      non-null, `showPercentile: true` for a PREDICT-tier objective, and the
+      headline reads "Top N% in {objective}" with an integer N.
+- [ ] Confirm `scoreDisplay.nichePoolSize` is sane for the chosen objective —
+      most PREDICT objectives have 100+ corpus rows, but **Myth Busting has
+      only ~24** (a genuine thin-niche finding from Task 1, not a bug) —
+      don't be alarmed if that specific niche's pool is small.
+- [ ] Confirm an ABSTAIN-tier objective (Gaming, Educational/How-To, Dancing)
+      still shows `showPercentile: false` and the honest line, with NO
+      percentile of any kind (niche, overall, or personal) — the tier gate
+      is binary and suppresses all three, not just niche.
+- [ ] Confirm the "How this score works" link opens the modal, and
+      `/methodology` loads on the live Vercel frontend with the correct
+      numbers (259 creators, ~4,900 videos, 16/19 niches, +0.25 held-out rank
+      correlation, ~68% top-tier precision).
 
 ## Rollback
 
-If anything above looks wrong: set `EXTRACT_CDIMS=false` and/or
-`SHADOW_SCORING=false` in Render and redeploy (or just toggle without a code
-change — both flags are read at request time, no restart-order dependency
-beyond a normal Render env-var-change redeploy). No data cleanup is needed;
-`shadow_scores` rows are inert and can simply stop accruing. If a botched
-row needs removing, it's a plain `DELETE FROM shadow_scores WHERE id = ...`
-— never touches `submissions` or any user-visible table.
+- **Full rollback**: set `EXTRACT_CDIMS=false`, `SHADOW_SCORING=false`,
+  `DISPLAY_SCORE=false` in Render, then trigger a redeploy (env-var-only
+  changes need a manual redeploy, see Step 2's note). No data cleanup
+  needed; `shadow_scores` rows are inert and simply stop accruing.
+- **Display-only rollback** (keep shadow-scoring running invisibly, just hide
+  the card again): set `DISPLAY_SCORE=false` only. This is the lowest-risk
+  partial rollback if the score card itself needs more design/copy work but
+  the underlying data pipeline is fine.
+- A botched row: `DELETE FROM shadow_scores WHERE id = ...` — never touches
+  `submissions` or any other user-visible table.
