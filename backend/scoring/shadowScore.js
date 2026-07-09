@@ -36,33 +36,14 @@ function specHash() {
   return _specHash;
 }
 
-export async function ensureShadowScoresTable(queryRW) {
-  await queryRW(`
-    CREATE TABLE IF NOT EXISTS shadow_scores (
-      id                     BIGSERIAL PRIMARY KEY,
-      submission_id          INTEGER,
-      created_at             TIMESTAMPTZ DEFAULT now(),
-      model_version          TEXT NOT NULL DEFAULT 'v2_capstone',
-      prompt_version         TEXT,
-      pegasus_model          TEXT,
-      spec_hash              TEXT,
-      input_features         JSONB,
-      prediction             DOUBLE PRECISION,
-      calibrated_percentile  DOUBLE PRECISION,
-      tier_at_score_time     TEXT,
-      extract_cdims_status   TEXT
-    )
-  `);
-  await queryRW(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_submission_id ON shadow_scores(submission_id)`);
-  // objective: needed for scoreDisplay.js's overall-app percentile (scoped to
-  // the same niche). user_id: nullable forward-compat column for the same
-  // module's personal percentile -- there is no user-identity system in the
-  // app yet (Phase C's handle-connect attribution is the eventual real
-  // source), so this always writes NULL for now. Both added Phase B3 Task 5.
-  await queryRW(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS objective TEXT`);
-  await queryRW(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS user_id TEXT`);
-  await queryRW(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_objective ON shadow_scores(objective)`);
-}
+// NOTE: the shadow_scores schema (including the objective/user_id columns
+// added Phase B3 Task 5) is created inline in server.js's initDb() migration
+// block, matching every other table's convention in this file -- there is no
+// separate ensureShadowScoresTable() call site. An earlier version of this
+// module exported one, but it was never actually wired into initDb() (dead
+// code masking a real bug: the objective/user_id ALTER TABLEs it defined were
+// never applied). Removed rather than left to rot as a second, diverging
+// source of truth for this schema.
 
 /**
  * recordShadowScore({ queryRW, submissionId, features, objective, pegasusModel,

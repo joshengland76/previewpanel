@@ -36,7 +36,7 @@ import "dotenv/config";
 // the full design.
 import { extractCdims } from "./scoring/cdims.js";
 import { buildScoringFeatures } from "./scoring/buildFeatures.js";
-import { ensureShadowScoresTable, recordShadowScore } from "./scoring/shadowScore.js";
+import { recordShadowScore } from "./scoring/shadowScore.js";
 import { getScoreDisplay } from "./scoring/scoreDisplay.js";
 
 const { Pool } = pg;
@@ -604,6 +604,14 @@ async function initDb() {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_submission_id ON shadow_scores(submission_id)`);
+    // objective: needed for scoreDisplay.js's overall-app percentile (scoped to
+    // the same niche). user_id: nullable forward-compat column for the same
+    // module's personal percentile -- there is no user-identity system in the
+    // app yet (Phase C's handle-connect attribution is the eventual real
+    // source), so this always writes NULL for now. Both added Phase B3 Task 5.
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS objective TEXT`);
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS user_id TEXT`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_objective ON shadow_scores(objective)`);
     await client.query("COMMIT");
 
     console.log("[db] PostgreSQL connected — submissions table ready");
