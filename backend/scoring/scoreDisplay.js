@@ -82,10 +82,15 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
   const objectivePool = pools.byObjective[objective] || [];
   const niche = midrankPercentile(prediction, objectivePool, { excludeKey: selfKey });
   const overallApp = midrankPercentile(prediction, pools.overall, { excludeKey: selfKey });
-  // Pool sizes reported to the user are the actual count used (self excluded
-  // when applicable), not the window ceiling -- a thin niche must say so.
-  const nichePoolSize = objectivePool.length - (selfKey && objectivePool.some((p) => p.key === selfKey) ? 1 : 0);
-  const overallPoolSize = pools.overall.length - (selfKey && pools.overall.some((p) => p.key === selfKey) ? 1 : 0);
+  // Pool sizes reported to the user are the window-capped count INCLUDING
+  // self (the just-scored video genuinely is one of "the videos we've
+  // scored," even though it's excluded from the percentile comparison
+  // itself for accuracy) -- so this reads "100"/"1,000" at full capacity,
+  // not "99"/"999". A genuinely thin niche (e.g. Myth Busting, ~24 rows —
+  // see PHASEB3B_READOUT.md) still shows its true, smaller count; this
+  // isn't padded to the window ceiling.
+  const nichePoolSize = objectivePool.length;
+  const overallPoolSize = pools.overall.length;
 
   const personalPreds = userId ? await fetchPersonalPredictions(userId) : [];
   const personalPool = personalPreds.map((p) => ({ prediction: p }));

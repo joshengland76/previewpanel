@@ -53,16 +53,19 @@ const predictDisplay = await getScoreDisplay(predictObjective, 0.5, null, {
 checkTrue("PREDICT tier shows percentile", predictDisplay.showPercentile === true);
 checkTrue("PREDICT tier has an integer nichePercentile", Number.isInteger(predictDisplay.nichePercentile));
 checkTrue("PREDICT tier has a headline", typeof predictDisplay.headline === "string" && predictDisplay.headline.length > 0);
-checkTrue("headline uses Top N% framing", predictDisplay.headline.startsWith("Top "));
-checkTrue("sub-line reports actual pool size", predictDisplay.sub.includes(String(predictDisplay.nichePoolSize)));
+checkTrue("headline uses direct percentile framing, no Top-N% inversion", predictDisplay.headline.startsWith("Beats "));
+checkTrue("sub-line reports the pool size", predictDisplay.sub.includes(String(predictDisplay.nichePoolSize)));
 
-// selfKey exclusion: scoring row id=3 (prediction 0.5) as itself should exclude it from its own pool
+// Pool size reported to the user INCLUDES self (it's genuinely one of "the
+// videos we've scored") -- this must NOT shift depending on selfKey, even
+// though the percentile MATH does exclude self for accuracy (that exclusion
+// behavior itself is covered directly in percentilePoolsTest.mjs).
 invalidatePoolCache();
 const withSelfExcluded = await getScoreDisplay(predictObjective, 0.5, null, {
   fetchShadowRows: async () => shadowRows,
   selfKey: "shadow:3",
 });
-check("selfKey excludes the row from its own niche pool size", withSelfExcluded.nichePoolSize, predictDisplay.nichePoolSize - 1);
+check("pool size reported to the user does not change based on selfKey", withSelfExcluded.nichePoolSize, predictDisplay.nichePoolSize);
 
 // ── Personal: <5 videos -> null; 5-19 -> ordinal; >=20 -> percentile ───────
 invalidatePoolCache();

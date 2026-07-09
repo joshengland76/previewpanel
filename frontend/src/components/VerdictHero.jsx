@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { B, JUDGES, ACTION } from "../brand.js";
+import { MethodologyTrigger } from "./MethodologyModal.jsx";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Part B — Verdict hero + sticky condensed verdict bar.
@@ -7,12 +8,18 @@ import { B, JUDGES, ACTION } from "../brand.js";
 // Consumes the real synthesis contract from /api/status:
 //   .synthesis = { verdict:{headline_score,action,gist}, panel:{judges_present,
 //                  judges_missing}, ... }
-//   .results   = per-judge { status, data:{ overall, ... } }  (mini-scores)
+//   .results   = per-judge { status, data:{ overall, ... } }  (mini-scores,
+//                used only by the sticky bar now -- the hero's own judge
+//                mini-score row was removed, see below)
+//   .scoreDisplay = the capstone-v2 percentile payload (null if DISPLAY_SCORE
+//                is off, or not ready yet, or an older submission predates it)
 //
-// Renders nothing when synthesis is absent — the parent falls back to the raw
-// judge view (graceful degradation when .synthesis is null / synthesisStatus !=
-// "ready"). Brand tokens come from the shared brand.js (real owls/colors,
-// Montserrat inherited).
+// The hero's main circle used to show the combined judge score (0-10). It
+// now shows the niche percentile instead, when available -- a real signal
+// (day-30 outcome prediction) rather than a raw judge average. Falls back to
+// the old judge-score gauge when scoreDisplay is absent, so the hero never
+// looks broken for submissions without it. Renders nothing when synthesis is
+// absent, same as before.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Defensive: derive action from score if the model returns an unexpected value
@@ -23,26 +30,39 @@ function actionFor(verdict) {
   return s >= 8 ? ACTION.post : s >= 5 ? ACTION.polish : ACTION.rework;
 }
 
-function judgeScore(results, id) {
-  const r = results?.[id];
-  return r && r.status === "done" && r.data && r.data.overall != null ? r.data.overall : null;
+// Percentile -> color, same 3-color scale as the judge-score action colors
+// (green/amber/red), banded into rough thirds.
+function percentileColor(p) {
+  if (p == null) return B.grey;
+  if (p >= 66) return ACTION.post.color;
+  if (p >= 33) return ACTION.polish.color;
+  return ACTION.rework.color;
 }
 
-function Owl({ judge, size = 24 }) {
+function InfoIcon({ text }) {
   return (
-    <img src={judge.avatar} alt={judge.name}
-      style={{ width: size, height: size, objectFit: "contain", display: "block",
-        transform: judge.avatarScale ? `scale(${judge.avatarScale})` : undefined }} />
+    <span
+      title={text}
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: 13, height: 13, borderRadius: "50%", marginLeft: 5,
+        border: `1px solid ${B.grey}`, color: B.grey, fontSize: 9, fontWeight: 700,
+        cursor: "help", flexShrink: 0,
+      }}
+    >
+      i
+    </span>
   );
 }
 
-// ── Gauge (same SVG idiom as PreviewPanel ScoreRing, scaled up) ──
-function Gauge({ score, color, size = 132 }) {
+// ── Gauge (same SVG idiom throughout -- value/max generalized so it can show
+//    either a percentile (0-100) or the legacy judge score (0-10)) ──
+function Gauge({ value, max, unitLabel, color, size = 132 }) {
   const stroke = 11;
   const r = (size - stroke) / 2;
   const circ = 2 * Math.PI * r;
-  const clamped = Math.max(0, Math.min(10, Number(score) || 0));
-  const fill = (clamped / 10) * circ;
+  const clamped = Math.max(0, Math.min(max, Number(value) || 0));
+  const fill = (clamped / max) * circ;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block" }}>
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={B.lightBrown} strokeWidth={stroke} />
@@ -51,19 +71,36 @@ function Gauge({ score, color, size = 132 }) {
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
         style={{ transition: "stroke-dasharray 0.8s cubic-bezier(0.16,1,0.3,1)" }} />
       <text x="50%" y="47%" dominantBaseline="middle" textAnchor="middle"
-        fontSize="46" fontWeight="800" fill={B.body} fontFamily="Montserrat, sans-serif">{score}</text>
+        fontSize="46" fontWeight="800" fill={B.body} fontFamily="Montserrat, sans-serif">{value}</text>
       <text x="50%" y="66%" dominantBaseline="middle" textAnchor="middle"
-        fontSize="12" fontWeight="700" fill={B.grey} fontFamily="Montserrat, sans-serif">/ 10</text>
+        fontSize="12" fontWeight="700" fill={B.grey} fontFamily="Montserrat, sans-serif">{unitLabel}</text>
     </svg>
   );
 }
 
-function VerdictHero({ synthesis, results, onJumpToJudge, heroRef }) {
+// ABSTAIN: a neutral ring (no fill, no number) -- there is deliberately no
+// percentile to show here, the honest line below explains why.
+function AbstainRing({ size = 132 }) {
+  const stroke = 11;
+  const r = (size - stroke) / 2;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block" }}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={B.lightBrown} strokeWidth={stroke} />
+      <text x="50%" y="53%" dominantBaseline="middle" textAnchor="middle"
+        fontSize="40" fontWeight="800" fill={B.grey} fontFamily="Montserrat, sans-serif">—</text>
+    </svg>
+  );
+}
+
+function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef }) {
   const verdict = synthesis.verdict || {};
   const act = actionFor(verdict);
   const present = synthesis.panel?.judges_present || [];
   const missing = synthesis.panel?.judges_missing || [];
   const partial = missing.length > 0;
+
+  const hasPercentile = !!(scoreDisplay && scoreDisplay.showPercentile);
+  const isAbstain = !!(scoreDisplay && !scoreDisplay.showPercentile);
 
   return (
     <div ref={heroRef} style={{
@@ -72,11 +109,43 @@ function VerdictHero({ synthesis, results, onJumpToJudge, heroRef }) {
       padding: "24px 20px 18px", textAlign: "center", position: "relative", overflow: "hidden",
     }}>
       <div style={{ width: 132, height: 132, margin: "2px auto 4px" }}>
-        <Gauge score={verdict.headline_score} color={act.color} />
+        {hasPercentile ? (
+          <Gauge value={scoreDisplay.nichePercentile} max={100} unitLabel="percentile" color={percentileColor(scoreDisplay.nichePercentile)} />
+        ) : isAbstain ? (
+          <AbstainRing />
+        ) : (
+          <Gauge value={verdict.headline_score} max={10} unitLabel="/ 10" color={act.color} />
+        )}
       </div>
 
+      {hasPercentile && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: B.body }}>{scoreDisplay.headline}</div>
+          {scoreDisplay.sub && <div style={{ fontSize: 11, color: B.grey, marginTop: 2 }}>{scoreDisplay.sub}</div>}
+          {(scoreDisplay.overallAppHeadline || scoreDisplay.personalHeadline) && (
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+              {scoreDisplay.overallAppHeadline && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: B.grey }}>
+                  {scoreDisplay.overallAppHeadline}
+                  {scoreDisplay.poolInfoTooltip && <InfoIcon text={scoreDisplay.poolInfoTooltip} />}
+                </div>
+              )}
+              {scoreDisplay.personalHeadline && (
+                <div style={{ fontSize: 12, color: B.grey }}>{scoreDisplay.personalHeadline}</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isAbstain && (
+        <div style={{ fontSize: 13, lineHeight: 1.4, color: B.grey, marginTop: 6, maxWidth: 280, marginLeft: "auto", marginRight: "auto" }}>
+          {scoreDisplay.honestLine}
+        </div>
+      )}
+
       <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".12em",
-        textTransform: "uppercase", color: act.color, marginTop: 6 }}>{act.label}</div>
+        textTransform: "uppercase", color: act.color, marginTop: 14 }}>{act.label}</div>
 
       {partial && (
         <div style={{ fontSize: 11, color: B.grey, fontWeight: 700, marginTop: 3 }}>
@@ -87,46 +156,13 @@ function VerdictHero({ synthesis, results, onJumpToJudge, heroRef }) {
       <p style={{ fontSize: 16, lineHeight: 1.5, color: B.body, fontWeight: 500,
         margin: "15px auto 4px", maxWidth: "34ch" }}>{verdict.gist}</p>
 
-      {/* Judge mini-scores — tappable to jump to that judge's deep-dive */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 9, marginTop: 18,
-        borderTop: `1px solid ${B.lightBrown}`, paddingTop: 16 }}>
-        {JUDGES.filter((j) => results && results[j.id]).map((j) => {
-          const score = judgeScore(results, j.id);
-          const here = score != null;
-          return (
-            <button key={j.id} type="button" onClick={() => onJumpToJudge && onJumpToJudge(j.id)}
-              style={{ flex: 1, maxWidth: 108, background: B.bg, border: `1px solid ${B.border}`,
-                borderRadius: 14, padding: "9px 6px 8px", cursor: "pointer", textAlign: "center",
-                fontFamily: "inherit", opacity: here ? 1 : 0.55 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                <Owl judge={j} size={24} />
-                <span style={{ fontFamily: "Montserrat, sans-serif", fontWeight: 800, fontSize: 21,
-                  lineHeight: 1, color: here ? j.color : B.grey }}>{here ? score : "—"}</span>
-              </div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#bbb", marginTop: 5 }}>{j.name}</div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Predicted performance — disabled placeholder (NOT wired) */}
-      <div aria-disabled="true" style={{ margin: "12px auto 0", maxWidth: 342, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 10,
-        background: "repeating-linear-gradient(135deg,#F3EDE1,#F3EDE1 8px,#EFE8DA 8px,#EFE8DA 16px)",
-        border: `1px dashed ${B.border}`, borderRadius: 14, padding: "11px 14px" }}>
-        <span style={{ width: 26, height: 26, flex: "none", borderRadius: "50%", background: B.lightBrown,
-          display: "flex", alignItems: "center", justifyContent: "center", color: B.grey }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" />
-          </svg>
-        </span>
-        <div style={{ textAlign: "left" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#8a8178" }}>Predicted performance</div>
-          <div style={{ fontSize: 10.5, color: B.grey, marginTop: 1 }}>vs. your typical posts — trained on real day-30 results</div>
+      {scoreDisplay?.trimNote && (
+        <div style={{ fontSize: 11, color: B.grey, marginTop: 8, fontStyle: "italic", maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
+          {scoreDisplay.trimNote}
         </div>
-        <span style={{ marginLeft: "auto", fontSize: 9.5, fontWeight: 800, letterSpacing: ".1em",
-          textTransform: "uppercase", color: B.grey, background: "#fff", border: `1px solid ${B.border}`,
-          padding: "3px 8px", borderRadius: 999 }}>Soon</span>
-      </div>
+      )}
+
+      <MethodologyTrigger pillStyle />
     </div>
   );
 }
@@ -149,14 +185,17 @@ function StickyVerdictBar({ synthesis, results, visible, onJumpToJudge }) {
         </span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 5 }}>
           {JUDGES.filter((j) => results && results[j.id]).map((j) => {
-            const score = judgeScore(results, j.id);
+            const r = results?.[j.id];
+            const score = r && r.status === "done" && r.data && r.data.overall != null ? r.data.overall : null;
             return (
               <button key={j.id} type="button" onClick={() => onJumpToJudge && onJumpToJudge(j.id)}
                 style={{ display: "flex", alignItems: "center", gap: 3, background: "#fff",
                   border: `1px solid ${B.border}`, borderRadius: 999, padding: "2px 8px 2px 4px",
                   cursor: "pointer", fontFamily: "Montserrat, sans-serif", fontWeight: 800, fontSize: 12.5,
                   color: score != null ? j.color : B.grey, opacity: score != null ? 1 : 0.55 }}>
-                <Owl judge={j} size={16} />{score != null ? score : "—"}
+                <img src={j.avatar} alt={j.name} style={{ width: 16, height: 16, objectFit: "contain",
+                  transform: j.avatarScale ? `scale(${j.avatarScale})` : undefined }} />
+                {score != null ? score : "—"}
               </button>
             );
           })}
@@ -168,7 +207,7 @@ function StickyVerdictBar({ synthesis, results, visible, onJumpToJudge }) {
 
 // Combined section: sticky bar + hero, with the scroll-observer wiring. Render
 // only when synthesis is ready; otherwise the parent shows the raw judge view.
-export function VerdictPanel({ synthesis, results, onJumpToJudge }) {
+export function VerdictPanel({ synthesis, results, scoreDisplay, onJumpToJudge }) {
   const heroRef = useRef(null);
   const [scrolled, setScrolled] = useState(false);
 
@@ -188,7 +227,7 @@ export function VerdictPanel({ synthesis, results, onJumpToJudge }) {
   return (
     <div>
       <StickyVerdictBar synthesis={synthesis} results={results} visible={scrolled} onJumpToJudge={onJumpToJudge} />
-      <VerdictHero synthesis={synthesis} results={results} onJumpToJudge={onJumpToJudge} heroRef={heroRef} />
+      <VerdictHero synthesis={synthesis} scoreDisplay={scoreDisplay} onJumpToJudge={onJumpToJudge} heroRef={heroRef} />
     </div>
   );
 }

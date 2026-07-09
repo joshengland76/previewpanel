@@ -6,7 +6,6 @@ import { B, JUDGES } from "./brand.js";
 import { VerdictPanel } from "./components/VerdictHero.jsx";
 import { WhatsWorkingFixes } from "./components/WhatsWorkingFixes.jsx";
 import { DisagreementCard } from "./components/DisagreementCard.jsx";
-import { ScoreDisplay } from "./components/ScoreDisplay.jsx";
 import { PerformanceRadar } from "./components/PerformanceRadar.jsx";
 import { ToolkitSection } from "./components/ToolkitSection.jsx";
 import { JudgeDeepDives } from "./components/JudgeDeepDives.jsx";
@@ -1166,10 +1165,9 @@ export default function PreviewPanel() {
                 + signal bars entirely. */}
             {isFinished && synthesisStatus === "ready" && synthesis && (
               <>
-                <VerdictPanel synthesis={synthesis} results={judgeResults} onJumpToJudge={jumpToJudge} />
+                <VerdictPanel synthesis={synthesis} results={judgeResults} scoreDisplay={scoreDisplay} onJumpToJudge={jumpToJudge} />
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
-                <ScoreDisplay scoreDisplay={scoreDisplay} />
                 <PerformanceRadar results={judgeResults} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />

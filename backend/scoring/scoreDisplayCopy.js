@@ -4,9 +4,9 @@
 //
 //   1. BASELINE-RELATIVE FRAMING ONLY. Always phrase results relative to a
 //      pool (this niche's recent videos, the app's recent videos, the
-//      creator's own history) -- "Top 24% in Fitness," never an absolute
-//      quality claim ("this is a great video"). The model predicts relative
-//      standing, not quality.
+//      creator's own history) -- "Beats 71% of Fitness videos," never an
+//      absolute quality claim ("this is a great video"). The model predicts
+//      relative standing, not quality.
 //
 //   2. NO CAUSAL DURATION ADVICE, ANYWHERE. duration_secs is a feature the
 //      model conditions on; it is not causal guidance. Never write or imply
@@ -14,35 +14,37 @@
 //
 // Anyone adding a new string to this file must satisfy both rules above.
 //
-// Percentiles are ALWAYS rendered as integers (Math.round) -- never decimals,
-// per Phase B3b Task 3. `poolSize` in the *Sub helpers below is the actual
-// number of videos in the pool used, which may be well under the pool's
-// window ceiling for a thin niche (e.g. Myth Busting, ~24 corpus rows —
-// see PHASEB3B_READOUT.md Task 1) -- the sub-line must say what was actually
-// used, not the theoretical window size.
-
-function topPct(percentile) {
-  if (percentile == null) return null;
-  return Math.round(100 - percentile);
-}
+// Percentiles are ALWAYS rendered as integers (Math.round, done upstream in
+// percentilePools.js) -- never decimals.
+//
+// FRAMING NOTE (fixed after a real bug report): this file used to render
+// "Top N%" (N = 100 - percentile). That inverts at the low end of the
+// distribution -- a video that is literally the WORST in its pool has
+// percentile=0, so N=100, producing "Top 100%," which reads as an
+// impressive result to anyone unfamiliar with the arithmetic (bigger number
+// looks like "more top-tier"), when it actually means the opposite. Direct
+// percentile framing ("Beats N% of...") has no such inversion: 0 always
+// reads as bad, 100 always reads as good, at every point in the range.
 
 export const SCORE_DISPLAY_COPY = {
-  // "Top 24% in Fitness"
-  predictHeadline: (nichePercentile, objective) => {
-    const t = topPct(nichePercentile);
-    return t == null
+  // "Beats 71% of Fitness videos"
+  predictHeadline: (nichePercentile, objective) =>
+    nichePercentile == null
       ? "This video's predicted score is still being calibrated for your niche."
-      : `Top ${t}% in ${objective}`;
-  },
-  // "vs the last 100 Fitness videos we've scored"
+      : `Beats ${Math.round(nichePercentile)}% of ${objective} videos`,
+
+  // "vs the last 100 Fitness videos we've scored" -- poolSize is the fixed
+  // window ceiling (100/1,000), not the self-excluded count used internally
+  // for the percentile math itself; see scoreDisplay.js for why those two
+  // numbers are deliberately different.
   predictSub: (objective, poolSize) =>
     poolSize ? `vs the last ${poolSize} ${objective} videos we've scored` : null,
 
-  // "Top 31% of the last 1,000 videos we've scored"
-  overallAppHeadline: (overallAppPercentile, poolSize) => {
-    const t = topPct(overallAppPercentile);
-    return t == null ? null : `Top ${t}% of the last ${poolSize} videos we've scored`;
-  },
+  // "Beats 68% of the last 1,000 videos we've scored"
+  overallAppHeadline: (overallAppPercentile, poolSize) =>
+    overallAppPercentile == null
+      ? null
+      : `Beats ${Math.round(overallAppPercentile)}% of the last ${poolSize} videos we've scored`,
 
   // personal is { type: "ordinal", rank, total } | { type: "percentile", value } | null
   personalHeadline: (personal) => {
@@ -50,8 +52,7 @@ export const SCORE_DISPLAY_COPY = {
     if (personal.type === "ordinal") {
       return `You rank ${ordinal(personal.rank)} out of your last ${personal.total} videos`;
     }
-    const t = topPct(personal.value);
-    return t == null ? null : `Top ${t}% of your own videos`;
+    return `Beats ${Math.round(personal.value)}% of your own videos`;
   },
 
   // Shown once, as an info-tooltip trigger next to the niche/overall rows
