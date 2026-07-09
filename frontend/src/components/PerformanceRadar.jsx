@@ -2,16 +2,24 @@ import { useState } from "react";
 import { B, JUDGES } from "../brand.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Part B — Performance radar (one hexagon, six axes). Replaces the old per-judge
-// signal bar charts (do NOT render those bars alongside this).
+// Part B — Performance radar. Phase B4, Task 4: redesigned so its axes are
+// exactly the dims that carry nonzero weight in the scoring model (per
+// scoring_spec_v2.json's coefficients) — "authentic" dropped (zero weight on
+// both judge and Claude sides; Task 1 verdict PRUNABLE), and the old
+// hook_strength/completion_likelihood/share_save_worthiness/platform-specific
+// dims dropped too (none ever had model weight; that was a separate, useful
+// UI concept but not what this chart is for now). Claude-side "polished" is
+// NOT included: it's a single C_dims-extracted value with no natural
+// per-judge breakdown, so it doesn't fit this chart's panel-average +
+// ghosted-per-judge-lines structure "sensibly" (the explicit bar Task 4 set
+// for including it) — flagged in PHASEB4_READOUT.md as a deliberate
+// exclusion, not an oversight.
 //
-// Axes = 3 universal dims + the 2 platform-specific dims actually present in the
-// judge data + Objective Fit. Field names are the REAL ones from .results[id].data
-// (confirmed against live judge output):
-//   hook_strength, completion_likelihood, share_save_worthiness,
-//   {rewatch_potential|seo_strength} (TikTok) / {watch_time_potential|
-//   swipe_resistance} (YouTube) / {dm_share_potential|originality} (Instagram),
-//   objective_fit.score
+// Field names read from .results[id].data.dimensions.big_picture[key] (the
+// REAL judge output shape). Works identically for v1 rows and v2 rows: v1's
+// big_picture object has 10 keys (including "authentic"), v2 has 9 — this
+// component only ever reads the 9 it cares about, so no version check and no
+// data migration are needed.
 //
 //   • Bold panel-AVERAGE polygon (present judges only) — ALWAYS prominent, no fill.
 //   • Per-judge thin color lines — GHOSTED by default (the judges nearly coincide
@@ -22,34 +30,33 @@ import { B, JUDGES } from "../brand.js";
 //   • Graceful: no per-judge dimension data -> renders nothing.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const UNIVERSAL = [
-  { key: "hook_strength", label: "Hook" },
-  { key: "completion_likelihood", label: "Completion" },
-  { key: "share_save_worthiness", label: "Share/Save" },
-];
-const PLATFORM_DIMS = [
-  { key: "rewatch_potential", label: "Rewatch" },
-  { key: "seo_strength", label: "SEO" },
-  { key: "watch_time_potential", label: "Watch Time" },
-  { key: "swipe_resistance", label: "Swipe Resist" },
-  { key: "dm_share_potential", label: "DM Share" },
-  { key: "originality", label: "Originality" },
+const BIG_PICTURE_AXES = [
+  { key: "compelling", label: "Compelling" },
+  { key: "emotionally_resonant", label: "Emotional" },
+  { key: "emotion_intensity", label: "Intensity" },
+  { key: "funny", label: "Funny" },
+  { key: "novel", label: "Novel" },
+  { key: "relatable", label: "Relatable" },
+  { key: "surprising", label: "Surprising" },
+  { key: "useful", label: "Useful" },
+  { key: "visually_engaging", label: "Visual" },
 ];
 
-// Dimension explanations (verbatim from PreviewPanel.jsx DIMENSION_META). Keyed by
-// dimension key; the active 6 axes vary by platform, so the info panel shows
-// whichever axes are currently plotted.
+// Dimension explanations. Every entry obeys the same two hard rules as the
+// score-display copy (scoreDisplayCopy.js): baseline-relative/correlational
+// framing only ("videos that... tend to..."), never an absolute or causal
+// claim; no duration/length advice anywhere.
 const DIMENSION_INFO = {
-  hook_strength: `Research across TikTok, Instagram, and YouTube consistently identifies the first 3 seconds as the single most predictive factor for video performance. Platform algorithms measure what percentage of viewers continue past this threshold — on TikTok, videos need ~70% of viewers to pass the 3-second mark to receive broad distribution. A strong hook uses a pattern interrupt, curiosity gap, bold claim, direct question, or immediate visual action to prevent the scroll reflex. Videos that open with slow builds, logos, or greetings are algorithmically penalized before the content even begins.`,
-  completion_likelihood: `Completion rate — the percentage of viewers who watch to the end — is weighted at 40-50% of TikTok's ranking algorithm and is the #1 confirmed factor for Instagram Reels distribution. Platforms use completion as a proxy for content quality: if people finish watching, the content delivered on its promise. Completion is driven by consistent pacing (no dead air or slow sections), a clear value proposition established in the hook, and an ending that feels earned rather than abrupt. Editing with a "value-per-second" mindset — ensuring each 5-8 second block delivers new information, emotion, or visual novelty — is the most reliable method for improving completion.`,
-  share_save_worthiness: `Shares and saves are the deepest engagement signals available to platform algorithms — they indicate that content delivered enough value for a viewer to act beyond passive watching. On Instagram, DM shares (sending a Reel to a friend) are weighted 3-5x higher than likes by the ranking algorithm. On TikTok, saves and shares now outrank likes as distribution signals. Content gets shared when it triggers a "I need to send this to someone" reaction — usually through humor, surprise, emotional resonance, or highly practical value. Content gets saved when it is reference-worthy — a tutorial, a recipe, an insight someone wants to return to.`,
-  rewatch_potential: `TikTok's algorithm heavily weights re-watch events — when a user watches a video multiple times in succession, it registers as one of the strongest possible signals of genuine engagement. The platform interprets re-watches as evidence that the content is either entertaining enough to experience again or complex enough to require a second viewing. Videos that loop seamlessly (where the end connects naturally back to the beginning, making the restart unnoticeable) capture re-watches passively without requiring the viewer to consciously choose to replay. Re-watch rate is particularly impactful because it is a subconscious behavior that the algorithm treats as a high-confidence quality signal.`,
-  seo_strength: `TikTok has functioned increasingly as a search engine since 2024, with approximately 40% of Gen Z preferring TikTok over Google for certain searches. The platform's algorithm scans captions, on-screen text overlays, and spoken audio (via automatic transcription) for keyword relevance, matching content to user search queries. Videos optimized for TikTok SEO — using searchable keywords naturally in all three locations — receive both algorithmic distribution via the For You Page and direct search traffic. This dual distribution channel makes keyword presence a compounding advantage: the same video benefits from recommendation and search simultaneously.`,
-  dm_share_potential: `Direct message shares — when a viewer sends a Reel to someone via Instagram DM — are the single strongest signal in Instagram's ranking algorithm for reaching new audiences. The algorithm weights DM shares at 3-5x the value of a like because they represent a deliberate, high-intent action: the viewer saw enough value in the content to personally recommend it to someone they know. Content that triggers the "I need to send this to [specific person]" reaction — through humor, relatability, practical value, or emotional resonance — consistently outperforms content that earns passive likes.`,
-  originality: `In December 2025, Instagram made its largest algorithmic shift in years: original content creators saw 40-60% increases in reach while accounts reposting or aggregating content from other platforms saw 60-80% reach collapses. The platform's AI now actively identifies and penalizes watermarked content (videos downloaded from TikTok or other platforms and re-uploaded) and rewards content that appears to be filmed and produced natively. Beyond watermarks, the algorithm uses visual and audio fingerprinting to identify repurposed content. Originality is scored here based on visual and production cues that suggest native creation versus content that appears derivative or recycled.`,
-  watch_time_potential: `YouTube's algorithm prioritizes two distinct watch time metrics: relative watch time (the percentage of a video watched) and absolute watch time (the total minutes spent watching). Both are used because they capture different quality signals — relative watch time rewards content that retains viewers proportionally, while absolute watch time rewards content that keeps viewers engaged for longer total durations. Research shows that 2-3 minute YouTube Shorts achieve the strongest combined performance across both metrics. The algorithm also measures session depth — whether a viewer continues watching additional videos after yours — rewarding content that creates momentum rather than ending a viewing session.`,
-  swipe_resistance: `YouTube Shorts viewers decide within the first 0.5–1 seconds whether to swipe past. Swipe Resistance scores how well this video holds attention in that critical window — based on opening-frame visual hook strength, sound or music impact in the first second, motion or movement that immediately captures attention, clarity of subject (the viewer instantly understands what they're watching), and the absence of slow-build openings that bleed viewers before the content begins.`,
-  objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance. A high score means the video clearly delivers on its stated objective; a low score means it misses the mark.`,
+  compelling: `Whether the video commands attention without the viewer having to work for it — no slow ramp-up, no wasted setup before something happens. In our data, videos judged more compelling tend to hold viewers further in and tend to get shared more.`,
+  emotionally_resonant: `Whether the video actually moves the viewer — makes them feel something, not just observe it. Videos that create a genuine emotional reaction tend to be shared and saved more than videos that only inform or entertain passively.`,
+  emotion_intensity: `How intense or "loud" the emotions depicted in the video are, regardless of which emotion — calm and neutral videos score low, dramatic or ecstatic ones score high. This describes the content itself, not a judgment that either end of the scale is better.`,
+  funny: `Whether the video produces genuine humor, not just an attempt at it. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
+  novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
+  relatable: `Whether the video speaks to something specific in the viewer's own life or experience. Relatable content tends to get shared directly to a specific person, rather than posted generally.`,
+  surprising: `Whether the video subverts what the viewer expects, in a way that lands. Content that plays with expectation tends to hold attention longer and get rewatched more.`,
+  useful: `Whether the viewer walks away with something concrete — information, a technique, an idea they can use. Useful content tends to be saved for later far more than it's liked.`,
+  visually_engaging: `Whether the imagery itself rewards looking, independent of what's being said. Visually engaging content tends to perform well even without sound, which matters since many viewers watch muted.`,
+  objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
 };
 
 const CX = 160, CY = 150, R = 88;
@@ -58,7 +65,7 @@ const AVG = "#1F1B16"; // bold near-black for the panel average
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 function judgeAxisValue(data, axis) {
   if (axis.key === "__objfit") return num(data?.objective_fit?.score);
-  return num(data?.dimensions?.[axis.key]);
+  return num(data?.dimensions?.big_picture?.[axis.key]);
 }
 
 export function PerformanceRadar({ results }) {
@@ -71,10 +78,7 @@ export function PerformanceRadar({ results }) {
   const presentIds = new Set(present.map((x) => x.judge.id));
   if (present.length === 0) return null;
 
-  const platform = PLATFORM_DIMS.filter((pd) =>
-    present.some((x) => num(x.data?.dimensions?.[pd.key]) != null)
-  ).slice(0, 2);
-  const axes = [...UNIVERSAL, ...platform, { key: "__objfit", label: "Objective Fit" }];
+  const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }];
 
   if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a) != null))) return null;
 
@@ -97,22 +101,22 @@ export function PerformanceRadar({ results }) {
 
       <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: 20,
         boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)", padding: "12px 16px 12px" }}>
-        <div style={{ fontSize: 11, color: B.grey }}>Each judge across six signals, 0–10.</div>
+        <div style={{ fontSize: 11, color: B.grey }}>Each judge across the factors our scoring model weighs, 0–10.</div>
 
-        <svg viewBox="0 28 320 246" style={{ width: "100%", maxWidth: 330, height: "auto", display: "block", margin: "0 auto" }}>
+        <svg viewBox="-6 8 332 286" style={{ width: "100%", maxWidth: 330, height: "auto", display: "block", margin: "0 auto" }}>
           {[2, 4, 6, 8, 10].map((g) => (
             <polygon key={g} points={axes.map((_, i) => pt(i, g).map((n) => n.toFixed(1)).join(",")).join(" ")}
               fill="none" stroke={B.border} strokeWidth={g === 10 ? 1.4 : 1} />
           ))}
           {axes.map((a, i) => {
-            const sp = pt(i, 10), lp = pt(i, 12.2);
+            const sp = pt(i, 10), lp = pt(i, 12.6);
             const anchor = Math.abs(lp[0] - CX) < 6 ? "middle" : lp[0] > CX ? "start" : "end";
             const dy = lp[1] < CY - 10 ? -2 : lp[1] > CY + 10 ? 9 : 3;
             return (
               <g key={a.key}>
                 <line x1={CX} y1={CY} x2={sp[0]} y2={sp[1]} stroke={B.border} strokeWidth="1" />
                 <text x={lp[0].toFixed(1)} y={(lp[1] + dy).toFixed(1)} fontFamily="Montserrat, sans-serif"
-                  fontSize="9.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>{a.label}</text>
+                  fontSize="8.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>{a.label}</text>
               </g>
             );
           })}
@@ -187,7 +191,7 @@ export function PerformanceRadar({ results }) {
           })}
         </div>
 
-        {/* one tappable explainer for ALL six signals (the active axes vary by platform) */}
+        {/* one tappable explainer for all signals shown */}
         <button type="button" onClick={() => setShowInfo((s) => !s)}
           style={{ display: "flex", alignItems: "center", gap: 6, margin: "10px auto 0", background: B.bg,
             border: `1px solid ${B.border}`, borderRadius: 999, padding: "6px 12px", cursor: "pointer",
