@@ -1,0 +1,946 @@
+{
+  "version": "scoring_spec_v2",
+  "generated_from": "capstone_model_artifact_v2.pkl (read-only, never modified)",
+  "feature_order": [
+    "critic_score",
+    "trendsetter_score",
+    "connector_score",
+    "avg_score",
+    "objfit_consensus",
+    "jc_funny",
+    "jc_compelling",
+    "jc_authentic",
+    "jc_novel",
+    "jc_visually_engaging",
+    "jc_emotionally_resonant",
+    "jc_useful",
+    "jc_surprising",
+    "jc_relatable",
+    "jd_funny",
+    "jd_compelling",
+    "jd_authentic",
+    "jd_novel",
+    "jd_visually_engaging",
+    "jd_emotionally_resonant",
+    "jd_useful",
+    "jd_surprising",
+    "jd_relatable",
+    "jc_emotion_intensity",
+    "jd_emotion_intensity",
+    "tiktok_rewatch_potential",
+    "tiktok_seo_strength",
+    "cl_big_funny",
+    "cl_big_compelling",
+    "cl_big_authentic",
+    "cl_big_novel",
+    "cl_big_visually_engaging",
+    "cl_big_emotionally_resonant",
+    "cl_big_useful",
+    "cl_big_surprising",
+    "cl_big_relatable",
+    "cl_big_polished",
+    "hook_strength_visual",
+    "hook_strength_audio",
+    "emotion_primary_intensity",
+    "emotion_secondary_intensity",
+    "trending_topic_likelihood",
+    "trending_alignment_signals",
+    "cover_text_promises_value",
+    "is_sponsored_int",
+    "has_brand_mention_int",
+    "risk_any",
+    "risk_any__miss",
+    "cta_present",
+    "direct_address",
+    "audio_likely_trending",
+    "caption_tone_conversational",
+    "caption_tone_educational",
+    "caption_tone_entertaining",
+    "caption_tone_inspirational",
+    "caption_tone_promotional",
+    "caption_tone_infrequent_sklearn",
+    "hook_style_claim",
+    "hook_style_pattern_interrupt",
+    "hook_style_question",
+    "hook_style_story",
+    "hook_style_visual_promise",
+    "hook_style_infrequent_sklearn",
+    "cta_type_buy",
+    "cta_type_comment",
+    "cta_type_follow",
+    "cta_type_link",
+    "cta_type_none",
+    "cta_type_save",
+    "cta_type_infrequent_sklearn",
+    "emotion_targeted_awe",
+    "emotion_targeted_curiosity",
+    "emotion_targeted_empathy",
+    "emotion_targeted_frustration",
+    "emotion_targeted_humor",
+    "emotion_targeted_inspiration",
+    "emotion_targeted_joy",
+    "emotion_targeted_neutral",
+    "emotion_targeted_nostalgia",
+    "emotion_targeted_urgency",
+    "emotion_targeted_infrequent_sklearn",
+    "emotion_primary_awe",
+    "emotion_primary_curiosity",
+    "emotion_primary_empathy",
+    "emotion_primary_frustration",
+    "emotion_primary_humor",
+    "emotion_primary_inspiration",
+    "emotion_primary_joy",
+    "emotion_primary_neutral",
+    "emotion_primary_nostalgia",
+    "emotion_primary_urgency",
+    "emotion_primary_infrequent_sklearn",
+    "text_overlay_density_heavy",
+    "text_overlay_density_moderate",
+    "text_overlay_density_none",
+    "text_overlay_density_sparse",
+    "text_overlay_density_infrequent_sklearn",
+    "text_overlay_role_captions",
+    "text_overlay_role_emphasis",
+    "text_overlay_role_jokes",
+    "text_overlay_role_narrative",
+    "text_overlay_role_none",
+    "text_overlay_role_infrequent_sklearn",
+    "specificity_specific",
+    "specificity_vague",
+    "specificity_infrequent_sklearn",
+    "emotion_combination_curiosity_delight",
+    "emotion_combination_curiosity_humor",
+    "emotion_combination_curiosity_inspiration",
+    "emotion_combination_frustration_humor",
+    "emotion_combination_humor_joy",
+    "emotion_combination_inspiring_curiosity",
+    "emotion_combination_joy_inspiration",
+    "emotion_combination_joy_nostalgia",
+    "emotion_combination_other",
+    "duration_secs"
+  ],
+  "numeric_standardization": {
+    "critic_score": {
+      "median": 7.0,
+      "sd": 1.1452588127704586,
+      "has_missing_indicator": false
+    },
+    "trendsetter_score": {
+      "median": 7.0,
+      "sd": 1.307383178227826,
+      "has_missing_indicator": false
+    },
+    "connector_score": {
+      "median": 7.0,
+      "sd": 1.3930326581715708,
+      "has_missing_indicator": false
+    },
+    "avg_score": {
+      "median": 7.0,
+      "sd": 1.1866591759605893,
+      "has_missing_indicator": false
+    },
+    "objfit_consensus": {
+      "median": 8.333333333333334,
+      "sd": 1.7242570496594232,
+      "has_missing_indicator": false
+    },
+    "jc_funny": {
+      "median": 3.3333333333333335,
+      "sd": 1.6096242515047623,
+      "has_missing_indicator": false
+    },
+    "jc_compelling": {
+      "median": 7.0,
+      "sd": 1.3772664022191612,
+      "has_missing_indicator": false
+    },
+    "jc_authentic": {
+      "median": 8.0,
+      "sd": 1.1017447196817105,
+      "has_missing_indicator": false
+    },
+    "jc_novel": {
+      "median": 5.666666666666667,
+      "sd": 1.421477508615222,
+      "has_missing_indicator": false
+    },
+    "jc_visually_engaging": {
+      "median": 6.666666666666667,
+      "sd": 1.5533959153334456,
+      "has_missing_indicator": false
+    },
+    "jc_emotionally_resonant": {
+      "median": 6.0,
+      "sd": 1.436382665056682,
+      "has_missing_indicator": false
+    },
+    "jc_useful": {
+      "median": 7.0,
+      "sd": 2.669798420059993,
+      "has_missing_indicator": false
+    },
+    "jc_surprising": {
+      "median": 5.0,
+      "sd": 1.6195206897197574,
+      "has_missing_indicator": false
+    },
+    "jc_relatable": {
+      "median": 7.333333333333333,
+      "sd": 1.4155693277904857,
+      "has_missing_indicator": false
+    },
+    "jd_funny": {
+      "median": 0.5773502691896258,
+      "sd": 0.559583311893508,
+      "has_missing_indicator": false
+    },
+    "jd_compelling": {
+      "median": 0.5773502691896258,
+      "sd": 0.5165545576247927,
+      "has_missing_indicator": false
+    },
+    "jd_authentic": {
+      "median": 0.5773502691896257,
+      "sd": 0.4386460159908406,
+      "has_missing_indicator": false
+    },
+    "jd_novel": {
+      "median": 0.5773502691896258,
+      "sd": 0.5359995381600493,
+      "has_missing_indicator": false
+    },
+    "jd_visually_engaging": {
+      "median": 0.5773502691896258,
+      "sd": 0.5485066851735474,
+      "has_missing_indicator": false
+    },
+    "jd_emotionally_resonant": {
+      "median": 1.0,
+      "sd": 0.5934864396287133,
+      "has_missing_indicator": false
+    },
+    "jd_useful": {
+      "median": 0.5773502691896258,
+      "sd": 0.6014584261390746,
+      "has_missing_indicator": false
+    },
+    "jd_surprising": {
+      "median": 0.5773502691896258,
+      "sd": 0.5875088676578258,
+      "has_missing_indicator": false
+    },
+    "jd_relatable": {
+      "median": 0.5773502691896258,
+      "sd": 0.6514659113321833,
+      "has_missing_indicator": false
+    },
+    "jc_emotion_intensity": {
+      "median": 5.0,
+      "sd": 1.3835494841965144,
+      "has_missing_indicator": false
+    },
+    "jd_emotion_intensity": {
+      "median": 0.5773502691896258,
+      "sd": 0.49916711686821524,
+      "has_missing_indicator": false
+    },
+    "tiktok_rewatch_potential": {
+      "median": 6.0,
+      "sd": 1.2198072796253243,
+      "has_missing_indicator": false
+    },
+    "tiktok_seo_strength": {
+      "median": 6.0,
+      "sd": 2.047628599979716,
+      "has_missing_indicator": false
+    },
+    "cl_big_funny": {
+      "median": 2.0,
+      "sd": 1.9267788054235073,
+      "has_missing_indicator": false
+    },
+    "cl_big_compelling": {
+      "median": 5.0,
+      "sd": 0.857756711808109,
+      "has_missing_indicator": false
+    },
+    "cl_big_authentic": {
+      "median": 6.0,
+      "sd": 0.8018752570484204,
+      "has_missing_indicator": false
+    },
+    "cl_big_novel": {
+      "median": 4.0,
+      "sd": 0.9869484501322882,
+      "has_missing_indicator": false
+    },
+    "cl_big_visually_engaging": {
+      "median": 4.0,
+      "sd": 1.40474559052343,
+      "has_missing_indicator": false
+    },
+    "cl_big_emotionally_resonant": {
+      "median": 5.0,
+      "sd": 1.0761363699701803,
+      "has_missing_indicator": false
+    },
+    "cl_big_useful": {
+      "median": 5.0,
+      "sd": 2.384618603643312,
+      "has_missing_indicator": false
+    },
+    "cl_big_surprising": {
+      "median": 4.0,
+      "sd": 1.201220572072674,
+      "has_missing_indicator": false
+    },
+    "cl_big_relatable": {
+      "median": 6.0,
+      "sd": 1.1771091484428462,
+      "has_missing_indicator": false
+    },
+    "cl_big_polished": {
+      "median": 5.0,
+      "sd": 1.1868391550144082,
+      "has_missing_indicator": false
+    },
+    "hook_strength_visual": {
+      "median": 3.0,
+      "sd": 0.691150938390044,
+      "has_missing_indicator": false
+    },
+    "hook_strength_audio": {
+      "median": 3.0,
+      "sd": 0.5781500770949712,
+      "has_missing_indicator": false
+    },
+    "emotion_primary_intensity": {
+      "median": 4.0,
+      "sd": 0.5379510858532033,
+      "has_missing_indicator": false
+    },
+    "emotion_secondary_intensity": {
+      "median": 3.0,
+      "sd": 0.5505568348001821,
+      "has_missing_indicator": false
+    },
+    "trending_topic_likelihood": {
+      "median": 5.0,
+      "sd": 0.8874879944043857,
+      "has_missing_indicator": false
+    },
+    "trending_alignment_signals": {
+      "median": 3.0,
+      "sd": 0.802466987691729,
+      "has_missing_indicator": false
+    },
+    "cover_text_promises_value": {
+      "median": 0.0,
+      "sd": 0.46366577142902154,
+      "has_missing_indicator": false
+    },
+    "is_sponsored_int": {
+      "median": 0.0,
+      "sd": 0.32927948273508056,
+      "has_missing_indicator": false
+    },
+    "has_brand_mention_int": {
+      "median": 0.0,
+      "sd": 0.3891068931079624,
+      "has_missing_indicator": false
+    },
+    "risk_any": {
+      "median": 0.0,
+      "sd": 0.2528692063736526,
+      "has_missing_indicator": true
+    },
+    "duration_secs": {
+      "median": 53.0,
+      "sd": 58.25479879081585,
+      "has_missing_indicator": false
+    }
+  },
+  "boolean_passthrough_columns": [
+    "cta_present",
+    "direct_address",
+    "audio_likely_trending"
+  ],
+  "categorical_encoders": {
+    "caption_tone": {
+      "category_to_column": {
+        "conversational": "caption_tone_conversational",
+        "educational": "caption_tone_educational",
+        "entertaining": "caption_tone_entertaining",
+        "inspirational": "caption_tone_inspirational",
+        "promotional": "caption_tone_promotional",
+        "NA": "caption_tone_infrequent_sklearn",
+        "aesthetic": "caption_tone_infrequent_sklearn",
+        "informational": "caption_tone_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "caption_tone_conversational",
+        "caption_tone_educational",
+        "caption_tone_entertaining",
+        "caption_tone_inspirational",
+        "caption_tone_promotional",
+        "caption_tone_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "hook_style": {
+      "category_to_column": {
+        "claim": "hook_style_claim",
+        "pattern_interrupt": "hook_style_pattern_interrupt",
+        "question": "hook_style_question",
+        "story": "hook_style_story",
+        "visual_promise": "hook_style_visual_promise",
+        "none": "hook_style_infrequent_sklearn",
+        "NA": "hook_style_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "hook_style_claim",
+        "hook_style_pattern_interrupt",
+        "hook_style_question",
+        "hook_style_story",
+        "hook_style_visual_promise",
+        "hook_style_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "cta_type": {
+      "category_to_column": {
+        "buy": "cta_type_buy",
+        "comment": "cta_type_comment",
+        "follow": "cta_type_follow",
+        "link": "cta_type_link",
+        "none": "cta_type_none",
+        "save": "cta_type_save",
+        "NA": "cta_type_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "cta_type_buy",
+        "cta_type_comment",
+        "cta_type_follow",
+        "cta_type_link",
+        "cta_type_none",
+        "cta_type_save",
+        "cta_type_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "emotion_targeted": {
+      "category_to_column": {
+        "awe": "emotion_targeted_awe",
+        "curiosity": "emotion_targeted_curiosity",
+        "empathy": "emotion_targeted_empathy",
+        "frustration": "emotion_targeted_frustration",
+        "humor": "emotion_targeted_humor",
+        "inspiration": "emotion_targeted_inspiration",
+        "joy": "emotion_targeted_joy",
+        "neutral": "emotion_targeted_neutral",
+        "nostalgia": "emotion_targeted_nostalgia",
+        "urgency": "emotion_targeted_urgency",
+        "fear": "emotion_targeted_infrequent_sklearn",
+        "anger": "emotion_targeted_infrequent_sklearn",
+        "NA": "emotion_targeted_infrequent_sklearn",
+        "sadness": "emotion_targeted_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "emotion_targeted_awe",
+        "emotion_targeted_curiosity",
+        "emotion_targeted_empathy",
+        "emotion_targeted_frustration",
+        "emotion_targeted_humor",
+        "emotion_targeted_inspiration",
+        "emotion_targeted_joy",
+        "emotion_targeted_neutral",
+        "emotion_targeted_nostalgia",
+        "emotion_targeted_urgency",
+        "emotion_targeted_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "emotion_primary": {
+      "category_to_column": {
+        "awe": "emotion_primary_awe",
+        "curiosity": "emotion_primary_curiosity",
+        "empathy": "emotion_primary_empathy",
+        "frustration": "emotion_primary_frustration",
+        "humor": "emotion_primary_humor",
+        "inspiration": "emotion_primary_inspiration",
+        "joy": "emotion_primary_joy",
+        "neutral": "emotion_primary_neutral",
+        "nostalgia": "emotion_primary_nostalgia",
+        "urgency": "emotion_primary_urgency",
+        "fear": "emotion_primary_infrequent_sklearn",
+        "anger": "emotion_primary_infrequent_sklearn",
+        "NA": "emotion_primary_infrequent_sklearn",
+        "sadness": "emotion_primary_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "emotion_primary_awe",
+        "emotion_primary_curiosity",
+        "emotion_primary_empathy",
+        "emotion_primary_frustration",
+        "emotion_primary_humor",
+        "emotion_primary_inspiration",
+        "emotion_primary_joy",
+        "emotion_primary_neutral",
+        "emotion_primary_nostalgia",
+        "emotion_primary_urgency",
+        "emotion_primary_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "text_overlay_density": {
+      "category_to_column": {
+        "heavy": "text_overlay_density_heavy",
+        "moderate": "text_overlay_density_moderate",
+        "none": "text_overlay_density_none",
+        "sparse": "text_overlay_density_sparse",
+        "NA": "text_overlay_density_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "text_overlay_density_heavy",
+        "text_overlay_density_moderate",
+        "text_overlay_density_none",
+        "text_overlay_density_sparse",
+        "text_overlay_density_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "text_overlay_role": {
+      "category_to_column": {
+        "captions": "text_overlay_role_captions",
+        "emphasis": "text_overlay_role_emphasis",
+        "jokes": "text_overlay_role_jokes",
+        "narrative": "text_overlay_role_narrative",
+        "none": "text_overlay_role_none",
+        "NA": "text_overlay_role_infrequent_sklearn",
+        "multi": "text_overlay_role_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "text_overlay_role_captions",
+        "text_overlay_role_emphasis",
+        "text_overlay_role_jokes",
+        "text_overlay_role_narrative",
+        "text_overlay_role_none",
+        "text_overlay_role_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "specificity": {
+      "category_to_column": {
+        "specific": "specificity_specific",
+        "vague": "specificity_vague",
+        "NA": "specificity_infrequent_sklearn"
+      },
+      "all_output_columns": [
+        "specificity_specific",
+        "specificity_vague",
+        "specificity_infrequent_sklearn"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)"
+    },
+    "emotion_combination": {
+      "category_to_column": {
+        "curiosity_delight": "emotion_combination_curiosity_delight",
+        "curiosity_humor": "emotion_combination_curiosity_humor",
+        "curiosity_inspiration": "emotion_combination_curiosity_inspiration",
+        "frustration_humor": "emotion_combination_frustration_humor",
+        "humor_joy": "emotion_combination_humor_joy",
+        "inspiring_curiosity": "emotion_combination_inspiring_curiosity",
+        "joy_inspiration": "emotion_combination_joy_inspiration",
+        "joy_nostalgia": "emotion_combination_joy_nostalgia",
+        "other": "emotion_combination_other"
+      },
+      "all_output_columns": [
+        "emotion_combination_curiosity_delight",
+        "emotion_combination_curiosity_humor",
+        "emotion_combination_curiosity_inspiration",
+        "emotion_combination_frustration_humor",
+        "emotion_combination_humor_joy",
+        "emotion_combination_inspiring_curiosity",
+        "emotion_combination_joy_inspiration",
+        "emotion_combination_joy_nostalgia",
+        "emotion_combination_other"
+      ],
+      "unseen_value_policy": "all-zero row (value not in category_to_column at all)",
+      "pre_remap_top8": [
+        "curiosity_delight",
+        "frustration_humor",
+        "curiosity_inspiration",
+        "curiosity_humor",
+        "joy_inspiration",
+        "joy_nostalgia",
+        "humor_joy",
+        "inspiring_curiosity"
+      ],
+      "pre_remap_rule": "NaN/null -> the string 'NA' first (same as every other categorical). Then: raw value (including 'NA' itself) NOT in pre_remap_top8 -> replaced with the string 'other'. There is NO exception for 'NA' -- if 'NA' is not itself one of the top-8 values in the training population, a missing emotion_combination maps to 'other', not to an unseen/all-zero row. (This exact case was the one bug the Task-2 parity gate caught -- see PHASEB1_READOUT.md.)"
+    }
+  },
+  "coefficients": {
+    "critic_score": 0.0042346870793849275,
+    "trendsetter_score": 0.0,
+    "connector_score": -0.0,
+    "avg_score": 0.0,
+    "objfit_consensus": 0.02853197678617618,
+    "jc_funny": 0.012214331654758687,
+    "jc_compelling": 0.0118010467029005,
+    "jc_authentic": 0.0,
+    "jc_novel": 0.027721466867883918,
+    "jc_visually_engaging": -0.02105109789713706,
+    "jc_emotionally_resonant": 0.020150539239194385,
+    "jc_useful": -0.030152421440141675,
+    "jc_surprising": -0.011071904333123564,
+    "jc_relatable": -0.01785489952138176,
+    "jd_funny": 0.009616085532035579,
+    "jd_compelling": 0.0,
+    "jd_authentic": -0.0,
+    "jd_novel": -0.0,
+    "jd_visually_engaging": 0.001391746532468988,
+    "jd_emotionally_resonant": -0.00437652746553464,
+    "jd_useful": -0.017418145769636576,
+    "jd_surprising": -0.007457170671618312,
+    "jd_relatable": -0.0004126915482354397,
+    "jc_emotion_intensity": 0.011979625407142874,
+    "jd_emotion_intensity": 0.004109231153724748,
+    "tiktok_rewatch_potential": -0.0,
+    "tiktok_seo_strength": -0.0,
+    "cl_big_funny": -0.003753958766598489,
+    "cl_big_compelling": 0.05615012604694028,
+    "cl_big_authentic": -0.00031339532271747455,
+    "cl_big_novel": 0.009156147400943844,
+    "cl_big_visually_engaging": 0.01399095831664176,
+    "cl_big_emotionally_resonant": 0.0042212962275455625,
+    "cl_big_useful": 0.04743831577855679,
+    "cl_big_surprising": -0.043109361526168205,
+    "cl_big_relatable": 0.004587535797193847,
+    "cl_big_polished": -0.007234352814647761,
+    "hook_strength_visual": 0.0075510909885349,
+    "hook_strength_audio": -0.0049564583023818925,
+    "emotion_primary_intensity": 0.0,
+    "emotion_secondary_intensity": 0.0,
+    "trending_topic_likelihood": 0.01377631960075876,
+    "trending_alignment_signals": 0.02088284649120138,
+    "cover_text_promises_value": -0.013466019967936105,
+    "is_sponsored_int": -0.07458327758335259,
+    "has_brand_mention_int": -0.0,
+    "risk_any": 0.01126439830928381,
+    "risk_any__miss": -0.0,
+    "cta_present": -0.012921138301931607,
+    "direct_address": 0.0,
+    "audio_likely_trending": -0.0,
+    "caption_tone_conversational": -0.0,
+    "caption_tone_educational": 0.029328382425468848,
+    "caption_tone_entertaining": -0.0,
+    "caption_tone_inspirational": 0.0,
+    "caption_tone_promotional": -0.09111063819118549,
+    "caption_tone_infrequent_sklearn": 0.0,
+    "hook_style_claim": 0.0,
+    "hook_style_pattern_interrupt": 0.0,
+    "hook_style_question": -0.0905513194054792,
+    "hook_style_story": -0.0038131844704280176,
+    "hook_style_visual_promise": 0.0,
+    "hook_style_infrequent_sklearn": 0.0,
+    "cta_type_buy": -0.05715069858782777,
+    "cta_type_comment": -0.0,
+    "cta_type_follow": 0.03680649050873866,
+    "cta_type_link": -0.03617476207235117,
+    "cta_type_none": -0.0,
+    "cta_type_save": 0.05411560799990646,
+    "cta_type_infrequent_sklearn": 0.0,
+    "emotion_targeted_awe": -0.0,
+    "emotion_targeted_curiosity": 0.0,
+    "emotion_targeted_empathy": -0.0,
+    "emotion_targeted_frustration": -0.0,
+    "emotion_targeted_humor": -0.0,
+    "emotion_targeted_inspiration": 0.05350627559849292,
+    "emotion_targeted_joy": -0.0,
+    "emotion_targeted_neutral": -0.0,
+    "emotion_targeted_nostalgia": 0.0,
+    "emotion_targeted_urgency": -0.0,
+    "emotion_targeted_infrequent_sklearn": 0.0,
+    "emotion_primary_awe": -0.0,
+    "emotion_primary_curiosity": 0.0,
+    "emotion_primary_empathy": -0.0,
+    "emotion_primary_frustration": -0.0,
+    "emotion_primary_humor": -0.0,
+    "emotion_primary_inspiration": 0.05350552531688969,
+    "emotion_primary_joy": -0.0,
+    "emotion_primary_neutral": -0.0,
+    "emotion_primary_nostalgia": 0.0,
+    "emotion_primary_urgency": -0.0,
+    "emotion_primary_infrequent_sklearn": 0.0,
+    "text_overlay_density_heavy": -0.025681519213934544,
+    "text_overlay_density_moderate": -0.005244492489050993,
+    "text_overlay_density_none": 0.011761475235285389,
+    "text_overlay_density_sparse": 0.0,
+    "text_overlay_density_infrequent_sklearn": 0.0,
+    "text_overlay_role_captions": -0.0,
+    "text_overlay_role_emphasis": -0.0,
+    "text_overlay_role_jokes": 0.0,
+    "text_overlay_role_narrative": -0.0,
+    "text_overlay_role_none": 0.021826702108255925,
+    "text_overlay_role_infrequent_sklearn": 0.0,
+    "specificity_specific": -0.05891853397048139,
+    "specificity_vague": 0.019952126085450394,
+    "specificity_infrequent_sklearn": 0.0,
+    "emotion_combination_curiosity_delight": 0.016752567061831945,
+    "emotion_combination_curiosity_humor": -0.0,
+    "emotion_combination_curiosity_inspiration": 0.13937717278322673,
+    "emotion_combination_frustration_humor": 0.0,
+    "emotion_combination_humor_joy": -0.0,
+    "emotion_combination_inspiring_curiosity": -0.0,
+    "emotion_combination_joy_inspiration": -0.0,
+    "emotion_combination_joy_nostalgia": -0.0,
+    "emotion_combination_other": -0.014810222782935643,
+    "duration_secs": 0.056633446594068826
+  },
+  "intercept": -0.015628974277818026,
+  "winsor_bounds": {
+    "lo": 0.11078402187595256,
+    "hi": 3.505625264996031
+  },
+  "duration_clamp_bounds": {
+    "p1": 5.0,
+    "p99": 273.22000000000025,
+    "note": "Training population's 1st/99th percentile of duration_secs; clamp raw duration_secs to [p1,p99] before standardizing, to bound extreme/erroneous durations at inference time."
+  },
+  "calibration": {
+    "per_feature_deltas": {
+      "critic_score": {
+        "mean_delta_raw": -0.8165938864628821,
+        "median_delta_raw": 0.0,
+        "training_sd": 1.1452588127704586,
+        "coefficient": 0.0042346870793849275,
+        "mean_delta_sd_units": -0.713021264152062,
+        "n": 687
+      },
+      "trendsetter_score": {
+        "mean_delta_raw": -1.2104499274310596,
+        "median_delta_raw": -1.0,
+        "training_sd": 1.307383178227826,
+        "coefficient": 0.0,
+        "mean_delta_sd_units": -0.9258570460359138,
+        "n": 689
+      },
+      "connector_score": {
+        "mean_delta_raw": -1.4753623188405798,
+        "median_delta_raw": -1.0,
+        "training_sd": 1.3930326581715708,
+        "coefficient": -0.0,
+        "mean_delta_sd_units": -1.0591010269472583,
+        "n": 690
+      },
+      "avg_score": {
+        "mean_delta_raw": -1.1646888567293778,
+        "median_delta_raw": -1.0,
+        "training_sd": 1.1866591759605893,
+        "coefficient": 0.0,
+        "mean_delta_sd_units": -0.9814855691707547,
+        "n": 691
+      },
+      "objfit_consensus": {
+        "mean_delta_raw": -1.5161601543656533,
+        "median_delta_raw": -1.0,
+        "training_sd": 1.7242570496594232,
+        "coefficient": 0.02853197678617618,
+        "mean_delta_sd_units": -0.8793121389094084,
+        "n": 691
+      },
+      "jc_funny": {
+        "mean_delta_raw": -0.5629522431259045,
+        "median_delta_raw": -0.666666666666667,
+        "training_sd": 1.6096242515047623,
+        "coefficient": 0.012214331654758687,
+        "mean_delta_sd_units": -0.3497414024419841,
+        "n": 691
+      },
+      "jc_compelling": {
+        "mean_delta_raw": -1.008924264351182,
+        "median_delta_raw": -0.666666666666667,
+        "training_sd": 1.3772664022191612,
+        "coefficient": 0.0118010467029005,
+        "mean_delta_sd_units": -0.7325556353698333,
+        "n": 691
+      },
+      "jc_authentic": {
+        "mean_delta_raw": -1.034249879401833,
+        "median_delta_raw": -0.9999999999999991,
+        "training_sd": 1.1017447196817105,
+        "coefficient": 0.0,
+        "mean_delta_sd_units": -0.9387382221360894,
+        "n": 691
+      },
+      "jc_novel": {
+        "mean_delta_raw": -1.239507959479016,
+        "median_delta_raw": -1.0000000000000004,
+        "training_sd": 1.421477508615222,
+        "coefficient": 0.027721466867883918,
+        "mean_delta_sd_units": -0.8719856290139423,
+        "n": 691
+      },
+      "jc_visually_engaging": {
+        "mean_delta_raw": -0.9814278822961892,
+        "median_delta_raw": -0.666666666666667,
+        "training_sd": 1.5533959153334456,
+        "coefficient": -0.02105109789713706,
+        "mean_delta_sd_units": -0.6317950707920588,
+        "n": 691
+      },
+      "jc_emotionally_resonant": {
+        "mean_delta_raw": -1.0458273034249879,
+        "median_delta_raw": -1.0,
+        "training_sd": 1.436382665056682,
+        "coefficient": 0.020150539239194385,
+        "mean_delta_sd_units": -0.7280979705945684,
+        "n": 691
+      },
+      "jc_useful": {
+        "mean_delta_raw": -1.4520019295706705,
+        "median_delta_raw": -1.0,
+        "training_sd": 2.669798420059993,
+        "coefficient": -0.030152421440141675,
+        "mean_delta_sd_units": -0.5438620079556578,
+        "n": 691
+      },
+      "jc_surprising": {
+        "mean_delta_raw": -0.3950795947901592,
+        "median_delta_raw": -0.33333333333333304,
+        "training_sd": 1.6195206897197574,
+        "coefficient": -0.011071904333123564,
+        "mean_delta_sd_units": -0.24394847024678884,
+        "n": 691
+      },
+      "jc_relatable": {
+        "mean_delta_raw": -0.7821997105643994,
+        "median_delta_raw": -0.6666666666666661,
+        "training_sd": 1.4155693277904857,
+        "coefficient": -0.01785489952138176,
+        "mean_delta_sd_units": -0.552568987762195,
+        "n": 691
+      },
+      "jd_funny": {
+        "mean_delta_raw": -0.3478721750859817,
+        "median_delta_raw": -0.42264973081037416,
+        "training_sd": 0.559583311893508,
+        "coefficient": 0.009616085532035579,
+        "mean_delta_sd_units": -0.6216628832422791,
+        "n": 691
+      },
+      "jd_compelling": {
+        "mean_delta_raw": -0.1372766800054082,
+        "median_delta_raw": 0.0,
+        "training_sd": 0.5165545576247927,
+        "coefficient": 0.0,
+        "mean_delta_sd_units": -0.26575446480741577,
+        "n": 691
+      },
+      "jd_authentic": {
+        "mean_delta_raw": -0.04329818161259065,
+        "median_delta_raw": 0.0,
+        "training_sd": 0.4386460159908406,
+        "coefficient": -0.0,
+        "mean_delta_sd_units": -0.09870870823888839,
+        "n": 691
+      },
+      "jd_novel": {
+        "mean_delta_raw": -0.14199260590778767,
+        "median_delta_raw": 0.0,
+        "training_sd": 0.5359995381600493,
+        "coefficient": -0.0,
+        "mean_delta_sd_units": -0.26491180644523005,
+        "n": 691
+      },
+      "jd_visually_engaging": {
+        "mean_delta_raw": -0.1384983622904166,
+        "median_delta_raw": 0.0,
+        "training_sd": 0.5485066851735474,
+        "coefficient": 0.001391746532468988,
+        "mean_delta_sd_units": -0.2525007735258427,
+        "n": 691
+      },
+      "jd_emotionally_resonant": {
+        "mean_delta_raw": -0.4196334724911879,
+        "median_delta_raw": -0.42264973081037427,
+        "training_sd": 0.5934864396287133,
+        "coefficient": -0.00437652746553464,
+        "mean_delta_sd_units": -0.7070649714485671,
+        "n": 691
+      },
+      "jd_useful": {
+        "mean_delta_raw": -0.22764787149012167,
+        "median_delta_raw": 0.0,
+        "training_sd": 0.6014584261390746,
+        "coefficient": -0.017418145769636576,
+        "mean_delta_sd_units": -0.3784931120700317,
+        "n": 691
+      },
+      "jd_surprising": {
+        "mean_delta_raw": -0.2987587740800289,
+        "median_delta_raw": -0.15470053837925168,
+        "training_sd": 0.5875088676578258,
+        "coefficient": -0.007457170671618312,
+        "mean_delta_sd_units": -0.508517897391177,
+        "n": 691
+      },
+      "jd_relatable": {
+        "mean_delta_raw": -0.2969240228856871,
+        "median_delta_raw": -0.42264973081037416,
+        "training_sd": 0.6514659113321833,
+        "coefficient": -0.0004126915482354397,
+        "mean_delta_sd_units": -0.45577829587200785,
+        "n": 691
+      },
+      "jc_emotion_intensity": {
+        "mean_delta_raw": 0.036420646406174616,
+        "median_delta_raw": 0.0,
+        "training_sd": 1.3835494841965144,
+        "coefficient": 0.011979625407142874,
+        "mean_delta_sd_units": 0.026324064894090598,
+        "n": 691
+      },
+      "jd_emotion_intensity": {
+        "mean_delta_raw": -0.3383420105559716,
+        "median_delta_raw": -0.42264973081037416,
+        "training_sd": 0.49916711686821524,
+        "coefficient": 0.004109231153724748,
+        "mean_delta_sd_units": -0.6778130993057722,
+        "n": 691
+      },
+      "tiktok_rewatch_potential": {
+        "mean_delta_raw": -0.5502170767004342,
+        "median_delta_raw": -0.2999999999999998,
+        "training_sd": 1.2198072796253243,
+        "coefficient": -0.0,
+        "mean_delta_sd_units": -0.45106885808177727,
+        "n": 691
+      },
+      "tiktok_seo_strength": {
+        "mean_delta_raw": 0.344138929088278,
+        "median_delta_raw": 0.2999999999999998,
+        "training_sd": 2.047628599979716,
+        "coefficient": -0.0,
+        "mean_delta_sd_units": 0.16806706503888794,
+        "n": 691
+      }
+    },
+    "propagated_yhat_offset": {
+      "mean": -0.032717731602757545,
+      "ci_lo_95": -0.03697333489312194,
+      "ci_hi_95": -0.028497528595642495,
+      "n_dual_scored": 691
+    },
+    "policy": "Pegasus-1.2-scored predictions are SHIFTED by propagated_yhat_offset.mean (y_hat_1.2 + offset -> 1.5-equivalent scale); Pegasus-1.5-scored predictions used AS-IS. See CAPSTONE_PREREG_v2.md amendment 26."
+  },
+  "metadata": {
+    "git_commit": "51190319d89a1cd4606821442646203201255606",
+    "snapshot_path": "/Users/joshengland/correlation-research/analysis/modeling/data/snapshots/2026-07-07-capstone",
+    "tiers_reference": "analysis/modeling/data/artifacts/v2_capstone/tiers_v2_1.json",
+    "n_total_columns": 116,
+    "n_nonzero": 56,
+    "target_formula": "y = ln(clip(WEC_rate / creator_LOO_median_WEC_rate, winsor_lo, winsor_hi))"
+  }
+}

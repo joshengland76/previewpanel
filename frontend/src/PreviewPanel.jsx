@@ -6,6 +6,7 @@ import { B, JUDGES } from "./brand.js";
 import { VerdictPanel } from "./components/VerdictHero.jsx";
 import { WhatsWorkingFixes } from "./components/WhatsWorkingFixes.jsx";
 import { DisagreementCard } from "./components/DisagreementCard.jsx";
+import { ScoreDisplay } from "./components/ScoreDisplay.jsx";
 import { PerformanceRadar } from "./components/PerformanceRadar.jsx";
 import { ToolkitSection } from "./components/ToolkitSection.jsx";
 import { JudgeDeepDives } from "./components/JudgeDeepDives.jsx";
@@ -298,6 +299,7 @@ export default function PreviewPanel() {
   const [judgeResults, setJudgeResults] = useState({});
   const [synthesis, setSynthesis] = useState(null);
   const [synthesisStatus, setSynthesisStatus] = useState(null);
+  const [scoreDisplay, setScoreDisplay] = useState(null); // dark-launched (Phase B3, Task 5); always null unless DISPLAY_SCORE_ENABLED
   const [trimAvailable, setTrimAvailable] = useState(false);
   const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
   const [statusMessage, setStatusMessage] = useState("");
@@ -391,6 +393,7 @@ export default function PreviewPanel() {
         if (data.duration) setVideoDurationSecs(data.duration);
         setSynthesis(data.synthesis ?? null);
         setSynthesisStatus(data.synthesisStatus ?? null);
+        setScoreDisplay(data.scoreDisplay ?? null);
         setTrimAvailable(!!data.trimAvailable);
 
         const jobDone = data.status === "done" || data.status === "partial";
@@ -1166,6 +1169,7 @@ export default function PreviewPanel() {
                 <VerdictPanel synthesis={synthesis} results={judgeResults} onJumpToJudge={jumpToJudge} />
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
+                <ScoreDisplay scoreDisplay={scoreDisplay} />
                 <PerformanceRadar results={judgeResults} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />

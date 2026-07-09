@@ -30,6 +30,15 @@ import FormDataStream from "form-data";
 import { jsonrepair } from "jsonrepair";
 import "dotenv/config";
 
+// Capstone v2 scoring (Phase B2) -- all behind EXTRACT_CDIMS/SHADOW_SCORING
+// flags, both default off. Nothing here runs or is visible unless explicitly
+// enabled. See scoring/README (PHASEB2_READOUT.md in the research repo) for
+// the full design.
+import { extractCdims } from "./scoring/cdims.js";
+import { buildScoringFeatures } from "./scoring/buildFeatures.js";
+import { ensureShadowScoresTable, recordShadowScore } from "./scoring/shadowScore.js";
+import { getScoreDisplay } from "./scoring/scoreDisplay.js";
+
 const { Pool } = pg;
 
 const execFileAsync = promisify(execFile);
@@ -168,6 +177,20 @@ async function drainQueue() {
 // PEGASUS_MODEL env var can force either value (rollback = pegasus1.2).
 // Accepted values: "pegasus1.2" | "pegasus1.5".
 const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.5";
+
+// ── Poller instance scoping (Phase B3, Task 1) ─────────────────────────────
+// Render's env config must set INSTANCE_ID=production explicitly (there is no
+// reliable auto-detection — RENDER_EXTERNAL_URL exists but scoping on "am I on
+// Render" rather than an explicit id would silently break if Render ever runs
+// more than one instance). Local dev gets a stable per-machine default so two
+// developers' local servers never collide with each other either.
+const INSTANCE_ID = process.env.INSTANCE_ID || `dev-${os.hostname()}`;
+
+// Named judge-prompt version (Phase B3, Task 3). Bump this whenever GUARDRAILS,
+// buildVideoContext, or any judge's scoring instructions change meaningfully —
+// B4's dual-run gate and reference-distribution keying depend on this being a
+// faithful stamp of "which prompt produced this row," not just a build marker.
+const JUDGE_PROMPT_VERSION = "judges-v1.0";
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
@@ -416,6 +439,7 @@ async function initDb() {
     `);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS file_name TEXT`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS prompt_version TEXT`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS analyze_tasks (
         id                  SERIAL PRIMARY KEY,
@@ -438,6 +462,7 @@ async function initDb() {
     await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_name TEXT`);
     await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
     await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS ip TEXT`);
+    await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS created_by_instance TEXT`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
@@ -558,6 +583,27 @@ async function initDb() {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_submission_id ON pp_synthesis(submission_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_job_id ON pp_synthesis(job_id)`);
+
+    // Capstone v2 shadow-scoring (Phase B2, Task 4) — invisible, flags-gated
+    // (SHADOW_SCORING/EXTRACT_CDIMS, both default off). Created unconditionally
+    // (cheap, idempotent) so enabling the flags later needs no migration step.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS shadow_scores (
+        id                     BIGSERIAL PRIMARY KEY,
+        submission_id          INTEGER,
+        created_at             TIMESTAMPTZ DEFAULT now(),
+        model_version          TEXT NOT NULL DEFAULT 'v2_capstone',
+        prompt_version         TEXT,
+        pegasus_model          TEXT,
+        spec_hash              TEXT,
+        input_features         JSONB,
+        prediction             DOUBLE PRECISION,
+        calibrated_percentile  DOUBLE PRECISION,
+        tier_at_score_time     TEXT,
+        extract_cdims_status   TEXT
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_submission_id ON shadow_scores(submission_id)`);
     await client.query("COMMIT");
 
     console.log("[db] PostgreSQL connected — submissions table ready");
@@ -682,6 +728,8 @@ async function saveSubmission(entry) {
       entry.contentRisk ? "editor-risk-v1" : null,
       // Pegasus model provenance ($85)
       PEGASUS_MODEL,
+      // Judge-prompt version stamping ($86) — Phase B3, Task 3
+      JUDGE_PROMPT_VERSION,
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
@@ -707,14 +755,14 @@ async function saveSubmission(entry) {
            trendsetter_big_funny, trendsetter_big_compelling, trendsetter_big_authentic, trendsetter_big_novel, trendsetter_big_visually_engaging, trendsetter_big_emotionally_resonant, trendsetter_big_useful, trendsetter_big_surprising, trendsetter_big_relatable, trendsetter_big_emotion_intensity,
            connector_big_funny, connector_big_compelling, connector_big_authentic, connector_big_novel, connector_big_visually_engaging, connector_big_emotionally_resonant, connector_big_useful, connector_big_surprising, connector_big_relatable, connector_big_emotion_intensity,
            risk_sexual_suggestive, risk_violence_shock, risk_hate_harassment, risk_profanity, risk_outrage_inflammatory, risk_dangerous_acts, risk_scored_version,
-           pegasus_model)
+           pegasus_model, prompt_version)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
                 $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,
                 $48,$49,$50,$51,$52,$53,$54,$55,$56,$57,
                 $58,$59,$60,$61,$62,$63,$64,$65,$66,$67,
                 $68,$69,$70,$71,$72,$73,$74,$75,$76,$77,
-                $78,$79,$80,$81,$82,$83,$84,$85)
+                $78,$79,$80,$81,$82,$83,$84,$85,$86)
         RETURNING id
       `, fullValues);
       return rows[0]?.id ?? null;
@@ -793,11 +841,11 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
   const job = jobs[jobId];
 
   // Full INSERT including optional columns added in schema migration
-  const fullSql = `INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs, browser_upload_ms, file_name, file_size_mb, ip) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`;
+  const fullSql = `INSERT INTO analyze_tasks (job_id, judge_id, task_id, platform, target_audience, video_duration_secs, browser_upload_ms, file_name, file_size_mb, ip, created_by_instance) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`;
   const fullValues = [
     jobId, judgeId, taskId, platform, targetAudience, videoDurationSecs ?? null,
     job?.timings?.browserUploadMs ?? null, job?.fileName ?? null, job?.fileSizeMB ?? null,
-    job?.ip ?? null,
+    job?.ip ?? null, INSTANCE_ID,
   ];
 
   // Fallback INSERT using only original columns — works even if migration hasn't run
@@ -822,14 +870,23 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
   }
 }
 
+// Instance-scoped claim filter, shared by the poller and startup resume.
+// Own-instance rows always match; NULL (pre-migration) rows are only drained
+// by production, so a lone stray dev process never adopts them. Note: this is
+// a filter, not an atomic claim — fine for today's single-instance-per-role
+// deployment, but if production ever scales past one instance, this must be
+// upgraded to an atomic UPDATE ... WHERE claimed_by IS NULL RETURNING claim to
+// avoid two prod instances both processing the same row. Out of scope now.
+const INSTANCE_CLAIM_SQL = `(created_by_instance = $1 OR (created_by_instance IS NULL AND $1 = 'production'))`;
+
 async function loadInFlightTasks() {
   if (!pgPool) return [];
   try {
     const { rows } = await pgPool.query(`
       SELECT job_id, judge_id, task_id, platform, target_audience, video_duration_secs,
              browser_upload_ms, file_name, file_size_mb, ip, created_at
-      FROM analyze_tasks WHERE status = 'pending'
-    `);
+      FROM analyze_tasks WHERE status = 'pending' AND ${INSTANCE_CLAIM_SQL}
+    `, [INSTANCE_ID]);
     return rows;
   } catch (err) {
     console.error(`[db] Failed to load in-flight tasks: ${err.message}`);
@@ -1787,6 +1844,111 @@ async function runSynthesisForJob(jobId) {
   }
 }
 
+// runShadowScoringForJob — capstone v2 shadow scoring (Phase B2, Task 4).
+// INVISIBLE: nothing here is ever returned to the client or shown in any
+// user-facing response. Gated behind SHADOW_SCORING="true"; the C_dims
+// extraction sub-step is separately gated behind EXTRACT_CDIMS="true" (and
+// excluded for research_api traffic — research collects C_dims via its own
+// pipeline). Every failure mode is caught internally (recordShadowScore()
+// never throws) — this function must never affect judging, synthesis, or the
+// job's status response. Fire-and-forget only; never awaited on the request
+// path (see call site below, same pattern as runSynthesisForJob).
+async function runShadowScoringForJob(jobId) {
+  if (process.env.SHADOW_SCORING !== "true") return;
+  const job = jobs[jobId];
+  if (!job || !pgPool) return;
+
+  try {
+    // Flatten job.results into the same critic_/trendsetter_/connector_
+    // -prefixed shape recordSubmissionForJob() builds (mirrors that loop
+    // exactly — duplicated rather than refactored out of that function to
+    // keep this change minimally invasive to the live judging path).
+    const dimensions = {}; const scores = {}; let contentRisk = null;
+    for (const [id, r] of Object.entries(job.results || {})) {
+      if (r.status !== "done") continue;
+      if (r.data?.overall != null) scores[id] = r.data.overall;
+      const colPrefix = id === "cool" ? "trendsetter" : id;
+      if (r.data?.dimensions) {
+        const d = r.data.dimensions;
+        for (const key of ["hook_strength", "completion_likelihood", "share_save_worthiness"]) {
+          if (d[key] != null) dimensions[`${colPrefix}_${key}`] = Number(d[key]);
+        }
+        if (d.big_picture) {
+          for (const key of ["funny", "compelling", "authentic", "novel", "visually_engaging",
+            "emotionally_resonant", "useful", "surprising", "relatable", "emotion_intensity"]) {
+            if (d.big_picture[key] != null) dimensions[`${colPrefix}_big_${key}`] = Number(d.big_picture[key]);
+          }
+        }
+        if (d.rewatch_potential != null) dimensions.tiktok_rewatch_potential = Number(d.rewatch_potential);
+        if (d.seo_strength != null) dimensions.tiktok_seo_strength = Number(d.seo_strength);
+      }
+      if (r.data?.objective_fit?.score != null) dimensions[`${colPrefix}_objective_fit_score`] = Number(r.data.objective_fit.score);
+      if (id === "critic" && r.data?.content_risk) contentRisk = r.data.content_risk;
+    }
+
+    // The converted mp4 (job.preProcessedPath) is deleted right after the
+    // TwelveLabs upload for app submissions -- the file that actually survives
+    // post-completion is the RETAINED original upload, tracked in
+    // retainedTrims (keyed by jobId), not on the job object itself. Found via
+    // this smoke test: using job.preProcessedPath here silently pointed at a
+    // deleted file and every frame sample failed. See PHASEB2_READOUT.md.
+    const retained = retainedTrims.get(jobId);
+    let cdimsDims = null;
+    let cdimsStatus = "not_run";
+    if (process.env.EXTRACT_CDIMS === "true" && job.source !== "research_api" && retained?.path) {
+      const result = await extractCdims({
+        filePath: retained.path,
+        durationSecs: job.videoDuration?.secs ?? null,
+        platform: job.platform,
+        postedAt: null,
+        caption: null,
+        audioTrack: null,
+        source: job.source,
+      });
+      cdimsStatus = result.ok ? "ok" : `failed: ${result.reason}`;
+      if (result.ok) cdimsDims = result.dims;
+    } else if (job.source === "research_api") {
+      cdimsStatus = "skipped_research_api";
+    }
+
+    const features = buildScoringFeatures({
+      dimensions, scores, contentRisk, cdimsDims,
+      durationSecs: job.videoDuration?.secs ?? null,
+      clampDuration: process.env.CLAMP_DURATION !== "false",
+    });
+
+    const shadowResult = await recordShadowScore({
+      queryRW,
+      submissionId: job.submissionId ?? null,
+      features,
+      objective: job.objective,
+      pegasusModel: PEGASUS_MODEL,
+      promptVersion: JUDGE_PROMPT_VERSION, // stamped since Phase B3, Task 3 (was null in B2 — see PHASEB2_READOUT.md Task 1)
+      cdimsStatus,
+    });
+
+    // Score display (Phase B3, Task 5) — dark-launched, DISPLAY_SCORE default
+    // false. Reuses shadowResult.prediction rather than rescoring. There is
+    // no user-identity system yet, so fetchPersonalPredictions always resolves
+    // empty (honestly reports "not enough data" per scoreDisplay.js); the
+    // overall-app pool is real, scoped to this objective, sourced only from
+    // shadow_scores (never the research corpus).
+    if (process.env.DISPLAY_SCORE === "true" && shadowResult) {
+      job.scoreDisplay = await getScoreDisplay(job.objective, shadowResult.prediction, null, {
+        fetchOverallAppPredictions: async (objective) => {
+          const { rows } = await pgPool.query(
+            `SELECT prediction FROM shadow_scores WHERE objective = $1 AND prediction IS NOT NULL`,
+            [objective]
+          );
+          return rows.map((r) => r.prediction);
+        },
+      });
+    }
+  } catch (e) {
+    console.error(`[${jobId}] [shadow_score] unexpected error (non-fatal, user path unaffected): ${e.message}`);
+  }
+}
+
 // ── POST /api/analyze ─────────────────────────────────────────
 // ── Shared preprocessing: ffmpeg conversion + size/duration validation ──────
 // Used by both /api/analyze (UI) and /api/research/submit (research API).
@@ -2636,6 +2798,14 @@ async function checkJobCompletion(jobId) {
     });
   }
 
+  // Capstone v2 shadow scoring (Phase B2) — invisible, flags-gated, fire-and-
+  // forget (same pattern as synthesis above). No-op unless SHADOW_SCORING="true".
+  if (finalStatus === "done" || finalStatus === "partial") {
+    runShadowScoringForJob(jobId).catch((err) => {
+      console.error(`[${jobId}] [shadow_score] unexpected error: ${err.message}`);
+    });
+  }
+
   if (pgPool) {
     queryRW(`DELETE FROM analyze_tasks WHERE job_id = $1`, [jobId]).catch(err =>
       console.error(`[poller] Failed to cleanup tasks for ${jobId}: ${err.message}`)
@@ -2655,9 +2825,10 @@ async function pollAnalyzeTasks() {
     if (!pgPool) return;
     const { rows } = await pgPool.query(
       `SELECT job_id, judge_id, task_id, platform, target_audience, video_duration_secs, created_at
-       FROM analyze_tasks WHERE status = 'pending'`
+       FROM analyze_tasks WHERE status = 'pending' AND ${INSTANCE_CLAIM_SQL}`,
+      [INSTANCE_ID]
     );
-    console.log(`[poller] Pending tasks in Neon: ${rows.length}`);
+    console.log(`[poller] Pending tasks claimed by ${INSTANCE_ID}: ${rows.length}`);
     if (rows.length === 0) return;
 
     await Promise.allSettled(rows.map(async row => {
@@ -2814,6 +2985,8 @@ app.get("/api/status/:jobId", (req, res) => {
     synthesis: job.synthesis ?? null,
     synthesisStatus: job.synthesisStatus ?? null,
     trimAvailable: retainedTrims.has(req.params.jobId),
+    // Dark-launched (Phase B3, Task 5) -- always null unless DISPLAY_SCORE="true".
+    scoreDisplay: job.scoreDisplay ?? null,
   });
 });
 
