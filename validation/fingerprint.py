@@ -31,6 +31,17 @@ import imagehash
 FPS = 1
 BORDER_CROP = 0.10          # crop 10% off each side (keep center 80% x 80%)
 
+# Phase C, Prompt 2 -- Render's Node build environment has a read-only
+# /var/lib/apt (confirmed live: "apt-get update" fails with "Acquire (30:
+# Read-only file system)"), so chromaprint can't be apt-installed there.
+# Fixed by bundling a static prebuilt fpcalc binary (chromaprint's own
+# GitHub release, linux-x86_64, statically linked -- no shared-lib deps)
+# directly alongside this file during the Render build step. Prefer that
+# bundled binary when present; fall back to whatever "fpcalc" resolves to on
+# PATH otherwise (homebrew's fpcalc, for local dev).
+_BUNDLED_FPCALC = Path(__file__).resolve().parent / "fpcalc"
+FPCALC_BIN = str(_BUNDLED_FPCALC) if _BUNDLED_FPCALC.exists() else "fpcalc"
+
 # ── Matching (Task 4/5) -- ported from the spike, with ONE amendment ────────
 # baked in directly to classify_tier: audio agreement alone (duration
 # mismatched) never solo-qualifies for Tier 2 -- it becomes Tier 3 with a
@@ -173,7 +184,7 @@ def extract_frame_hashes(video_path: Path) -> list:
 
 
 def audio_fingerprint(video_path: Path):
-    r = run(["fpcalc", "-raw", "-json", str(video_path)], timeout=60)
+    r = run([FPCALC_BIN, "-raw", "-json", str(video_path)], timeout=60)
     if r.returncode != 0 or not r.stdout.strip():
         return None
     try:
