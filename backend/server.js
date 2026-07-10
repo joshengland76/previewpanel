@@ -186,6 +186,16 @@ export const PEGASUS_MODEL = process.env.PEGASUS_MODEL || "pegasus1.5";
 // developers' local servers never collide with each other either.
 const INSTANCE_ID = process.env.INSTANCE_ID || `dev-${os.hostname()}`;
 
+// App hardening, Task B7 -- a genuinely per-PROCESS unique id, unlike
+// INSTANCE_ID above (a static per-deployment-role value — Render sets the
+// SAME INSTANCE_ID=production on every production container). During any
+// Render blue-green deploy, the outgoing and incoming containers are briefly
+// both alive with identical INSTANCE_ID, so INSTANCE_ID alone can never
+// distinguish "which container" — only SELF_RUN_ID can. Used as the atomic
+// task-claim owner id (see claimAnalyzeTasks below); two containers sharing
+// INSTANCE_ID=production can never collide on SELF_RUN_ID.
+const SELF_RUN_ID = `${INSTANCE_ID}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 // Named judge-prompt version (Phase B3, Task 3). Bump this whenever GUARDRAILS,
 // buildVideoContext, or any judge's scoring instructions change meaningfully —
 // B4's dual-run gate and reference-distribution keying depend on this being a
@@ -194,7 +204,7 @@ const INSTANCE_ID = process.env.INSTANCE_ID || `dev-${os.hostname()}`;
 // exists behind JUDGES_V21 (default off — v1 stays live during the dual-run
 // gate). Flipping the flag changes BOTH which prompt buildTLPrompt() actually
 // sends AND the stamp recorded on every row, so the two can never drift apart.
-const JUDGE_PROMPT_VERSION = process.env.JUDGES_V21 === "true" ? "judges-v2.1" : "judges-v1.0";
+export const JUDGE_PROMPT_VERSION = process.env.JUDGES_V21 === "true" ? "judges-v2.1" : "judges-v1.0";
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
@@ -233,6 +243,29 @@ function expireTrimFile(jobId) {
   });
 }
 
+// App hardening, Task A1 -- completed/errored jobs evict from the in-memory
+// `jobs` map TRIM_RETAIN_MS (30 min) after reaching a terminal state,
+// deliberately aligned with trim retention (same window, same "how long does
+// a finished submission stay usable" mental model). No new endpoint/frontend
+// change needed: /api/status/:jobId already returns 404 {error:"Job not
+// found"} for any jobId not in the map, and the frontend's poll() already
+// treats that 404 gracefully (clears the interval, shows "The server
+// restarted during analysis..."). restoreFromHistory() never calls
+// /api/status at all (it reads entirely from localStorage), so restored-
+// history UX is structurally unaffected by anything evicted here.
+const jobEvictionTimers = new Map(); // jobId -> timer
+
+function scheduleJobEviction(jobId) {
+  const prev = jobEvictionTimers.get(jobId);
+  if (prev) clearTimeout(prev);
+  const timer = setTimeout(() => {
+    delete jobs[jobId];
+    jobEvictionTimers.delete(jobId);
+    console.log(`[jobs] evicted ${jobId} from memory (${(TRIM_RETAIN_MS / 60000).toFixed(0)} min post-terminal)`);
+  }, TRIM_RETAIN_MS);
+  jobEvictionTimers.set(jobId, timer);
+}
+
 // Register a retained converted file. Arms the expiry timer immediately so the
 // file can never leak even if the job never finalizes; checkJobCompletion re-arms
 // it to exactly TRIM_RETAIN_MS-from-completion on success (or drops it on failure).
@@ -255,19 +288,48 @@ function rearmTrimExpiry(jobId) {
 // A trim runs as a background ffmpeg job so the client can poll accurate progress
 // and we never hold a long request open (heavy encodes were dropping the
 // connection → "Network error"). Trims are DELIBERATELY LOWER PRIORITY than
-// regular analyze work: serialized to one at a time and run at max niceness so
-// the OS scheduler gives the event loop + analyze-path ffmpeg the CPU first.
-const MAX_CONCURRENT_TRIMS = 1;         // serialize; niced below analyze work
+// regular analyze work: serialized below the shared ffmpeg cap and run at
+// max niceness so the OS scheduler gives the event loop + analyze-path
+// ffmpeg the CPU first.
+//
+// App hardening, Task A5 -- ONE global concurrency cap (activeFfmpegProcs /
+// MAX_CONCURRENT_FFMPEG) across ALL ffmpeg work, conversions AND trims,
+// replacing what used to be a trim-only semaphore. Trims keep their existing
+// queue/UX exactly as before (pumpTrimQueue only starts a trim when a slot
+// is synchronously free, so trimQueue.length still accurately reflects what
+// a client sees as "queued"); conversions have no equivalent pre-existing
+// queue, so runFfmpegSpawn() awaits a slot via acquireFfmpegSlot() instead.
+// Both sides release through releaseFfmpegSlot(), which hands a freed slot
+// straight to a waiting conversion if one exists, or re-triggers
+// pumpTrimQueue() so a queued trim can grab it.
+const MAX_CONCURRENT_FFMPEG = 2;
 const MAX_TRIM_QUEUE = 6;               // reject beyond this (429)
 const TRIM_JOB_TTL_MS = 5 * 60 * 1000;  // reap finished/abandoned trim outputs
 const TRIM_HARD_TIMEOUT_MS = 150_000;   // kill a runaway encode (niced → generous)
 const trimJobs = new Map();             // trimId -> { status, progress, outPath, args, clipLen, proc, error, createdAt }
 const trimQueue = [];
-let activeTrimProc = 0;
+let activeFfmpegProcs = 0;
+const ffmpegWaiters = []; // conversion-side waiters only; trims poll via pumpTrimQueue
 let trimIdSeq = 0;
 
+function acquireFfmpegSlot() {
+  return new Promise((resolve) => {
+    if (activeFfmpegProcs < MAX_CONCURRENT_FFMPEG) {
+      activeFfmpegProcs++;
+      resolve();
+    } else {
+      ffmpegWaiters.push(resolve);
+    }
+  });
+}
+function releaseFfmpegSlot() {
+  const next = ffmpegWaiters.shift();
+  if (next) next(); // hand the slot straight to a waiting conversion; count unchanged
+  else { activeFfmpegProcs--; pumpTrimQueue(); } // no conversion waiting -- let a queued trim try
+}
+
 function pumpTrimQueue() {
-  while (activeTrimProc < MAX_CONCURRENT_TRIMS && trimQueue.length) {
+  while (activeFfmpegProcs < MAX_CONCURRENT_FFMPEG && trimQueue.length) {
     const trimId = trimQueue.shift();
     const job = trimJobs.get(trimId);
     if (job && job.status === "queued") startTrim(trimId, job);
@@ -275,7 +337,7 @@ function pumpTrimQueue() {
 }
 
 function startTrim(trimId, job) {
-  activeTrimProc++;
+  activeFfmpegProcs++;
   job.status = "processing";
   // Spawn ffmpeg directly, then drop its scheduling priority (niceness 19) so it
   // yields to the event loop and any analyze-path ffmpeg. -progress pipe:1 streams
@@ -298,7 +360,7 @@ function startTrim(trimId, job) {
   const killer = setTimeout(() => { job.timedOut = true; try { proc.kill("SIGKILL"); } catch {} }, TRIM_HARD_TIMEOUT_MS);
   const finish = (ok) => {
     clearTimeout(killer);
-    activeTrimProc--;
+    releaseFfmpegSlot();
     if (ok && fs.existsSync(job.outPath)) { job.status = "done"; job.progress = 1; }
     else {
       job.status = "error";
@@ -467,6 +529,11 @@ async function initDb() {
     await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS file_size_mb NUMERIC`);
     await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS ip TEXT`);
     await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS created_by_instance TEXT`);
+    // App hardening, Task B7 -- atomic per-row task claiming. claimed_by holds
+    // a SELF_RUN_ID (per-process, not per-role like created_by_instance, which
+    // stays purely informational from here on).
+    await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS claimed_by TEXT`);
+    await client.query(`ALTER TABLE analyze_tasks ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_creation_ms INTEGER`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS queue_wait_ms INTEGER`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS tl_queue_ms INTEGER`);
@@ -681,8 +748,23 @@ async function loadSubmissionLog() {
   } catch { return []; }
 }
 
-// Safe integer coercion — rounds floats, passes null through
+// Safe integer coercion — rounds floats, passes null result null
 function toInt(val) { return val == null ? null : Math.round(Number(val)); }
+
+// App hardening, Task A2 (log diet) -- structured job-completion logs go to
+// stdout (console.log already does this; console.error goes to stderr,
+// which is why this helper deliberately never calls it) and are capped at
+// 8KB so one unexpectedly large field (e.g. a long judge reasoning string)
+// can't blow up a single log line. Truncates the JSON string, not any
+// individual field, to guarantee the cap regardless of shape.
+const STRUCTURED_LOG_CAP_BYTES = 8 * 1024;
+function logStructured(prefix, obj) {
+  let json = JSON.stringify(obj);
+  if (Buffer.byteLength(json, "utf8") > STRUCTURED_LOG_CAP_BYTES) {
+    json = json.slice(0, STRUCTURED_LOG_CAP_BYTES) + `...[truncated, full length ${json.length} chars]`;
+  }
+  console.log(`${prefix} ${json}`);
+}
 
 async function extractThumbnail(filePath) {
   try {
@@ -882,14 +964,49 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
   }
 }
 
-// Instance-scoped claim filter, shared by the poller and startup resume.
-// Own-instance rows always match; NULL (pre-migration) rows are only drained
-// by production, so a lone stray dev process never adopts them. Note: this is
-// a filter, not an atomic claim — fine for today's single-instance-per-role
-// deployment, but if production ever scales past one instance, this must be
-// upgraded to an atomic UPDATE ... WHERE claimed_by IS NULL RETURNING claim to
-// avoid two prod instances both processing the same row. Out of scope now.
+// Instance-scoped filter, used ONLY by startup resume below to rebuild
+// in-memory job placeholders — a read, not a claim, so two containers
+// (dev or blue-green prod) both matching the same rows here is harmless; each
+// just seeds its own local `jobs` map. Actual work-claiming no longer uses
+// this at all (see claimAnalyzeTasks / App hardening Task B7) — replaced by
+// atomic per-row claiming because this filter can't distinguish two
+// containers that share the same INSTANCE_ID, which happens on every Render
+// blue-green deploy's overlap window, not just hypothetically "if production
+// scales past one instance."
 const INSTANCE_CLAIM_SQL = `(created_by_instance = $1 OR (created_by_instance IS NULL AND $1 = 'production'))`;
+
+// App hardening, Task B7 -- atomic per-row task claiming. Single UPDATE,
+// self-renewing lease: a live poller re-claims (and refreshes claimed_at on)
+// its own rows every cycle, which is what lets a still-"pending" (i.e. still
+// in TL's queue, not yet ready/failed) row keep being re-checked every 15s by
+// its OWN claimer without any other process being able to steal it. Only a row
+// whose claimed_at hasn't been refreshed in STALE_CLAIM_MS (i.e. its claimer
+// died mid-deploy without exiting cleanly) becomes reclaimable by someone
+// else — that's the orphan-prevention path. FOR UPDATE SKIP LOCKED means a
+// poller never blocks waiting on a row a concurrent poller is mid-claim on;
+// it just skips it this cycle and picks it up next time if it's still free.
+const STALE_CLAIM_MS = 10 * 60 * 1000; // 10 min
+
+async function claimAnalyzeTasks() {
+  if (!pgPool) return [];
+  const { rows } = await queryRW(`
+    WITH candidates AS (
+      SELECT id FROM analyze_tasks
+      WHERE status = 'pending'
+        AND (claimed_by IS NULL OR claimed_by = $1 OR claimed_at < now() - (($2::double precision) * interval '1 millisecond'))
+      ORDER BY id
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE analyze_tasks
+    SET claimed_by = $1, claimed_at = now()
+    FROM candidates
+    WHERE analyze_tasks.id = candidates.id
+    RETURNING analyze_tasks.job_id, analyze_tasks.judge_id, analyze_tasks.task_id,
+              analyze_tasks.platform, analyze_tasks.target_audience,
+              analyze_tasks.video_duration_secs, analyze_tasks.created_at
+  `, [SELF_RUN_ID, STALE_CLAIM_MS]);
+  return rows;
+}
 
 async function loadInFlightTasks() {
   if (!pgPool) return [];
@@ -1371,6 +1488,35 @@ async function probeCodecs(filePath) {
   return result;
 }
 
+// App hardening, Task A4 (streaming audit) -- ffmpeg conversions run via
+// spawn, not execFile. execFile buffers its output into memory (default
+// maxBuffer 1MB) even when stdout itself is discarded, because ffmpeg's own
+// progress/diagnostic chatter goes to stderr -- a long or unusually verbose
+// conversion could exceed that and fail outright. spawn streams both
+// pipes; stderr is kept only as a rolling, capped tail (never unbounded,
+// same pattern the trim queue's startTrim() already uses) purely so a
+// failure has a useful error message.
+// Task A5 -- also acquires/releases a shared ffmpeg concurrency slot (see
+// MAX_CONCURRENT_FFMPEG above) so a conversion and a trim can never together
+// exceed the global cap.
+async function runFfmpegSpawn(args, { label = "ffmpeg" } = {}) {
+  await acquireFfmpegSlot();
+  try {
+    return await new Promise((resolve, reject) => {
+      const proc = spawn(FFMPEG, args, { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      proc.stderr.on("data", (d) => { stderr = (stderr + d.toString()).slice(-4000); });
+      proc.on("error", reject);
+      proc.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`${label} exited with code ${code}: ${stderr.slice(-1000)}`));
+      });
+    });
+  } finally {
+    releaseFfmpegSlot();
+  }
+}
+
 async function convertToMp4(inputPath, { preProbed = null, forceReencode = false } = {}) {
   const outputPath = inputPath + ".mp4";
   const t0 = Date.now();
@@ -1412,7 +1558,7 @@ async function convertToMp4(inputPath, { preProbed = null, forceReencode = false
     : "both codecs copyable";
   console.log(`[ffmpeg] ${path.basename(inputPath)} — detected video=${vcodec ?? "null"} audio=${acodec ?? "null"} → ${mode} (${why})`);
 
-  await execFileAsync(FFMPEG, args);
+  await runFfmpegSpawn(args, { label: "convertToMp4" });
   const elapsed = Date.now() - t0;
   const timeStr = elapsed < 2000 ? `${elapsed}ms` : `${(elapsed / 1000).toFixed(1)}s`;
   const sizeMB = (fs.statSync(outputPath).size / 1024 / 1024).toFixed(2);
@@ -2090,12 +2236,12 @@ async function preprocessUploadedVideo(jobId, filePath) {
       const inputSizeMB = convertedSizeMB;
       const pass2Path = preprocessedPath + ".pass2.mp4";
       const t_conv2 = Date.now();
-      await execFileAsync(FFMPEG, [
+      await runFfmpegSpawn([
         "-i", preprocessedPath,
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-vf", "scale=640:-2",
         "-c:a", "aac", "-b:a", "96k",
         "-vsync", "cfr", "-movflags", "+faststart", "-threads", "2", "-y", pass2Path,
-      ]);
+      ], { label: "pass2 compression" });
       const pass2Ms = Date.now() - t_conv2;
       jobs[jobId].timings.conversionMs = (jobs[jobId].timings.conversionMs || 0) + pass2Ms;
       fs.unlink(preprocessedPath, () => {});
@@ -2190,6 +2336,7 @@ app.post("/api/analyze", (req, res, next) => {
     const selectedJudges = JUDGES.filter((j) => selectedJudgeIds.includes(j.id));
 
     const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    logMemoryMB(`job start: ${jobId}`); // App hardening, Task A3
 
     // Issue #1: Report queue position to client
     const queuePosition = jobQueue.length + (activeJob !== null ? 1 : 0);
@@ -2300,6 +2447,7 @@ app.post("/api/research/submit", requireResearchAuth, (req, res, next) => {
       ? `${platform}_${externalVideoId}${ext}`
       : (originalName || `${platform}_${jobId}${ext}`);
 
+    logMemoryMB(`job start: ${jobId}`); // App hardening, Task A3
     jobs[jobId] = {
       status: "uploading",
       queuePosition: 0,
@@ -2436,6 +2584,7 @@ app.post("/api/research/submit-eval", requireResearchAuth, (req, res, next) => {
       ? `${platform}_${externalVideoId}${ext}`
       : (originalName || `${platform}_${jobId}${ext}`);
 
+    logMemoryMB(`job start: ${jobId}`); // App hardening, Task A3
     jobs[jobId] = {
       status: "uploading",
       queuePosition: 0,
@@ -2820,7 +2969,21 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   // safely read them on the same tick. `finalized` above is set first as a
   // re-entry guard, but the DB write happens between them.
   job.submissionRecorded = true;
-  console.log(`[${jobId}] [log] ${JSON.stringify(entry)}`);
+  // App hardening, Task A2 (log diet): log the thumbnail's LENGTH, never its
+  // base64 body -- a full data URL can be tens of KB and was previously
+  // dumped into this one structured log line in full. logStructured() caps
+  // the whole line at 8KB and writes to stdout.
+  const { thumbnailDataUrl, ...entryForLog } = entry;
+  logStructured(`[${jobId}] [log]`, {
+    ...entryForLog,
+    thumbnailDataUrlLength: thumbnailDataUrl ? thumbnailDataUrl.length : 0,
+  });
+  // App hardening, Task A1: schedule eviction from the in-memory map now that
+  // the job has reached a genuine terminal state (this function is the one
+  // hook point every terminal path -- done/partial/error/timeout, and the
+  // early rejected_* validation paths -- already funnels through).
+  if (jobs[jobId]) scheduleJobEviction(jobId);
+  logMemoryMB(`job completion: ${jobId}`); // App hardening, Task A3
 }
 
 // ── Check if all judges for a job are settled; finalize if so ─────────────────
@@ -2900,30 +3063,42 @@ const STALE_TASK_MS = 25 * 60 * 1000; // 25 minutes
 let pollerRunning = false;
 const taskStatusCache = {}; // taskId → last known TwelveLabs status, for transition logging
 
+// App hardening, Task A3 -- memory telemetry. rss/heapUsed logged every 20th
+// poller heartbeat (~every 5 min at the poller's 15s interval) rather than
+// every cycle, to keep the log volume low while still catching a slow leak
+// over the course of hours/days. Also logged at job start/completion (see
+// call sites below) so a single request's memory footprint is visible too.
+let pollerHeartbeatCount = 0;
+function logMemoryMB(label) {
+  const mem = process.memoryUsage();
+  console.log(`[memory] ${label} — rss=${(mem.rss / 1024 / 1024).toFixed(1)}MB heapUsed=${(mem.heapUsed / 1024 / 1024).toFixed(1)}MB`);
+}
+
 async function pollAnalyzeTasks() {
   if (pollerRunning) return;
   pollerRunning = true;
   try {
+    pollerHeartbeatCount++;
+    if (pollerHeartbeatCount % 20 === 0) logMemoryMB(`poller heartbeat #${pollerHeartbeatCount}`);
     if (!pgPool) return;
-    const { rows } = await pgPool.query(
-      `SELECT job_id, judge_id, task_id, platform, target_audience, video_duration_secs, created_at
-       FROM analyze_tasks WHERE status = 'pending' AND ${INSTANCE_CLAIM_SQL}`,
-      [INSTANCE_ID]
-    );
-    console.log(`[poller] Pending tasks claimed by ${INSTANCE_ID}: ${rows.length}`);
+    // App hardening, Task B7 -- atomic claim (self-renewing lease) replaces the
+    // old instance-scoped plain SELECT. See claimAnalyzeTasks for the race
+    // this closes.
+    const rows = await claimAnalyzeTasks();
+    console.log(`[poller] Tasks claimed by ${SELF_RUN_ID}: ${rows.length}`);
     if (rows.length === 0) return;
 
     await Promise.allSettled(rows.map(async row => {
       // Skip if the job was already finalized (e.g. timeout fired while tasks were being created)
       if (jobs[row.job_id]?.finalized) {
-        await queryRW(`UPDATE analyze_tasks SET status = 'cancelled' WHERE task_id = $1`, [row.task_id]).catch(() => {});
+        await queryRW(`UPDATE analyze_tasks SET status = 'cancelled' WHERE task_id = $1 AND claimed_by = $2`, [row.task_id, SELF_RUN_ID]).catch(() => {});
         return;
       }
       const ageMs = Date.now() - new Date(row.created_at).getTime();
 
       if (ageMs > STALE_TASK_MS) {
         console.warn(`[poller] Task ${row.task_id} (${row.judge_id}) stale after ${(ageMs/60000).toFixed(1)}min — marking as timeout`);
-        await queryRW(`UPDATE analyze_tasks SET status = 'stale', error = $1 WHERE task_id = $2`, ['Analysis timed out after 25 minutes', row.task_id]);
+        await queryRW(`UPDATE analyze_tasks SET status = 'stale', error = $1 WHERE task_id = $2 AND claimed_by = $3`, ['Analysis timed out after 25 minutes', row.task_id, SELF_RUN_ID]);
         delete taskStatusCache[row.task_id];
         if (jobs[row.job_id]) {
           jobs[row.job_id].results[row.judge_id] = {
@@ -2982,7 +3157,7 @@ async function pollAnalyzeTasks() {
             console.error(`[poller] Parse failed for ${row.task_id} (${row.judge_id}): ${parseErr.message}`);
             parsed = { overall: null, reaction: "This judge was unable to complete analysis. Please try again.", positives: "", delivery: "", content: "", platformFit: "", relativeInsight: "", moments: [], suggestions: [] };
           }
-          await queryRW(`UPDATE analyze_tasks SET status = 'ready', result = $1 WHERE task_id = $2`, [JSON.stringify(parsed), row.task_id]);
+          await queryRW(`UPDATE analyze_tasks SET status = 'ready', result = $1 WHERE task_id = $2 AND claimed_by = $3`, [JSON.stringify(parsed), row.task_id, SELF_RUN_ID]);
           delete taskStatusCache[row.task_id];
           if (!jobs[row.job_id]) {
             console.warn(`[poller] Task ${row.task_id} result for ${row.judge_id} arrived but job ${row.job_id} not in memory — skipping state update`);
@@ -3002,7 +3177,7 @@ async function pollAnalyzeTasks() {
         } else if (task.status === "failed") {
           const errMsg = task.error?.message || "TwelveLabs analysis task failed";
           console.error(`[poller] Task ${row.task_id} failed: ${errMsg}`);
-          await queryRW(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2`, [errMsg, row.task_id]);
+          await queryRW(`UPDATE analyze_tasks SET status = 'failed', error = $1 WHERE task_id = $2 AND claimed_by = $3`, [errMsg, row.task_id, SELF_RUN_ID]);
           delete taskStatusCache[row.task_id];
           const judge = JUDGES.find(j => j.id === row.judge_id);
           if (jobs[row.job_id]) {
@@ -3021,6 +3196,48 @@ async function pollAnalyzeTasks() {
   } finally {
     pollerRunning = false;
   }
+}
+
+// App hardening, Task A6 -- disk sweep on boot. Raw multer uploads, retained-
+// trim originals (retainTrimFile), and trim-job outputs (`uploads/${trimId}.mp4`)
+// all live directly in this one flat uploads/ directory (confirmed via grep --
+// multer's `dest` option with no diskStorage destination/filename fns writes
+// straight into it, and retainTrimFile's filePath is always the original
+// multer upload path or the converted mp4, also in uploads/). This sweep is a
+// backstop for the in-memory timers that normally clean these up
+// (expireTrimFile, trimJobs' TTL reaper) in case a restart lost them mid-window
+// -- not a replacement for those timers. Explicitly excludes warmup.mp4 by
+// name: per the hard constraint, the warm-up path is never touched in any way,
+// even though it also lives in uploads/ and even though createWarmupFile()
+// regenerates it fresh on every boot regardless.
+const DISK_SWEEP_MAX_AGE_MS = 60 * 60 * 1000; // 60 min
+
+function sweepUploadsDir() {
+  const dir = path.join(__dirname, "uploads");
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch (err) {
+    console.error(`[sweep] failed to read uploads dir: ${err.message}`);
+    return;
+  }
+  const cutoff = Date.now() - DISK_SWEEP_MAX_AGE_MS;
+  let removed = 0;
+  for (const name of entries) {
+    if (name === "warmup.mp4") continue; // HARD CONSTRAINT -- never touch the warm-up path
+    const filePath = path.join(dir, name);
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) continue;
+      if (stat.mtimeMs < cutoff) {
+        fs.unlinkSync(filePath);
+        removed++;
+      }
+    } catch (err) {
+      if (err.code !== "ENOENT") console.warn(`[sweep] failed to check/remove ${name}: ${err.message}`);
+    }
+  }
+  console.log(`[sweep] boot disk sweep: removed ${removed} file(s) older than ${(DISK_SWEEP_MAX_AGE_MS / 60000).toFixed(0)} min from uploads/ (warmup.mp4 excluded)`);
 }
 
 // ── Restore in-flight jobs into memory after server restart ───────────────────
@@ -3100,7 +3317,7 @@ app.post("/api/trim", (req, res) => {
   if (mode !== "copy" && mode !== "reencode") {
     return res.status(400).json({ error: 'mode must be "copy" or "reencode".' });
   }
-  if (trimQueue.length + activeTrimProc >= MAX_TRIM_QUEUE) {
+  if (trimQueue.length + activeFfmpegProcs >= MAX_TRIM_QUEUE) {
     res.set("Retry-After", "10");
     return res.status(429).json({ error: "Server is busy trimming. Please try again shortly." });
   }
@@ -3118,7 +3335,7 @@ app.post("/api/trim", (req, res) => {
 
   trimJobs.set(trimId, { status: "queued", progress: 0, outPath, args, clipLen, proc: null, error: null, createdAt: Date.now() });
   trimQueue.push(trimId);
-  console.log(`[trim] queued ${trimId} for ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode} (queue=${trimQueue.length}, active=${activeTrimProc})`);
+  console.log(`[trim] queued ${trimId} for ${jobId} ${s}s→${e}s (${clipLen.toFixed(1)}s) mode=${mode} (queue=${trimQueue.length}, active=${activeFfmpegProcs})`);
   pumpTrimQueue();
   res.status(202).json({ trimId });
 });
@@ -3315,6 +3532,7 @@ let server;
 const isEntryPoint = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isEntryPoint) (async () => {
 try {
+  sweepUploadsDir(); // App hardening, Task A6 -- sync, no DB dependency, runs first
   await initDbWithRetry();
   const saved = await loadSubmissionLog();
   submissionLog.push(...saved);
