@@ -92,7 +92,7 @@ function AbstainRing({ size = 132 }) {
   );
 }
 
-function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef }) {
+function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform }) {
   const verdict = synthesis.verdict || {};
   const act = actionFor(verdict);
   const present = synthesis.panel?.judges_present || [];
@@ -162,7 +162,7 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef }) {
         </div>
       )}
 
-      <MethodologyTrigger pillStyle />
+      <MethodologyTrigger pillStyle platform={platform} />
     </div>
   );
 }
@@ -207,7 +207,7 @@ function StickyVerdictBar({ synthesis, results, visible, onJumpToJudge }) {
 
 // Combined section: sticky bar + hero, with the scroll-observer wiring. Render
 // only when synthesis is ready; otherwise the parent shows the raw judge view.
-export function VerdictPanel({ synthesis, results, scoreDisplay, onJumpToJudge }) {
+export function VerdictPanel({ synthesis, results, scoreDisplay, onJumpToJudge, platform }) {
   const heroRef = useRef(null);
   const [scrolled, setScrolled] = useState(false);
 
@@ -227,7 +227,7 @@ export function VerdictPanel({ synthesis, results, scoreDisplay, onJumpToJudge }
   return (
     <div>
       <StickyVerdictBar synthesis={synthesis} results={results} visible={scrolled} onJumpToJudge={onJumpToJudge} />
-      <VerdictHero synthesis={synthesis} scoreDisplay={scoreDisplay} onJumpToJudge={onJumpToJudge} heroRef={heroRef} />
+      <VerdictHero synthesis={synthesis} scoreDisplay={scoreDisplay} onJumpToJudge={onJumpToJudge} heroRef={heroRef} platform={platform} />
     </div>
   );
 }

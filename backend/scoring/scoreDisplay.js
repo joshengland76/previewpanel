@@ -60,6 +60,7 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     fetchPersonalPredictions = async () => [],
     tiers = loadTiers(),
     copy = SCORE_DISPLAY_COPY,
+    platform = null, // Phase C, Task 0d -- non-tiktok proxy note in poolInfoTooltip
   } = deps;
 
   const tier = tierForObjective(objective, tiers);
@@ -109,7 +110,7 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     sub: copy.predictSub(objective, nichePoolSize),
     personalHeadline: copy.personalHeadline(personal),
     overallAppHeadline: copy.overallAppHeadline(overallApp, overallPoolSize),
-    poolInfoTooltip: copy.poolInfoTooltip,
+    poolInfoTooltip: copy.poolInfoTooltip(platform),
     trimNote: copy.trimNote,
   };
 }

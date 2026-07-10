@@ -52,7 +52,8 @@ function specHash() {
  * failure mode is caught internally and logged; nothing is ever re-thrown.
  */
 export async function recordShadowScore({
-  queryRW, submissionId, features, objective, pegasusModel, promptVersion, cdimsStatus,
+  queryRW, submissionId, features, objective, pegasusModel, promptVersion, cdimsStatus, platform, userId,
+  source, isPostedVideo, postedVideoId, // Phase C, Task 3
 }) {
   try {
     const spec = loadSpec();
@@ -73,13 +74,14 @@ export async function recordShadowScore({
       `INSERT INTO shadow_scores
         (submission_id, model_version, prompt_version, pegasus_model, spec_hash,
          input_features, prediction, calibrated_percentile, tier_at_score_time, extract_cdims_status,
-         objective)
-       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         objective, platform, user_id, source, is_posted_video, posted_video_id)
+       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING id`,
       [
         submissionId ?? null, promptVersion ?? null, pegasusModel ?? null, specHash(),
         JSON.stringify(features), prediction, calibratedPercentile, tierAtScoreTime,
-        cdimsStatus ?? null, objective ?? null,
+        cdimsStatus ?? null, objective ?? null, platform ?? null, userId ?? null,
+        source ?? "app", isPostedVideo ?? false, postedVideoId ?? null,
       ]
     );
     const id = rows[0]?.id ?? null;

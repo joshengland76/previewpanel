@@ -34,6 +34,11 @@ function loadCorpusRows() {
       prediction: r.prediction_cal,
       objective: r.objective,
       date: r.posted_at,
+      // Phase C, Task 0b -- the frozen corpus seed predates multi-platform
+      // submission (it's the TikTok engagement study population), so every
+      // row is tagged "tiktok" here rather than left null. Plumbing only:
+      // not yet used to filter, see buildPools/getPools below.
+      platform: "tiktok",
     }));
   }
   return _corpusRows;
@@ -52,6 +57,10 @@ function buildPools(shadowRows) {
     prediction: r.prediction,
     objective: r.objective,
     date: r.created_at,
+    // Phase C, Task 0b -- carried through for future filtering; pools remain
+    // unified across platforms until the Task 0c framing gate returns a
+    // verdict (see this file's header comment and server.js's call site).
+    platform: r.platform ?? null,
   }));
   const all = [...loadCorpusRows(), ...shadow]
     .filter((r) => r.prediction != null && r.date != null)

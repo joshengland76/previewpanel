@@ -57,9 +57,19 @@ export const SCORE_DISPLAY_COPY = {
 
   // Shown once, as an info-tooltip trigger next to the niche/overall rows
   // (NOT the personal row -- personal is the user's own history, no corpus
-  // is involved there).
-  poolInfoTooltip:
-    "Includes PreviewPanel submissions and our 4,900-video research library; live submissions gradually replace the library.",
+  // is involved there). Phase C, Task 0d: one modest added sentence for
+  // non-tiktok submissions -- no disclaimer wall, just an honest proxy note.
+  // The underlying model is genuinely the same for every platform right now
+  // (see PROJECT_PLAN_v14.md §6); this doesn't change if/when the Task 0c
+  // framing gate passes, since the gate is about whether platform-specific
+  // percentile pools are warranted, not about the model itself.
+  poolInfoTooltip: (platform) => {
+    const base = "Includes PreviewPanel submissions and our 4,900-video research library; live submissions gradually replace the library.";
+    if (platform && platform !== "tiktok") {
+      return `${base} This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.`;
+    }
+    return base;
+  },
 
   abstainHeadline: "We don't have enough reliable data yet to score this niche numerically.",
 

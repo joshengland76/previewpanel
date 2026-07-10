@@ -12,7 +12,7 @@ import { METHODOLOGY_MODAL_TEXT, STUDY_STATS } from "../studyCopy.js";
 // static /methodology.html page still exists for external/shareable links,
 // it's just no longer where this in-app flow sends anyone.
 
-export function MethodologyTrigger({ pillStyle = false }) {
+export function MethodologyTrigger({ pillStyle = false, platform = null }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -35,12 +35,12 @@ export function MethodologyTrigger({ pillStyle = false }) {
         )}
         How this score works
       </button>
-      {open && <MethodologyModal onClose={() => setOpen(false)} />}
+      {open && <MethodologyModal onClose={() => setOpen(false)} platform={platform} />}
     </>
   );
 }
 
-function MethodologyModal({ onClose }) {
+function MethodologyModal({ onClose, platform }) {
   const [view, setView] = useState("summary"); // "summary" | "full"
 
   return (
@@ -67,6 +67,11 @@ function MethodologyModal({ onClose }) {
             </div>
             <div style={{ fontSize: 13.5, lineHeight: 1.55, color: B.body, whiteSpace: "pre-line" }}>
               {METHODOLOGY_MODAL_TEXT.replace(" See how we validated it →", "")}
+              {platform && platform !== "tiktok" && (
+                <div style={{ marginTop: 10 }}>
+                  This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.
+                </div>
+              )}
             </div>
             <button
               type="button"

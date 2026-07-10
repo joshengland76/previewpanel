@@ -9,3 +9,7 @@ backend/uploads/*.mov
 backend/uploads/*.avi
 backend/uploads/*.webm
 backend/server.log
+__pycache__/
+*.pyc
+validation/_downloads/
+validation/_stress_test_out/

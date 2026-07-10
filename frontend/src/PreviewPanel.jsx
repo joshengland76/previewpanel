@@ -9,6 +9,7 @@ import { DisagreementCard } from "./components/DisagreementCard.jsx";
 import { PerformanceRadar } from "./components/PerformanceRadar.jsx";
 import { ToolkitSection } from "./components/ToolkitSection.jsx";
 import { JudgeDeepDives } from "./components/JudgeDeepDives.jsx";
+import { AccountSettingsTrigger } from "./components/AccountSettings.jsx";
 
 const PLATFORM_LOGOS = { youtube: YouTubeLogo, tiktok: TikTokLogo, instagram: InstagramLogo };
 function PlatformIcon({ id, size }) {
@@ -43,6 +44,29 @@ function saveToHistory(entry) {
     history.unshift(entry);
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
   } catch {}
+}
+
+// ── Phase C, Task 1: identity-lite ────────────────────────────
+// A persistent, client-generated UUID -- NOT a login/account system. Created
+// once on first load, reused forever from localStorage, sent with every
+// submission so a user's own history can be queried back out server-side.
+// Clearing browser storage or switching devices/browsers starts a new
+// identity -- there is no cross-device linking in this phase.
+const USER_ID_KEY = "pp_user_id";
+
+function getOrCreateUserId() {
+  try {
+    let id = localStorage.getItem(USER_ID_KEY);
+    if (!id) {
+      id = (typeof crypto !== "undefined" && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : `pp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(USER_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return null; // localStorage unavailable (private browsing, etc.) -- submissions proceed unidentified
+  }
 }
 
 // ── Elapsed time hook ─────────────────────────────────────────
@@ -283,6 +307,8 @@ const OBJECTIVE_OPTIONS = [
 ];
 
 export default function PreviewPanel() {
+  const [userId] = useState(getOrCreateUserId); // Phase C, Task 1 -- generated once, stable for component lifetime
+  const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
   const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
@@ -570,6 +596,7 @@ export default function PreviewPanel() {
     formData.append("platform", platform);
     formData.append("objective", objective);
     formData.append("judges", JSON.stringify(selectedJudges));
+    if (userId) formData.append("userId", userId); // Phase C, Task 1
     formData.append("video", videoFile);
 
     const xhr = new XMLHttpRequest();
@@ -753,6 +780,10 @@ export default function PreviewPanel() {
                   📋 History ({history.length})
                 </button>
               )}
+              {/* Phase C, Task 1: Connect-accounts trigger */}
+              <div style={{ position: "absolute", top: "10px", left: "0" }}>
+                <AccountSettingsTrigger userId={userId} />
+              </div>
             </div>
 
             {/* History panel */}
@@ -1165,7 +1196,7 @@ export default function PreviewPanel() {
                 + signal bars entirely. */}
             {isFinished && synthesisStatus === "ready" && synthesis && (
               <>
-                <VerdictPanel synthesis={synthesis} results={judgeResults} scoreDisplay={scoreDisplay} onJumpToJudge={jumpToJudge} />
+                <VerdictPanel synthesis={synthesis} results={judgeResults} scoreDisplay={scoreDisplay} onJumpToJudge={jumpToJudge} platform={platform} />
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
                 <PerformanceRadar results={judgeResults} />

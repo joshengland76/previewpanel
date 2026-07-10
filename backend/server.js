@@ -20,6 +20,7 @@ import fs from "fs";
 import path from "path";
 import { execFile, spawn } from "child_process";
 import os from "os";
+import crypto from "crypto";
 import { promisify } from "util";
 import { fileURLToPath } from "url";
 import https from "https";
@@ -72,6 +73,15 @@ process.on("unhandledRejection", (reason) => {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+
+// Phase C, Task 2 -- preview fingerprinting. PYTHON_BIN points at the
+// dedicated venv render.yaml provisions in production (PEP 668 means a
+// plain system `pip install` is blocked on newer Debian images); local dev
+// can point this at any python3 with imagehash/pillow installed (see
+// validation/requirements.txt), or leave unset to use whatever "python3"
+// resolves to on PATH.
+const PYTHON_BIN = process.env.PYTHON_BIN || "python3";
+const FINGERPRINT_SCRIPT = path.join(__dirname, "..", "validation", "fingerprint.py");
 
 // Ensure uploads directory exists before multer tries to write to it
 try {
@@ -506,6 +516,81 @@ async function initDb() {
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS file_name TEXT`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS browser_upload_ms INTEGER`);
     await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS prompt_version TEXT`);
+    // Phase C, Task 1 -- identity-lite. user_id is a client-generated,
+    // persistent UUID (localStorage), never a login/auth system -- there is
+    // no password, no session, no server-side account creation flow.
+    await client.query(`ALTER TABLE submissions ADD COLUMN IF NOT EXISTS user_id TEXT`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_submissions_user_id ON submissions(user_id)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        user_id         TEXT PRIMARY KEY,
+        tiktok_handle    TEXT,
+        instagram_handle TEXT,
+        youtube_handle   TEXT,
+        connected_at     TIMESTAMPTZ,
+        verified         BOOLEAN DEFAULT false,
+        bio_code         TEXT
+      )
+    `);
+    // Phase C, Task 2 -- preview fingerprinting. One row per successfully
+    // fingerprinted preview submission; fp_json holds the vendored
+    // fingerprint.py output verbatim (frame_hashes_hex, audio_fingerprint,
+    // duration). Nullable submission_id/user_id (a fingerprint can succeed
+    // even if, say, the submissions INSERT path degrades -- never block one
+    // on the other).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS preview_fingerprints (
+        id             BIGSERIAL PRIMARY KEY,
+        submission_id  INTEGER,
+        user_id        TEXT,
+        platform       TEXT,
+        fp_json        JSONB,
+        created_at     TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_preview_fingerprints_user_id ON preview_fingerprints(user_id)`);
+    // Phase C, Task 3 -- posted_videos + validation-side shadow_scores
+    // tagging. status chain: discovered -> downloaded -> scored -> matched
+    // (matched is an ADDITIONAL fact -- only reachable if a preview match
+    // was found; an unmatched, Tier-3 video terminates at 'scored') ->
+    // day30_pending -> day30_collected (Phase C2), or 'failed' at any point.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS posted_videos (
+        id                    BIGSERIAL PRIMARY KEY,
+        user_id               TEXT,
+        tiktok_video_id       TEXT UNIQUE NOT NULL,
+        handle                TEXT,
+        posted_at             TIMESTAMPTZ,
+        discovered_at         TIMESTAMPTZ DEFAULT now(),
+        status                TEXT DEFAULT 'discovered',
+        matched_submission_id INTEGER,
+        match_tier            INTEGER,
+        match_overlap         DOUBLE PRECISION,
+        audio_match           BOOLEAN,
+        duration_delta        DOUBLE PRECISION,
+        y_pred                DOUBLE PRECISION,
+        avg_score             DOUBLE PRECISION,
+        prompt_version        TEXT,
+        pegasus_model         TEXT,
+        day30_views           INTEGER,
+        day30_likes           INTEGER,
+        day30_comments        INTEGER,
+        day30_shares          INTEGER,
+        day30_saves           INTEGER,
+        collected_at          TIMESTAMPTZ
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_posted_videos_user_id ON posted_videos(user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_posted_videos_status ON posted_videos(status)`);
+    // is_posted_video is the load-bearing exclusion flag for percentilePools
+    // and personal-history queries (see below) -- posted-video validation
+    // rescores must never pollute either pool. source is kept alongside it
+    // as an explicit, human-readable provenance tag (informational, same
+    // spirit as created_by_instance on analyze_tasks).
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS source TEXT`);
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS is_posted_video BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS posted_video_id INTEGER`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_is_posted_video ON shadow_scores(is_posted_video)`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS analyze_tasks (
         id                  SERIAL PRIMARY KEY,
@@ -683,6 +768,24 @@ async function initDb() {
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS objective TEXT`);
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS user_id TEXT`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_objective ON shadow_scores(objective)`);
+    // Phase C, Task 1 -- personal percentile now runs a real user_id-scoped
+    // query (see fetchPersonalPredictions below), so this index is no longer
+    // purely forward-compat.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_user_id ON shadow_scores(user_id)`);
+    // Phase C, Task 0b -- platform column + one-time backfill from submissions.
+    // Plumbing only: percentilePools/personal-history queries below now CARRY
+    // platform through, but pools stay unified (no filtering by platform) until
+    // the Task 0c framing gate returns a verdict. The backfill UPDATE only
+    // touches NULL rows, so it's safe to run on every boot (idempotent, cheap
+    // once caught up).
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS platform TEXT`);
+    await client.query(`
+      UPDATE shadow_scores SET platform = submissions.platform
+      FROM submissions
+      WHERE shadow_scores.submission_id = submissions.id
+        AND shadow_scores.platform IS NULL
+        AND submissions.platform IS NOT NULL
+    `);
     await client.query("COMMIT");
 
     console.log("[db] PostgreSQL connected — submissions table ready");
@@ -824,6 +927,8 @@ async function saveSubmission(entry) {
       PEGASUS_MODEL,
       // Judge-prompt version stamping ($86) — Phase B3, Task 3
       JUDGE_PROMPT_VERSION,
+      // Client-generated persistent user_id ($87) — Phase C, Task 1
+      entry.userId ?? null,
     ];
     console.log(`[db] INSERT submissions — job=${entry.jobId} status=${entry.status} browser_upload_ms=${entry.timings.browserUploadMs} total_ms=${entry.timings.totalMs}`);
     console.log(`[db] Dimensions — critic_hook=${d.critic_hook_strength ?? "null"}, critic_completion=${d.critic_completion_likelihood ?? "null"}, trendsetter_hook=${d.trendsetter_hook_strength ?? "null"}, connector_hook=${d.connector_hook_strength ?? "null"}`);
@@ -849,14 +954,14 @@ async function saveSubmission(entry) {
            trendsetter_big_funny, trendsetter_big_compelling, trendsetter_big_authentic, trendsetter_big_novel, trendsetter_big_visually_engaging, trendsetter_big_emotionally_resonant, trendsetter_big_useful, trendsetter_big_surprising, trendsetter_big_relatable, trendsetter_big_emotion_intensity,
            connector_big_funny, connector_big_compelling, connector_big_authentic, connector_big_novel, connector_big_visually_engaging, connector_big_emotionally_resonant, connector_big_useful, connector_big_surprising, connector_big_relatable, connector_big_emotion_intensity,
            risk_sexual_suggestive, risk_violence_shock, risk_hate_harassment, risk_profanity, risk_outrage_inflammatory, risk_dangerous_acts, risk_scored_version,
-           pegasus_model, prompt_version)
+           pegasus_model, prompt_version, user_id)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
                 $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,
                 $37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,
                 $48,$49,$50,$51,$52,$53,$54,$55,$56,$57,
                 $58,$59,$60,$61,$62,$63,$64,$65,$66,$67,
                 $68,$69,$70,$71,$72,$73,$74,$75,$76,$77,
-                $78,$79,$80,$81,$82,$83,$84,$85,$86)
+                $78,$79,$80,$81,$82,$83,$84,$85,$86,$87)
         RETURNING id
       `, fullValues);
       return rows[0]?.id ?? null;
@@ -964,15 +1069,10 @@ async function saveAnalyzeTask(jobId, judgeId, taskId, platform, targetAudience,
   }
 }
 
-// Instance-scoped filter, used ONLY by startup resume below to rebuild
-// in-memory job placeholders — a read, not a claim, so two containers
-// (dev or blue-green prod) both matching the same rows here is harmless; each
-// just seeds its own local `jobs` map. Actual work-claiming no longer uses
-// this at all (see claimAnalyzeTasks / App hardening Task B7) — replaced by
-// atomic per-row claiming because this filter can't distinguish two
-// containers that share the same INSTANCE_ID, which happens on every Render
-// blue-green deploy's overlap window, not just hypothetically "if production
-// scales past one instance."
+// Instance-scoped filter, used by startup resume below to rebuild in-memory
+// job placeholders (a read, not a claim — harmless for two containers to
+// both match) AND, as of the Phase C fix below, as an additional role-scope
+// filter inside the atomic claim itself.
 const INSTANCE_CLAIM_SQL = `(created_by_instance = $1 OR (created_by_instance IS NULL AND $1 = 'production'))`;
 
 // App hardening, Task B7 -- atomic per-row task claiming. Single UPDATE,
@@ -985,6 +1085,25 @@ const INSTANCE_CLAIM_SQL = `(created_by_instance = $1 OR (created_by_instance IS
 // else — that's the orphan-prevention path. FOR UPDATE SKIP LOCKED means a
 // poller never blocks waiting on a row a concurrent poller is mid-claim on;
 // it just skips it this cycle and picks it up next time if it's still free.
+//
+// Phase C fix (found while testing Task 4's validation ingestion locally,
+// 2026-07-10): B7's original design deliberately dropped ALL role-based
+// scoping from the claim query, reasoning that created_by_instance couldn't
+// distinguish two containers sharing INSTANCE_ID=production during a
+// blue-green deploy anyway. True, but that also meant PRODUCTION's live
+// poller was free to claim rows created by a LOCAL DEV server sharing the
+// same Neon database (this project's normal setup — research scripts and
+// local dev both point at the same DATABASE_URL as production) — production
+// would claim, score, and mark the row 'ready', but since it has no matching
+// entry in ITS OWN in-memory `jobs` map, the job could never actually
+// finish locally: it just sits orphaned at status='ready' forever, and the
+// local job hangs in "analyzing." Re-adding the created_by_instance filter
+// AS AN ADDITIONAL AND-clause (not a replacement for the self-renewing
+// lease) fixes this without reintroducing the bug B7 fixed: two production
+// containers still share created_by_instance='production' and are still
+// correctly arbitrated between by the SELF_RUN_ID-based lease, exactly as
+// before; a local dev container (created_by_instance='dev-hostname') now
+// simply never matches production-created rows, and vice versa.
 const STALE_CLAIM_MS = 10 * 60 * 1000; // 10 min
 
 async function claimAnalyzeTasks() {
@@ -993,6 +1112,7 @@ async function claimAnalyzeTasks() {
     WITH candidates AS (
       SELECT id FROM analyze_tasks
       WHERE status = 'pending'
+        AND ${INSTANCE_CLAIM_SQL.replace(/\$1/g, "$3")}
         AND (claimed_by IS NULL OR claimed_by = $1 OR claimed_at < now() - (($2::double precision) * interval '1 millisecond'))
       ORDER BY id
       FOR UPDATE SKIP LOCKED
@@ -1004,7 +1124,7 @@ async function claimAnalyzeTasks() {
     RETURNING analyze_tasks.job_id, analyze_tasks.judge_id, analyze_tasks.task_id,
               analyze_tasks.platform, analyze_tasks.target_audience,
               analyze_tasks.video_duration_secs, analyze_tasks.created_at
-  `, [SELF_RUN_ID, STALE_CLAIM_MS]);
+  `, [SELF_RUN_ID, STALE_CLAIM_MS, INSTANCE_ID]);
   return rows;
 }
 
@@ -1512,6 +1632,62 @@ async function runFfmpegSpawn(args, { label = "ffmpeg" } = {}) {
         else reject(new Error(`${label} exited with code ${code}: ${stderr.slice(-1000)}`));
       });
     });
+  } finally {
+    releaseFfmpegSlot();
+  }
+}
+
+// Phase C, Task 2 -- preview fingerprinting. Runs the vendored
+// validation/fingerprint.py (spawned, never exec) against the converted mp4
+// BEFORE it gets deleted post-upload (see the call site in runPipeline).
+// Goes through the SAME shared ffmpeg semaphore as conversions/trims --
+// fingerprint.py does its own ffmpeg frame extraction internally, so it
+// competes for the same CPU/process budget and must respect the same cap.
+// Strictly non-blocking: every failure mode here is caught and logged,
+// never thrown -- a fingerprinting failure must never affect, delay, or
+// degrade the analysis path in any way. Gated behind FINGERPRINT_PREVIEWS
+// (default off).
+async function fingerprintPreviewForJob(jobId, filePath, { userId, platform }) {
+  if (process.env.FINGERPRINT_PREVIEWS !== "true") return null;
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  const t0 = Date.now();
+  await acquireFfmpegSlot();
+  try {
+    const fpJson = await new Promise((resolve, reject) => {
+      const proc = spawn(PYTHON_BIN, [FINGERPRINT_SCRIPT, filePath], { stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "", stderr = "";
+      proc.stdout.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d) => { stderr = (stderr + d.toString()).slice(-2000); });
+      proc.on("error", reject); // e.g. python3/PYTHON_BIN not found
+      proc.on("close", (code) => {
+        if (code !== 0) return reject(new Error(`fingerprint.py exited ${code}: ${stderr.slice(-500)}`));
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          if (parsed.error) return reject(new Error(`fingerprint.py reported: ${parsed.error}`));
+          resolve(parsed);
+        } catch (e) {
+          reject(new Error(`fingerprint.py output not valid JSON: ${e.message}`));
+        }
+      });
+    });
+
+    const elapsed = Date.now() - t0;
+    console.log(`[${jobId}] [fingerprint] computed in ${elapsed}ms — frames=${fpJson.frame_hashes_hex?.length ?? 0} audio=${fpJson.audio_fingerprint ? "yes" : "no"} duration=${fpJson.duration ?? "?"}`);
+
+    if (pgPool) {
+      // submission_id is unknown this early in the pipeline (judges haven't
+      // run yet) -- inserted NULL, backfilled from recordSubmissionForJob
+      // once the real id exists (see jobs[jobId].fingerprintId below).
+      const { rows } = await queryRW(
+        `INSERT INTO preview_fingerprints (submission_id, user_id, platform, fp_json) VALUES (NULL,$1,$2,$3) RETURNING id`,
+        [userId ?? null, platform ?? null, JSON.stringify(fpJson)]
+      );
+      return rows[0]?.id ?? null;
+    }
+    return null;
+  } catch (e) {
+    console.error(`[${jobId}] [fingerprint] failed (non-fatal, analysis unaffected): ${e.message}`);
+    return null;
   } finally {
     releaseFfmpegSlot();
   }
@@ -2081,8 +2257,12 @@ async function runSynthesisForJob(jobId) {
 // job's status response. Fire-and-forget only; never awaited on the request
 // path (see call site below, same pattern as runSynthesisForJob).
 async function runShadowScoringForJob(jobId) {
-  if (process.env.SHADOW_SCORING !== "true") return;
   const job = jobs[jobId];
+  // Phase C, Task 3 -- validation ingestion's entire purpose IS running this
+  // scoring path (it's not an opt-in shadow A/B for a real app user), so it
+  // must never be gated behind the SHADOW_SCORING rollout flag the way the
+  // normal app path is.
+  if (process.env.SHADOW_SCORING !== "true" && job?.source !== "validation") return;
   if (!job || !pgPool) return;
 
   try {
@@ -2152,23 +2332,72 @@ async function runShadowScoringForJob(jobId) {
       pegasusModel: PEGASUS_MODEL,
       promptVersion: JUDGE_PROMPT_VERSION, // stamped since Phase B3, Task 3 (was null in B2 — see PHASEB2_READOUT.md Task 1)
       cdimsStatus,
+      platform: job.platform ?? null, // Phase C, Task 0b
+      userId: job.userId ?? null, // Phase C, Task 1
+      // Phase C, Task 3 -- posted-video validation rescores are tagged
+      // distinctly so percentilePools/personal-history queries can exclude
+      // them (see idx_shadow_scores_is_posted_video's call sites below).
+      source: job.source === "validation" ? "validation" : "app",
+      isPostedVideo: job.source === "validation",
+      postedVideoId: job.postedVideoId ?? null,
     });
+
+    // Phase C, Task 3 -- posted_videos gets the scoring result written back
+    // directly (y_pred/avg_score/prompt_version/pegasus_model), and its
+    // status advances: 'scored' always, further to 'matched' if a preview
+    // match was already found (matched_submission_id set before ingestion —
+    // matching happens in the Task 4 worker, before it ever calls this
+    // endpoint, so that fact is already known here).
+    if (job.source === "validation" && job.postedVideoId && shadowResult && pgPool) {
+      const rawScores = Object.values(scores).filter((v) => typeof v === "number");
+      const rawAvg = rawScores.length ? parseFloat((rawScores.reduce((a, b) => a + b, 0) / rawScores.length).toFixed(2)) : null;
+      queryRW(
+        `UPDATE posted_videos SET y_pred = $1, avg_score = $2, prompt_version = $3, pegasus_model = $4,
+           status = CASE WHEN matched_submission_id IS NOT NULL THEN 'matched' ELSE 'scored' END
+         WHERE id = $5`,
+        [shadowResult.prediction, rawAvg, JUDGE_PROMPT_VERSION, PEGASUS_MODEL, job.postedVideoId]
+      ).catch((e) => console.error(`[${jobId}] [validation] posted_videos update failed: ${e.message}`));
+    }
 
     // Score display (Phase B3/B3b, Task 5) — DISPLAY_SCORE default false.
     // Reuses shadowResult.prediction rather than rescoring. Niche/overall
     // percentiles come from the pool engine (corpus seed UNION shadow_scores,
     // see percentilePools.js); selfKey excludes the row just written above
-    // from those two pools. There is no user-identity system yet, so
-    // fetchPersonalPredictions always resolves empty (honestly reports "not
-    // enough data" per scoreDisplay.js).
-    if (process.env.DISPLAY_SCORE === "true" && shadowResult) {
-      job.scoreDisplay = await getScoreDisplay(job.objective, shadowResult.prediction, null, {
+    // from those two pools. Personal percentile (Phase C, Task 1) now runs a
+    // real user_id-scoped query -- job.userId is null for anyone who hasn't
+    // connected/generated an identity yet, in which case fetchPersonalPredictions
+    // is never called (getScoreDisplay only calls it when userId is truthy)
+    // and personal honestly reports "not enough data," same as before.
+    // Phase C, Task 3 -- validation ingestion creates NO display payload at
+    // all, by design (nothing polls this job; the Mac worker gets a plain
+    // JSON response from the ingestion endpoint instead).
+    if (process.env.DISPLAY_SCORE === "true" && shadowResult && job.source !== "validation") {
+      job.scoreDisplay = await getScoreDisplay(job.objective, shadowResult.prediction, job.userId ?? null, {
         selfKey: shadowResult.id != null ? `shadow:${shadowResult.id}` : null,
+        platform: job.platform ?? null, // Phase C, Task 0d -- non-tiktok proxy note
         fetchShadowRows: async () => {
+          // platform selected but not yet filtered on -- Phase C, Task 0b
+          // (plumbing only; pools stay unified pending the Task 0c gate).
+          // is_posted_video rows excluded -- Task 3: posted-video validation
+          // rescores must never pollute the niche/overall percentile pools.
           const { rows } = await pgPool.query(
-            `SELECT id, prediction, objective, created_at FROM shadow_scores WHERE prediction IS NOT NULL`
+            `SELECT id, prediction, objective, created_at, platform FROM shadow_scores
+             WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE`
           );
           return rows;
+        },
+        fetchPersonalPredictions: async (userId) => {
+          // This user's own history of PREVIEW submissions (this one
+          // included, per personalDisplay's contract). is_posted_video rows
+          // excluded -- Task 3: personal history = previews only; posted
+          // rescores are validation-side, not part of a user's own history.
+          const { rows } = await pgPool.query(
+            `SELECT prediction FROM shadow_scores
+             WHERE user_id = $1 AND prediction IS NOT NULL AND is_posted_video IS NOT TRUE
+             ORDER BY created_at DESC LIMIT 500`,
+            [userId]
+          );
+          return rows.map((r) => r.prediction);
         },
       });
     }
@@ -2295,6 +2524,89 @@ async function preprocessUploadedVideo(jobId, filePath) {
   }
 }
 
+// ── Phase C, Task 1: identity-lite (multi-platform handles) ──────────────────
+// No login/auth system -- user_id is a client-generated persistent UUID
+// (localStorage), stamped onto submissions/shadow_scores so a user's OWN
+// history can be queried back out. Handle "connection" is just storing a
+// self-reported string; there is no OAuth, no scraping-based ownership
+// check at connect time (that's the bio-code path below, and even that
+// stays a dormant stub this pass -- Task 4's validation worker is what
+// actually reads real TikTok content, not this endpoint).
+function normalizeHandle(raw, platform) {
+  if (!raw) return null;
+  let h = String(raw).trim();
+  if (!h) return null;
+  if (platform === "youtube" && /youtube\.com/i.test(h)) {
+    // Accept a full channel URL -- extract the last path segment. This
+    // handles the common https://youtube.com/@handle form cleanly; a
+    // /channel/UC... URL has no textual handle to extract, so it's stored
+    // as-is (a known limitation -- resolving a channel ID to its @handle
+    // needs a YouTube API call, out of scope for this identity-lite stub).
+    const parts = h.replace(/\/+$/, "").split("/");
+    h = parts[parts.length - 1] || h;
+  }
+  h = h.replace(/^@/, "").trim().toLowerCase();
+  return h || null;
+}
+
+function generateBioCode() {
+  // Short, human-typeable code for a bio-verification flow. Collision risk
+  // is negligible at this user scale and non-fatal even if it happened
+  // (verification itself is a dormant stub -- nothing currently checks
+  // uniqueness of this code against real bio content).
+  return crypto.randomBytes(4).toString("hex").toUpperCase();
+}
+
+app.post("/api/user/connect", async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  const { userId, tiktokHandle, instagramHandle, youtubeHandle } = req.body || {};
+  if (!userId) return res.status(400).json({ error: "userId is required" });
+
+  const tiktok = normalizeHandle(tiktokHandle, "tiktok");
+  if (!tiktok) {
+    // TikTok is the required, primary handle -- validation scanning (Task 4)
+    // is TikTok-only this phase, so a user with no TikTok handle can't
+    // participate in validation at all.
+    return res.status(400).json({ error: "TikTok handle is required to connect your account" });
+  }
+  const instagram = normalizeHandle(instagramHandle, "instagram");
+  const youtube = normalizeHandle(youtubeHandle, "youtube");
+
+  try {
+    const { rows: existingRows } = await pgPool.query(`SELECT bio_code FROM users WHERE user_id = $1`, [userId]);
+    const bioCode = existingRows[0]?.bio_code || generateBioCode();
+
+    const { rows } = await queryRW(
+      `INSERT INTO users (user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, bio_code)
+       VALUES ($1,$2,$3,$4,now(),$5)
+       ON CONFLICT (user_id) DO UPDATE SET
+         tiktok_handle = $2, instagram_handle = $3, youtube_handle = $4, connected_at = now()
+       RETURNING user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, verified, bio_code`,
+      [userId, tiktok, instagram, youtube, bioCode]
+    );
+    console.log(`[user] connected user_id=${userId} tiktok=${tiktok} instagram=${instagram ?? "—"} youtube=${youtube ?? "—"}`);
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(`[user] connect failed for user_id=${userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to save account connection" });
+  }
+});
+
+app.get("/api/user/:userId", async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  try {
+    const { rows } = await pgPool.query(
+      `SELECT user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, verified, bio_code FROM users WHERE user_id = $1`,
+      [req.params.userId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: "Not connected" });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error(`[user] fetch failed for user_id=${req.params.userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to fetch account" });
+  }
+});
+
 app.post("/api/analyze", (req, res, next) => {
   const t_request = Date.now();
   console.log(`[upload] Request received — starting multer file parse`);
@@ -2322,6 +2634,7 @@ app.post("/api/analyze", (req, res, next) => {
       platform = "youtube",
       objective = "",
       judges: judgesParam,
+      userId = null, // Phase C, Task 1 -- client-generated persistent UUID
     } = req.body;
 
     const filePath = req.file?.path;
@@ -2346,6 +2659,7 @@ app.post("/api/analyze", (req, res, next) => {
       queuePosition,
       platform,
       objective,
+      userId: userId || null,
       results: {},
       error: null,
       createdAt: Date.now(),
@@ -2661,6 +2975,136 @@ app.post("/api/research/submit-eval", requireResearchAuth, (req, res, next) => {
   }
 });
 
+// Phase C, Task 3 -- validation ingestion. Called by the Task 4 Mac worker
+// after it discovers/downloads/fingerprints/matches a posted TikTok video.
+// Runs the exact same synchronous full-scoring pattern as
+// /api/research/submit-eval (enqueueJob + runPipeline + waitForJobCompletion)
+// so the ENTIRE existing judges-v2.1 / C_dims / Node-scorer machinery is
+// reused unchanged -- the only new things are: platform is always forced to
+// "tiktok" (posted-video framing must match what the matched preview was
+// scored under), objective is borrowed from the matched preview submission
+// when a match exists (null otherwise -- buildTLPrompt/scoreFeatures already
+// handle a null objective gracefully), and job.source="validation" routes
+// around the submissions-table write and the display-payload computation
+// (see recordSubmissionForJob / runShadowScoringForJob). Reuses
+// requireResearchAuth -- this is a trusted, Josh-controlled script, not a
+// public-facing endpoint, same trust boundary as the research API.
+app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
+  upload.single("video")(req, res, (err) => {
+    if (err) {
+      console.error(`[validation] Multer error:`, err.message);
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
+  const cleanupTempFile = () => { if (req.file?.path) fs.unlink(req.file.path, () => {}); };
+  try {
+    if (!req.file) return res.status(400).json({ error: "Missing required field: video (multipart file)" });
+
+    const tiktokVideoId = (req.body.tiktokVideoId || "").toString().trim();
+    if (!tiktokVideoId) { cleanupTempFile(); return res.status(400).json({ error: "tiktokVideoId is required" }); }
+    const userId = (req.body.userId || "").toString().trim() || null;
+    const handle = (req.body.handle || "").toString().trim() || null;
+    const postedAt = req.body.postedAt ? new Date(req.body.postedAt) : null;
+    const matchedSubmissionId = req.body.matchedSubmissionId ? parseInt(req.body.matchedSubmissionId, 10) : null;
+    const matchTier = req.body.matchTier != null ? parseInt(req.body.matchTier, 10) : null;
+    const matchOverlap = req.body.matchOverlap != null ? parseFloat(req.body.matchOverlap) : null;
+    const audioMatch = req.body.audioMatch != null ? req.body.audioMatch === "true" : null;
+    const durationDelta = req.body.durationDelta != null ? parseFloat(req.body.durationDelta) : null;
+
+    if (!pgPool) { cleanupTempFile(); return res.status(503).json({ error: "Database not available" }); }
+
+    // Borrow the matched preview's objective (there is no user-submitted
+    // objective for a posted video) -- null for an unmatched (Tier 3) video,
+    // which the scoring pipeline already handles gracefully.
+    let objective = null;
+    if (matchedSubmissionId) {
+      const { rows } = await pgPool.query(`SELECT objective FROM submissions WHERE id = $1`, [matchedSubmissionId]);
+      objective = rows[0]?.objective ?? null;
+    }
+
+    // Upsert the posted_videos row -- tiktok_video_id is UNIQUE, so a re-run
+    // (worker retry, or Task 4's --file test mode re-posting the same id)
+    // updates in place rather than erroring or duplicating.
+    const { rows: pvRows } = await queryRW(
+      `INSERT INTO posted_videos
+         (user_id, tiktok_video_id, handle, posted_at, status, matched_submission_id, match_tier, match_overlap, audio_match, duration_delta)
+       VALUES ($1,$2,$3,$4,'downloaded',$5,$6,$7,$8,$9)
+       ON CONFLICT (tiktok_video_id) DO UPDATE SET
+         user_id = $1, handle = $3, posted_at = $4, matched_submission_id = $5,
+         match_tier = $6, match_overlap = $7, audio_match = $8, duration_delta = $9
+       RETURNING id`,
+      [userId, tiktokVideoId, handle, postedAt, matchedSubmissionId, matchTier, matchOverlap, audioMatch, durationDelta]
+    );
+    const postedVideoId = pvRows[0].id;
+
+    const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    logMemoryMB(`job start: ${jobId}`); // App hardening, Task A3
+    jobs[jobId] = {
+      status: "uploading",
+      queuePosition: 0,
+      platform: "tiktok", // posted-video framing always matches the matched preview's tiktok scoring
+      objective,
+      source: "validation",
+      userId,
+      postedVideoId,
+      results: {},
+      error: null,
+      createdAt: Date.now(),
+      startedAt: null,
+      timings: { conversionMs: null, uploadMs: null, browserUploadMs: null, judges: {} },
+      ip: (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map(s => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })(),
+      fileSizeMB: parseFloat((req.file.size / 1024 / 1024).toFixed(2)),
+      fileName: `tiktok_${tiktokVideoId}${path.extname(req.file.originalname || ".mp4")}`,
+      browserUploadMs: null,
+    };
+
+    console.log(`[${jobId}] [validation] Job created — posted_video_id=${postedVideoId} tiktok_video_id=${tiktokVideoId} objective="${objective ?? "—"}" match_tier=${matchTier ?? "—"}`);
+
+    const pre = await preprocessUploadedVideo(jobId, req.file.path);
+    if (!pre.ok) {
+      const isInternal = pre.status === "error";
+      queryRW(`UPDATE posted_videos SET status = 'failed' WHERE id = $1`, [postedVideoId]).catch(() => {});
+      return res.status(isInternal ? 500 : 400).json({ error: pre.error, rejection_reason: pre.status });
+    }
+
+    enqueueJob(jobId, () => runPipeline(jobId, null, "tiktok", objective, JUDGES));
+
+    try {
+      await waitForJobCompletion(jobId);
+    } catch (waitErr) {
+      console.error(`[${jobId}] [validation] Wait error: ${waitErr.message}`);
+      queryRW(`UPDATE posted_videos SET status = 'failed' WHERE id = $1`, [postedVideoId]).catch(() => {});
+      return res.status(500).json({ error: waitErr.message });
+    }
+
+    const job = jobs[jobId];
+    // waitForJobCompletion only resolves once judging finishes (job.finalized);
+    // the actual scoring result this endpoint reports comes from
+    // runShadowScoringForJob, which recordSubmissionForJob fires without
+    // awaiting (by design, for the normal app path). Await that same promise
+    // here so posted_videos.y_pred/avg_score/status are genuinely final
+    // before responding.
+    if (job.shadowScoringPromise) await job.shadowScoringPromise;
+    const { rows: finalRows } = await pgPool.query(`SELECT status, y_pred, avg_score FROM posted_videos WHERE id = $1`, [postedVideoId]);
+    const responseStatus = job.status === "done" || job.status === "partial" ? "complete" : job.status;
+    if (responseStatus !== "complete") {
+      queryRW(`UPDATE posted_videos SET status = 'failed' WHERE id = $1`, [postedVideoId]).catch(() => {});
+    }
+    return res.status(responseStatus === "complete" ? 200 : 500).json({
+      postedVideoId,
+      status: finalRows[0]?.status ?? responseStatus,
+      yPred: finalRows[0]?.y_pred ?? null,
+      avgScore: finalRows[0]?.avg_score ?? null,
+    });
+  } catch (err) {
+    console.error(`[validation] Unexpected error:`, err);
+    cleanupTempFile();
+    if (!res.headersSent) res.status(500).json({ error: err.message || "Internal error" });
+  }
+});
+
 // Synchronous wait for a job to reach jobs[jobId].finalized = true (set inside
 // recordSubmissionForJob). Polls local memory every 1s; nudges the background
 // TwelveLabs poller every 5s to reduce response latency below the poller's
@@ -2731,8 +3175,28 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     // Research retains nothing. Delete whichever file we don't keep.
     const isApp = jobs[jobId].source !== "research_api";
     const retainPath = isApp ? (filePath || activeConvertedPath) : null;
-    if (filePath && filePath !== retainPath) fs.unlink(filePath, () => {});
-    if (activeConvertedPath && activeConvertedPath !== retainPath) fs.unlink(activeConvertedPath, () => {});
+    // Phase C, Task 2 -- fingerprint the converted mp4 BEFORE deleting it,
+    // fire-and-forget: NOT awaited here, so task creation below proceeds
+    // immediately with zero added delay. The delete itself is deferred into
+    // this same async chain (rather than run synchronously on the next
+    // lines) purely so fingerprinting always gets to finish reading the
+    // file first -- REAL END-USER PREVIEW submissions only (job.source is
+    // undefined for those; research_api has its own separate collection
+    // pipeline, and Task 3's validation ingestion is already-posted content
+    // being rescored, not a preview -- fingerprinting it would be pointless
+    // and would pollute preview_fingerprints, which Task 4's matcher assumes
+    // contains only real previews).
+    const isRealPreviewSubmission = !jobs[jobId].source;
+    const fingerprintTarget = isRealPreviewSubmission && activeConvertedPath !== retainPath ? activeConvertedPath : null;
+    (async () => {
+      if (fingerprintTarget) {
+        jobs[jobId].fingerprintId = await fingerprintPreviewForJob(jobId, fingerprintTarget, {
+          userId: jobs[jobId].userId, platform: jobs[jobId].platform,
+        });
+      }
+      if (filePath && filePath !== retainPath) fs.unlink(filePath, () => {});
+      if (activeConvertedPath && activeConvertedPath !== retainPath) fs.unlink(activeConvertedPath, () => {});
+    })();
     if (retainPath) retainTrimFile(jobId, retainPath, videoDuration?.secs ?? null);
 
     if (jobs[jobId].finalized) {
@@ -2951,6 +3415,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     avgScore: scoreCount > 0 ? parseFloat((scoreSum / scoreCount).toFixed(1)) : null,
     thumbnailDataUrl: job.thumbnailDataUrl || null,
     objective: job.objective || null,
+    userId: job.userId || null, // Phase C, Task 1
   };
   let submissionId;
   if (job.isEvalRun) {
@@ -2958,12 +3423,27 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     // ONLY. Never touches submissions or submissionLog (that log/table is
     // reserved for real app/research traffic, not this evaluation batch).
     submissionId = await saveEvalRun(entry, job.videoId, job.externalVideoId);
+  } else if (job.source === "validation") {
+    // Phase C, Task 3 -- posted-video validation rescoring writes NO
+    // submissions row at all (the scoring result lives on posted_videos
+    // directly, via the update in runShadowScoringForJob below) and never
+    // touches submissionLog. avgScore/dimensions computed above are still
+    // used for logging only.
+    submissionId = null;
   } else {
     submissionLog.unshift(entry);
     if (submissionLog.length > 500) submissionLog.length = 500;
     submissionId = await saveSubmission(entry);
   }
   if (submissionId != null) job.submissionId = submissionId;
+  // Phase C, Task 2 -- backfill preview_fingerprints.submission_id now that
+  // it's known (fingerprinting ran much earlier, at upload time, before any
+  // submission row existed). fingerprintId is only ever set for app
+  // submissions with FINGERPRINT_PREVIEWS on; a no-op otherwise.
+  if (submissionId != null && job.fingerprintId != null && pgPool) {
+    queryRW(`UPDATE preview_fingerprints SET submission_id = $1 WHERE id = $2`, [submissionId, job.fingerprintId])
+      .catch((e) => console.error(`[${jobId}] [fingerprint] submission_id backfill failed: ${e.message}`));
+  }
   job.completedAt = Date.now();
   // Set AFTER submissionId/completedAt populate so waitForJobCompletion can
   // safely read them on the same tick. `finalized` above is set first as a
@@ -3045,8 +3525,14 @@ async function checkJobCompletion(jobId) {
 
   // Capstone v2 shadow scoring (Phase B2) — invisible, flags-gated, fire-and-
   // forget (same pattern as synthesis above). No-op unless SHADOW_SCORING="true".
+  // Phase C, Task 3 -- the promise is stashed on the job (never awaited by
+  // this function itself, so every OTHER caller's fire-and-forget behavior
+  // is unchanged) so /api/validation/ingest can specifically await it before
+  // responding -- that endpoint's whole point is reporting the final score,
+  // unlike the normal app path where the user-facing response must never
+  // wait on shadow-scoring.
   if (finalStatus === "done" || finalStatus === "partial") {
-    runShadowScoringForJob(jobId).catch((err) => {
+    job.shadowScoringPromise = runShadowScoringForJob(jobId).catch((err) => {
       console.error(`[${jobId}] [shadow_score] unexpected error: ${err.message}`);
     });
   }

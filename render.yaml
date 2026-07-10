@@ -3,7 +3,12 @@ services:
     name: previewpanel-backend
     runtime: node
     rootDir: backend
-    buildCommand: apt-get update -y && apt-get install -y ffmpeg && npm install
+    # Phase C, Task 2 -- preview fingerprinting needs python3 + chromaprint's
+    # fpcalc (apt) plus imagehash/pillow (pip, into a dedicated venv rather
+    # than system site-packages -- Debian's newer images block unqualified
+    # `pip install` outside a venv, PEP 668). PYTHON_BIN below points
+    # server.js's spawn call at this venv's interpreter.
+    buildCommand: apt-get update -y && apt-get install -y ffmpeg python3 python3-venv chromaprint && python3 -m venv /opt/pp_venv && /opt/pp_venv/bin/pip install --no-cache-dir -r ../validation/requirements.txt && npm install
     startCommand: node server.js
     envVars:
       - key: NODE_VERSION
@@ -14,3 +19,5 @@ services:
         sync: false
       - key: RESEARCH_API_KEY
         sync: false
+      - key: PYTHON_BIN
+        value: /opt/pp_venv/bin/python3
