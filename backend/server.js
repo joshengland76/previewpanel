@@ -190,11 +190,11 @@ const INSTANCE_ID = process.env.INSTANCE_ID || `dev-${os.hostname()}`;
 // buildVideoContext, or any judge's scoring instructions change meaningfully —
 // B4's dual-run gate and reference-distribution keying depend on this being a
 // faithful stamp of "which prompt produced this row," not just a build marker.
-// Phase B4, Task 2: v2 exists behind JUDGES_V2 (default off — v1 stays live
-// during the dual-run gate). Flipping the flag changes BOTH which prompt
-// buildTLPrompt() actually sends AND the stamp recorded on every row, so the
-// two can never drift apart.
-const JUDGE_PROMPT_VERSION = process.env.JUDGES_V2 === "true" ? "judges-v2.0" : "judges-v1.0";
+// Phase B4b, Task 1: judges-v2.1 (supersedes the abandoned judges-v2.0)
+// exists behind JUDGES_V21 (default off — v1 stays live during the dual-run
+// gate). Flipping the flag changes BOTH which prompt buildTLPrompt() actually
+// sends AND the stamp recorded on every row, so the two can never drift apart.
+const JUDGE_PROMPT_VERSION = process.env.JUDGES_V21 === "true" ? "judges-v2.1" : "judges-v1.0";
 
 // ── Clients (lazy — initialized on first use so server starts without keys) ──
 let _tl, _anthropic;
@@ -1046,28 +1046,35 @@ function formatTimestamp(secs) {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// Phase B4, Task 2 -- v2 changes are gated on promptVersion so v1 stays
-// byte-identical to what shipped before this prompt. v2 (a) drops the
-// Task-1-verdict-prunable output fields (per-judge "authentic"; TikTok's
-// rewatch_potential/seo_strength, conditional on Task 4's spider-chart
-// redesign also shipping so nothing prunable stays displayed), (b) steers
-// suggestions/moments/positives toward the dims that actually carry model
-// weight (compelling, emotional resonance, novelty/surprise, relatability,
-// usefulness, save-worthiness, hook strength) with honesty guardrails baked
-// into the prose itself (correlational framing, never causal; no duration/
-// length advice, ever; no "do X to raise your score" phrasing), and (c)
-// leaves every RETAINED field's definition, scale, and JSON key identical --
-// nothing about how a kept dimension is measured changes, only the
-// surrounding prose guidance.
+// Phase B4b, Task 1 -- judges-v2.1 supersedes the abandoned judges-v2.0.
+// Per PROJECT_PLAN_v14.md §6 (durable decision, 2026-07-09): the judge
+// prompt's SCORED-FIELD roster (what judges output, definitions, scales,
+// JSON schema, OVERALL WEIGHTING) is part of the model's input contract,
+// frozen with the artifact -- v2.0's field drops ("authentic"; TikTok's
+// rewatch_potential/seo_strength) are permanently abandoned. v2.1 restores
+// the FULL v1 scored-field roster and changes ONLY:
+//   (a) removes the three per-platform "optimal length: N seconds" lines --
+//       the one clearly causal/prescriptive duration claim in the prompt;
+//   (b) steers dimensionFeedback/SUGGESTIONS/POSITIVES prose toward the
+//       dims that carry model weight (compelling, emotional resonance,
+//       novelty/surprise, relatability, usefulness, save-worthiness, hook
+//       strength), correlational framing only, never "do X to raise your
+//       score" -- guardrail language lives INSIDE each advice instruction,
+//       not as a standalone heading above the scoring section (B4's
+//       hypothesis-2 mitigation: a prominent global "HONESTY GUARDRAILS"
+//       heading before scoring may have primed broader conservatism, not
+//       just on duration);
+//   (c) keeps B4's cut-length/timestamp consistency requirement.
+// See PHASEB4B_READOUT.md for the full v1->v2.1 diff.
 //
 // Exported (along with tl, JUDGES, getVideoDuration, getVideoContext,
-// waitForAssetReady, uploadAssetDirect, processAnalyzeResult) so Task 3's
-// offline dual-run script can call the real, live prompt-building/analyze
+// waitForAssetReady, uploadAssetDirect, processAnalyzeResult) so the
+// offline dual-run scripts can call the real, live prompt-building/analyze
 // path for both versions -- importing server.js is side-effect-free (see
 // the isEntryPoint guard at the bottom of this file), so this adds no risk
 // to the running server.
 export function buildTLPrompt(judge, platform, objective, videoDuration, promptVersion = JUDGE_PROMPT_VERSION) {
-  const V2 = promptVersion === "judges-v2.0";
+  const V21 = promptVersion === "judges-v2.1";
   const pf = PLATFORM_FOCUS[platform] || PLATFORM_FOCUS.youtube;
   const durationLine = videoDuration
     ? `\nVIDEO DURATION — This video is ${videoDuration.label} long. You MUST ONLY reference timestamps between 0:00 and ${videoDuration.label}. Do NOT reference any timestamp beyond this duration.\nTIMESTAMP NOTE — Timestamps are approximate (within 1-2 seconds due to encoding). Reference the general moment, not the exact frame.`
@@ -1076,15 +1083,13 @@ export function buildTLPrompt(judge, platform, objective, videoDuration, promptV
   const { videoType, lengthGuidance } = buildVideoContext(videoDuration);
   const { instruction: bottomInstruction, format: bottomFormat } = buildBottomSection(judge, platform);
 
-  // Platform-specific dimension definitions
+  // Platform-specific dimension definitions -- byte-identical to v1 for
+  // every version (v2.0's rewatch_potential/seo_strength drop is abandoned
+  // per PROJECT_PLAN_v14.md §6; the scored-field roster never varies by
+  // prompt version, only the surrounding prose does).
   let platformDimensionDefs = "";
   let platformDimensionFormat = "";
-  if (platform === "tiktok" && V2) {
-    // v2: rewatch_potential/seo_strength dropped (Task 1 verdict: PRUNABLE,
-    // model-dead and -- once Task 4 ships -- display-dead too; conditional on
-    // that redesign, noted in PHASEB4_READOUT.md). No platform-specific slot
-    // for TikTok in v2; the overall weighting below is rebalanced to match.
-  } else if (platform === "tiktok") {
+  if (platform === "tiktok") {
     platformDimensionDefs = `\n- rewatch_potential (1-10): Does the video loop well or reward rewatching?\n- seo_strength (1-10): Are keywords present in captions, on-screen text, or spoken audio?`;
     platformDimensionFormat = `,\n    "rewatch_potential": <1-10>,\n    "seo_strength": <1-10>`;
   } else if (platform === "instagram") {
@@ -1101,12 +1106,11 @@ export function buildTLPrompt(judge, platform, objective, videoDuration, promptV
     ? "From an algorithmic and viral-potential perspective"
     : "From an emotional and human resonance perspective";
 
-  // v2 drops "authentic" (Task 1 verdict: PRUNABLE -- zero model weight on
-  // either judge and not read anywhere in the live frontend or synthesis).
-  // Every RETAINED dim's definition/scale/wording below is byte-identical to
-  // v1 -- only "authentic" is removed and the count in the intro line updates.
-  const bigPictureDimensionDefs = `\nBIG-PICTURE DIMENSIONS — ${bigPictureLens}, score each of the following ${V2 ? "9" : "10"} qualities (1–10 integer; 1 = not at all, 5 = moderately, 10 = exceptionally — reserve 9–10 for content that genuinely stands out; most videos score 3–7):
-${V2 ? "" : "- authentic (1-10): Does the creator feel real, not performed?\n"}- compelling (1-10): Does it command attention without effort from the viewer?
+  // Big-picture dims -- byte-identical to v1 for every version (v2.0's
+  // "authentic" drop is abandoned per PROJECT_PLAN_v14.md §6).
+  const bigPictureDimensionDefs = `\nBIG-PICTURE DIMENSIONS — ${bigPictureLens}, score each of the following 10 qualities (1–10 integer; 1 = not at all, 5 = moderately, 10 = exceptionally — reserve 9–10 for content that genuinely stands out; most videos score 3–7):
+- authentic (1-10): Does the creator feel real, not performed?
+- compelling (1-10): Does it command attention without effort from the viewer?
 - emotionally_resonant (1-10): Does it move the viewer?
 - emotion_intensity (1-10): How intense or "loud" are the emotions depicted in the video itself, regardless of which emotion. 1 = calm/neutral/flat; 10 = peak emotional intensity (highly animated, dramatic, urgent, ecstatic).
 - funny (1-10): Does this produce genuine humor?
@@ -1116,9 +1120,7 @@ ${V2 ? "" : "- authentic (1-10): Does the creator feel real, not performed?\n"}-
 - useful (1-10): Does the viewer learn or take away something concrete?
 - visually_engaging (1-10): Does the imagery itself reward looking?`;
 
-  const bigPictureFormat = V2
-    ? `,\n    "big_picture": {\n      "compelling": <1-10>,\n      "emotionally_resonant": <1-10>,\n      "emotion_intensity": <1-10>,\n      "funny": <1-10>,\n      "novel": <1-10>,\n      "relatable": <1-10>,\n      "surprising": <1-10>,\n      "useful": <1-10>,\n      "visually_engaging": <1-10>\n    }`
-    : `,\n    "big_picture": {\n      "authentic": <1-10>,\n      "compelling": <1-10>,\n      "emotionally_resonant": <1-10>,\n      "emotion_intensity": <1-10>,\n      "funny": <1-10>,\n      "novel": <1-10>,\n      "relatable": <1-10>,\n      "surprising": <1-10>,\n      "useful": <1-10>,\n      "visually_engaging": <1-10>\n    }`;
+  const bigPictureFormat = `,\n    "big_picture": {\n      "authentic": <1-10>,\n      "compelling": <1-10>,\n      "emotionally_resonant": <1-10>,\n      "emotion_intensity": <1-10>,\n      "funny": <1-10>,\n      "novel": <1-10>,\n      "relatable": <1-10>,\n      "surprising": <1-10>,\n      "useful": <1-10>,\n      "visually_engaging": <1-10>\n    }`;
 
   // Judge-specific dimension feedback instructions.
   // v2: steered toward the dims that actually carry model weight (compelling,
@@ -1129,15 +1131,15 @@ ${V2 ? "" : "- authentic (1-10): Does the creator feel real, not performed?\n"}-
   // steering change to the FOCUS of the feedback, not a new restriction).
   let dimensionFeedback = "";
   if (judge.id === "critic") {
-    dimensionFeedback = V2
+    dimensionFeedback = V21
       ? `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must explicitly address, in correlational terms (what tends to work, never a guarantee): (1) hook strength — what in the first few seconds makes this compelling or novel enough to stop a scroll, and what craft choice would sharpen that; (2) compelling execution — where do editing choices (cuts, pacing, structure) make the video more compelling, surprising, or useful, and where do they undercut it; (3) share/save-worthiness — is there a moment that feels distinctly relatable or emotionally resonant enough that someone would send it to a friend or save it. These three must appear in your suggestions with specific, actionable editing recommendations. Never suggest changing the video's length or duration — comment only on craft choices within the cut as submitted.`
       : `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must explicitly address: (1) the hook — what works or doesn't in the first 3 seconds, and what specific edit would strengthen it; (2) pacing — identify specific moments where energy drops or value-per-second is low, and suggest concrete edits; (3) share-worthiness — is there a moment in this video someone would DM to a friend, and if not, what edit would create one. These three must appear in your suggestions with specific, actionable editing recommendations tied to the research above.`;
   } else if (judge.id === "cool") {
-    dimensionFeedback = V2
+    dimensionFeedback = V21
       ? `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must explicitly address, in correlational terms (what tends to work, never a guarantee): (1) hook strength — does the opening feel novel or surprising enough, by this platform's norms, to earn continued attention; (2) compelling/relatable execution — does the video stay compelling and relatable enough to hold interest, in a way that's native to this platform; (3) the share/save trigger — is there a clear moment that feels distinctly useful or emotionally resonant enough that someone would save or send it? Name the specific moment if it exists, or describe what quality is missing. Never suggest changing the video's length or duration — comment only on what's in the cut as submitted.`
       : `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must explicitly address: (1) the hook against platform norms — does it meet the bar for this platform's scroll speed? (2) completion signals — does the pacing match what performs on this platform (TikTok: tight 5-8s blocks; Instagram: strong story arc under 90s; YouTube: compelling value delivery over 2+ minutes)? (3) the share/save trigger — is there a clear moment that would make someone hit save or DM it? Name the specific moment if it exists, or suggest what would create one. Reference specific platform algorithm factors when relevant — e.g. TikTok SEO keywords, Instagram DM share signals, YouTube watch time.`;
   } else {
-    dimensionFeedback = V2
+    dimensionFeedback = V21
       ? `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must address, in correlational terms (what tends to land, never a guarantee): (1) Human hook — does the first few seconds create a moment of genuine personal recognition or emotional curiosity, beyond just information or trend? Name what works or what is missing. (2) The recognition moment — is there a specific moment in this video that would make a viewer think of someone they know and want to share it? Name that moment exactly if it exists, or describe what quality would create it. This is different from virality — it is the moment of "oh my god, [name] needs to see this." (3) Relatability check — does this speak to something specific in a viewer's own life, or does it stay generic? (4) Emotional arc — does the video create a feeling that builds and pays off, or does it start and end at the same emotional register with no movement? Never suggest changing the video's length or duration.`
       : `DIMENSION FEEDBACK REQUIREMENTS — Your feedback must address: (1) Human hook — does the first 3 seconds create a moment of genuine personal recognition or emotional curiosity, beyond just information or trend? Name what works or what is missing. (2) The recognition moment — is there a specific moment in this video that would make a viewer think of someone they know and want to share it? Name that moment exactly if it exists, or suggest what edit would create it. This is different from virality — it is the moment of "oh my god, [name] needs to see this." (3) Authenticity read — does the creator's genuine personality come through, or does the video feel performed and distant? Be specific about the moments that feel real versus produced. (4) Emotional arc — does the video create a feeling that builds and pays off, or does it start and end at the same emotional register with no movement?`;
   }
@@ -1219,28 +1221,29 @@ This is an ADDITIONAL field, never a replacement: include it ALONGSIDE every req
   // (the video is already shot) advice the v2 guardrail forbids. Every other
   // line in these blocks describes pacing/structure WITHIN the video, not a
   // total-length target, and is unchanged.
-  const tiktokLengthLine = V2 ? "" : "\n- Optimal length: 42-60 seconds has the best combined engagement and views. 2-minute videos also perform well for the right content. Very short clips under 10 seconds underperform.";
-  const instagramLengthLine = V2 ? "" : "\n- Optimal length: 30-90 seconds for discovery. Under 30 seconds has highest completion. Over 3 minutes is ineligible for recommendations.";
-  const youtubeLengthLine = V2 ? "- The hook determines click-through and initial retention. Thumbnails and first frame matter before a viewer even clicks." : "- Best combined performance: 2-3 minute videos for Shorts. Viewers stick with longer content if the value is clear from the start.\n- The hook determines click-through and initial retention. Thumbnails and first frame matter before a viewer even clicks.";
+  const tiktokLengthLine = V21 ? "" : "\n- Optimal length: 42-60 seconds has the best combined engagement and views. 2-minute videos also perform well for the right content. Very short clips under 10 seconds underperform.";
+  const instagramLengthLine = V21 ? "" : "\n- Optimal length: 30-90 seconds for discovery. Under 30 seconds has highest completion. Over 3 minutes is ineligible for recommendations.";
+  const youtubeLengthLine = V21 ? "- The hook determines click-through and initial retention. Thumbnails and first frame matter before a viewer even clicks." : "- Best combined performance: 2-3 minute videos for Shorts. Viewers stick with longer content if the value is clear from the start.\n- The hook determines click-through and initial retention. Thumbnails and first frame matter before a viewer even clicks.";
 
-  // OVERALL WEIGHTING: v1's 40% "platform-specific dimensions" share assumed
-  // 2 platform dims always exist. v2 drops TikTok's (rewatch_potential/
-  // seo_strength, both zero model weight) -- rebalanced proportionally across
-  // the two remaining universal dims (35/60 and 25/60 of the original 60%)
-  // rather than left dangling with nothing to assign it to.
-  const overallWeightingLine = (V2 && platform === "tiktok")
-    ? `OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 58%, share_save_worthiness ≈ 42%. When the CATEGORY PERFORMANCE CONTEXT above applies, adjust these weights per that guidance.`
-    : `OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 35%, share_save_worthiness ≈ 25%, platform-specific dimensions share the remaining ≈ 40%. When the CATEGORY PERFORMANCE CONTEXT above applies, adjust these weights per that guidance.`;
+  // OVERALL WEIGHTING -- byte-identical to v1 for every version (v2.0's
+  // rebalance was downstream of its now-abandoned platform-dim drop; with
+  // the full scored-field roster restored, the original weighting applies
+  // unconditionally).
+  const overallWeightingLine = `OVERALL WEIGHTING: hook_strength + completion_likelihood together ≈ 35%, share_save_worthiness ≈ 25%, platform-specific dimensions share the remaining ≈ 40%. When the CATEGORY PERFORMANCE CONTEXT above applies, adjust these weights per that guidance.`;
 
-  // v2 honesty guardrails, baked directly into the prompt text (correlational
-  // framing only; no duration/length advice; no "do X to raise your score"
-  // phrasing anywhere in feedback).
-  const honestyGuardrailsV2 = V2 ? `
-
-HONESTY GUARDRAILS — When you connect a dimension, moment, or suggestion to performance, frame it correlationally: "videos that do X tend to perform better," never as a guaranteed lever ("do X to raise your score," "this will boost your score," "this guarantees more views"). Never suggest changing the video's overall length or duration for any reason — duration is a factor the scoring model accounts for statistically, not something to prescribe frame-by-frame. Comment only on what is in the cut as submitted.` : "";
+  // NOTE (Phase B4b, Task 1): v2.0 had a standalone "HONESTY GUARDRAILS"
+  // heading injected right after GUARDRAILS, before the scoring section --
+  // B4's options memo flagged this as a possible cause of the systematic
+  // score drop (a prominent global heading emphasizing skepticism/honesty
+  // BEFORE scoring instructions may have primed broader conservatism, not
+  // just on duration advice). v2.1 removes that heading entirely; the same
+  // guardrail intent (correlational framing, no duration advice, no "do X
+  // to raise your score") is instead embedded directly inside
+  // dimensionFeedback/SUGGESTIONS/POSITIVES below, scoped to where advice is
+  // actually given, never appearing before or alongside the scoring section.
 
   return `${judge.personality}
-${GUARDRAILS}${honestyGuardrailsV2}${durationLine}${lengthGuidance}
+${GUARDRAILS}${durationLine}${lengthGuidance}
 
 ${CONTENT_TYPE_GUIDANCE}
 
@@ -1254,7 +1257,9 @@ UNIVERSAL ACROSS PLATFORMS:
 
 TIKTOK-SPECIFIC:
 - Completion rate and watch time account for 40-50% of TikTok's algorithm weight.
-- Saves and shares now outweigh likes as engagement signals.${V2 ? "" : "\n- Re-watch potential is highly valued — loop-ability (seamless end-to-start) is a meaningful advantage.\n- TikTok SEO: keywords in captions, on-screen text, and spoken audio are all scanned. Captions with searchable keywords dramatically improve discovery."}${tiktokLengthLine}
+- Saves and shares now outweigh likes as engagement signals.
+- Re-watch potential is highly valued — loop-ability (seamless end-to-start) is a meaningful advantage.
+- TikTok SEO: keywords in captions, on-screen text, and spoken audio are all scanned. Captions with searchable keywords dramatically improve discovery.${tiktokLengthLine}
 - Niche consistency matters more than ever in 2026 — videos are first tested with followers before reaching new audiences.
 
 INSTAGRAM REELS-SPECIFIC:
@@ -1295,9 +1300,9 @@ ${editingCraftBlock}
 ${judge.momentsInstruction}
 ${bottomInstruction}
 
-${V2 ? `SUGGESTIONS — Give 3-5 specific actionable suggestions. Each suggestion must: (1) reference a specific timestamp or moment, (2) explain why it matters using correlational framing — "videos that do X tend to..." not "this will boost your score" — grounded in hook strength, compelling execution, emotional resonance, novelty/surprise, relatability, usefulness, or share/save-worthiness, and (3) give the specific edit — not just 'improve the hook' but 'cut the first 4 seconds and open instead with the moment at 0:08 when X happens, which immediately establishes Y.' CONSISTENCY CHECK — if you suggest cutting the first N seconds, N must match the timestamp you open on next (e.g. "cut the first 9 seconds and open with the moment at 0:09," not "cut the first 3 seconds and open with the moment at 0:09"); do not name a cut length and an opening timestamp that contradict each other. At least one suggestion must address hook strength. At least one must address compelling execution or emotional resonance. At least one must address share or save potential. Never suggest changing the video's overall length or duration. Editing suggestions should use CapCut-compatible techniques where relevant.` : `SUGGESTIONS — Give 3-5 specific actionable suggestions. Each suggestion must: (1) reference a specific timestamp or moment, (2) explain WHY it matters for performance based on the platform's algorithm signals (completion, shares, hook strength, etc.), and (3) give the specific edit — not just 'improve the hook' but 'cut the first 4 seconds and open instead with the moment at 0:08 when X happens, which immediately establishes Y.' At least one suggestion must address hook strength. At least one must address completion/pacing. At least one must address share or save potential. Editing suggestions should use CapCut-compatible techniques where relevant.`}
+${V21 ? `SUGGESTIONS — Give 3-5 specific actionable suggestions. Each suggestion must: (1) reference a specific timestamp or moment, (2) explain why it matters using correlational framing — "videos that do X tend to..." not "this will boost your score" — grounded in hook strength, compelling execution, emotional resonance, novelty/surprise, relatability, usefulness, or share/save-worthiness, and (3) give the specific edit — not just 'improve the hook' but 'cut the first 4 seconds and open instead with the moment at 0:08 when X happens, which immediately establishes Y.' CONSISTENCY CHECK — if you suggest cutting the first N seconds, N must match the timestamp you open on next (e.g. "cut the first 9 seconds and open with the moment at 0:09," not "cut the first 3 seconds and open with the moment at 0:09"); do not name a cut length and an opening timestamp that contradict each other. At least one suggestion must address hook strength. At least one must address compelling execution or emotional resonance. At least one must address share or save potential. Never suggest changing the video's overall length or duration. Editing suggestions should use CapCut-compatible techniques where relevant.` : `SUGGESTIONS — Give 3-5 specific actionable suggestions. Each suggestion must: (1) reference a specific timestamp or moment, (2) explain WHY it matters for performance based on the platform's algorithm signals (completion, shares, hook strength, etc.), and (3) give the specific edit — not just 'improve the hook' but 'cut the first 4 seconds and open instead with the moment at 0:08 when X happens, which immediately establishes Y.' At least one suggestion must address hook strength. At least one must address completion/pacing. At least one must address share or save potential. Editing suggestions should use CapCut-compatible techniques where relevant.`}
 
-${V2 ? `POSITIVES — When identifying positives, connect them to performance signals where possible, correlationally framed — not just 'good energy' but 'the energy in the first few seconds creates a hook that videos in our data with strong openings tend to share' or 'the payoff at 0:45 is the kind of relatable, emotionally resonant moment that tends to get shared.' Be specific about WHY the positive matters, without implying a guarantee.` : `POSITIVES — When identifying positives, connect them to performance signals where possible — not just 'good energy' but 'the energy in the first 3 seconds creates a strong hook that should clear the 70% completion threshold on TikTok' or 'the payoff at 0:45 is exactly the kind of moment people DM to friends, which is Instagram's strongest algorithmic signal.' Be specific about WHY the positive matters for this video's actual performance.`}
+${V21 ? `POSITIVES — When identifying positives, connect them to performance signals where possible, correlationally framed — not just 'good energy' but 'the energy in the first few seconds creates a hook that videos in our data with strong openings tend to share' or 'the payoff at 0:45 is the kind of relatable, emotionally resonant moment that tends to get shared.' Be specific about WHY the positive matters, without implying a guarantee.` : `POSITIVES — When identifying positives, connect them to performance signals where possible — not just 'good energy' but 'the energy in the first 3 seconds creates a strong hook that should clear the 70% completion threshold on TikTok' or 'the payoff at 0:45 is exactly the kind of moment people DM to friends, which is Instagram's strongest algorithmic signal.' Be specific about WHY the positive matters for this video's actual performance.`}
 
 You are one of three judges reviewing this video. Each judge must identify a DIFFERENT genuine strength — focus on an aspect the other judges are less likely to notice given your unique lens. Do not manufacture praise; only include positives that are genuinely present in the video.
 
