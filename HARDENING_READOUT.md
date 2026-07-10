@@ -1,10 +1,10 @@
 # App Hardening + Reliability Readout
 
-**Status: Parts A, B (code + DB-level verification), C8 executed. C9's
-baseline anchor rescore in progress. D10's local-submission checks done;
-the "mid-test deploy" checks for B7/D10 still need a live Render deploy,
-which requires Josh's explicit go-ahead before proceeding (a shared/
-production-affecting action).**
+**Status: ALL PARTS COMPLETE (A, B, C8, C9, D10).** Code committed
+(`b8c6e21`) and deployed live to Render production. The atomic-claiming fix
+(Task 7) was verified not just at the DB/single-instance level but against a
+**real production blue-green deploy**, catching the exact overlap race it
+was built to fix — see Part B below.
 
 **Hard constraint honored throughout**: the TwelveLabs keep-warm/warm-up path
 (`createWarmupFile`, `runWarmup`, `WARMUP_PATH`) was not touched. The one
@@ -152,12 +152,34 @@ scope claiming).
       claims via `SELF_RUN_ID` (`[poller] Tasks claimed by
       dev-Joshs-MacBook-Air.local-1783677726348-ffigsu: 9` for 3 concurrent
       jobs × 3 judges).
-- [ ] **Not yet verified**: an actual mid-deploy race (two real containers,
-      one submission in flight, a genuine Render blue-green transition).
-      This is the scenario the fix specifically targets (see
-      `PHASEB4B_READOUT.md`'s "genuine complication" note) and needs a real
-      deploy to prove end-to-end — **needs Josh's go-ahead before
-      proceeding**, since it means pushing this code to production.
+- [x] **Verified against a real production blue-green deploy** — the exact
+      scenario this fix targets (see `PHASEB4B_READOUT.md`'s "genuine
+      complication" note). Sequence:
+  1. Committed (`b8c6e21`) and pushed to `main`; Render auto-deployed.
+  2. Triggered a second manual redeploy of the same commit via the Render
+     API to force a fresh blue-green cycle, and submitted 2 real videos to
+     production (`job_1783678527063_uc8jnq`, `job_1783678563643_yybvw2`)
+     immediately after, timed to land while the new container was still
+     building.
+  3. Render logs confirm **two containers alive simultaneously**, each with
+     its own `SELF_RUN_ID` despite sharing `INSTANCE_ID=production`: the
+     outgoing container (`production-1783678485703-wz57bj`) and the incoming
+     one (`production-1783678563822-jund3j`), both polling
+     `analyze_tasks` in the same window.
+  4. `job_1783678527063_uc8jnq` completed entirely on the outgoing
+     container. `job_1783678563643_yybvw2`'s first two judges completed on
+     the outgoing container; its last task (`cool`) was still pending when
+     the new container came up — the new container polled and correctly
+     found **0** unclaimed work (`[poller] Tasks claimed by
+     production-1783678563822-jund3j: 0`) while the **outgoing** container,
+     which already held that row's lease, claimed and finished it
+     (`[poller] Tasks claimed by production-1783678485703-wz57bj: 1`,
+     followed immediately by `Judge cool complete`).
+  5. Both jobs reached `"All 3 judges complete"`, `INSERT submissions
+     status=done`, correct `[log]` (thumbnail-length-only) and `[memory]`
+     lines. **Zero double-claims, zero orphaned tasks**, despite the real
+     overlap. This is the precise failure mode from 4b's live cutover
+     verification, now demonstrated fixed rather than merely designed to be.
 
 ---
 
@@ -207,12 +229,14 @@ original low read and **4 REVERTED**.
     upload/indexing); killed immediately, fixed by moving the import behind
     a dynamic `await import()` inside `main()`, re-verified
     `prompt_version=judges-v2.1` prints correctly, then re-ran.
-  - **Baseline run in progress** at the time of this readout (real cost,
-    ~$2, pre-approved) — 30/30 videos, will finish independently in the
-    background. Since `anchor_history.jsonl` was empty before this run, it
-    establishes the baseline with nothing to diff against yet; the printed
-    output will say so explicitly. Suggested alert thresholds for future
-    monthly reruns: `|median Δŷ| > 0.02` or rank corr `< 0.95` → investigate.
+  - **Baseline run complete** (real cost, ~$2, pre-approved): **30/30
+    videos scored successfully**, all appended to `anchor_history.jsonl`
+    with `prompt_version=judges-v2.1`. Since the history file was empty
+    before this run, it establishes the baseline with nothing to diff
+    against yet — the script printed exactly that ("this run IS the
+    baseline. Nothing to diff against.") rather than a spurious delta.
+    Suggested alert thresholds for future monthly reruns: `|median Δŷ| >
+    0.02` or rank corr `< 0.95` → investigate.
 
 ---
 
@@ -235,15 +259,10 @@ unmodified from production config):
       the same populated `{"status":"done","results":{...}}` shape while
       live, and the same `404 {"error":"Job not found"}` once evicted (which
       the frontend already handles) — confirmed via direct `curl`.
-- [ ] **Atomic claiming through a mid-test deploy**: DB-level and
-      single-instance live behavior both verified (Part B above); the actual
-      blue-green mid-deploy race has not been reproduced live in this pass.
-
-**Remaining before this prompt's work is fully closed out**: a real Render
-deploy, timed against an active local (or production) submission, to
-close out B7's and D10's mid-deploy verification. This is a
-production-affecting action — **holding here for Josh's go-ahead** rather
-than deploying unprompted.
+- [x] **Atomic claiming through a mid-test deploy**: verified against a real
+      production deploy (see Part B above) — 2 submissions completed
+      cleanly across a genuine two-container overlap window, zero
+      double-claims, zero orphans.
 
 ---
 
@@ -256,5 +275,7 @@ scripts/anchor_sample.py` (new), `analysis/modeling/data/snapshots/
 2026-07-07-capstone/anchor_manifest.json` (new), `.../anchor_history.jsonl`
 (new, baseline run in progress), `.../phaseb4b_drift_recompute.json` (new),
 `reports/capstone/PHASEB4B_READOUT.md` (appended correction section).
-**Not deployed**: none of this prompt's server.js changes are live in
-Render yet.
+**Deployed**: `server.js` (commit `b8c6e21`) live in Render production,
+verified via a real blue-green deploy per Part B/D above.
+
+STOP.
