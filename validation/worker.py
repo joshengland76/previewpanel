@@ -205,7 +205,12 @@ def process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_p
 
 def run_file_mode(args):
     conn = db_connect()
-    posted_at = datetime.now(timezone.utc)
+    if args.posted_at:
+        posted_at = datetime.fromisoformat(args.posted_at)
+        if posted_at.tzinfo is None:
+            posted_at = posted_at.replace(tzinfo=timezone.utc)
+    else:
+        posted_at = datetime.now(timezone.utc)
     ok = process_one_video(conn, args.user_id, args.handle, args.tiktok_video_id, posted_at, args.file)
     conn.close()
     sys.exit(0 if ok else 1)
@@ -282,6 +287,9 @@ def main():
     parser.add_argument("--handle", type=str, default=None)
     parser.add_argument("--tiktok-video-id", type=str, default=None)
     parser.add_argument("--user-id", type=str, default=None)
+    parser.add_argument("--posted-at", type=str, default=None,
+                         help="ISO date/datetime to backdate posted_at in --file test mode "
+                              "(e.g. for day-30 verification without waiting 30 days); defaults to now")
     args = parser.parse_args()
 
     if args.file:
