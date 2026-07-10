@@ -582,6 +582,22 @@ async function initDb() {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_posted_videos_user_id ON posted_videos(user_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_posted_videos_status ON posted_videos(status)`);
+    // Phase C, Prompt 2, Task 1 -- day-30 outcome collection. wec_rate is
+    // stored (not just derivable from the raw day30_* counters) so the
+    // dashboard's Spearman computation doesn't need to recompute it every
+    // run. Fetch-attempt tracking mirrors day30_metrics.py's
+    // day30_fetch_attempts/day30_fetch_last_error/day30_fetch_last_attempt_at
+    // pattern (reimplemented in validation/collect_day30.py, not imported).
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS day30_wec_rate DOUBLE PRECISION`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS video_age_days_at_collection INTEGER`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS day30_fetch_attempts INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS day30_fetch_last_attempt_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS day30_fetch_last_error TEXT`);
+    // test_row -- Task 3's synthetic end-to-end-verification row is tagged
+    // true here rather than silently deleted, so the dashboard/collector can
+    // exclude it from real metrics if it's ever left in place (documented
+    // choice made per-run in PHASEC2_READOUT.md).
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS test_row BOOLEAN DEFAULT false`);
     // is_posted_video is the load-bearing exclusion flag for percentilePools
     // and personal-history queries (see below) -- posted-video validation
     // rescores must never pollute either pool. source is kept alongside it
