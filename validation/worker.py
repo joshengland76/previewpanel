@@ -167,6 +167,7 @@ def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match):
         data["matchOverlap"] = str(match["frame_overlap"])
         data["audioMatch"] = "true" if match["audio_match"] else "false"
         data["durationDelta"] = str(match["duration_delta_s"])
+        data["possiblyRelated"] = "true" if match.get("possibly_related") else "false"
         if match.get("submission_id") is not None and match["tier"] in (1, 2):
             data["matchedSubmissionId"] = str(match["submission_id"])
     with open(video_path, "rb") as f:

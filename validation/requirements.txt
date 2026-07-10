@@ -2,3 +2,5 @@ imagehash
 pillow
 psycopg2-binary
 requests
+numpy
+scipy

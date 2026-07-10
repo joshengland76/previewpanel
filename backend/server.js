@@ -598,6 +598,12 @@ async function initDb() {
     // exclude it from real metrics if it's ever left in place (documented
     // choice made per-run in PHASEC2_READOUT.md).
     await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS test_row BOOLEAN DEFAULT false`);
+    // Phase C, Prompt 2, Task 2 -- fingerprint.py's classify_tier() has always
+    // computed possibly_related (a Tier-3 match with audio agreement but
+    // mismatched duration -- worth flagging, not silently indistinguishable
+    // from an ordinary no-signal Tier 3), but worker.py only ever logged it to
+    // stdout; the dashboard's funnel needs it persisted to report it.
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS possibly_related BOOLEAN`);
     // is_posted_video is the load-bearing exclusion flag for percentilePools
     // and personal-history queries (see below) -- posted-video validation
     // rescores must never pollute either pool. source is kept alongside it
@@ -3028,6 +3034,7 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
     const matchOverlap = req.body.matchOverlap != null ? parseFloat(req.body.matchOverlap) : null;
     const audioMatch = req.body.audioMatch != null ? req.body.audioMatch === "true" : null;
     const durationDelta = req.body.durationDelta != null ? parseFloat(req.body.durationDelta) : null;
+    const possiblyRelated = req.body.possiblyRelated != null ? req.body.possiblyRelated === "true" : null;
 
     if (!pgPool) { cleanupTempFile(); return res.status(503).json({ error: "Database not available" }); }
 
@@ -3045,13 +3052,13 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
     // updates in place rather than erroring or duplicating.
     const { rows: pvRows } = await queryRW(
       `INSERT INTO posted_videos
-         (user_id, tiktok_video_id, handle, posted_at, status, matched_submission_id, match_tier, match_overlap, audio_match, duration_delta)
-       VALUES ($1,$2,$3,$4,'downloaded',$5,$6,$7,$8,$9)
+         (user_id, tiktok_video_id, handle, posted_at, status, matched_submission_id, match_tier, match_overlap, audio_match, duration_delta, possibly_related)
+       VALUES ($1,$2,$3,$4,'downloaded',$5,$6,$7,$8,$9,$10)
        ON CONFLICT (tiktok_video_id) DO UPDATE SET
          user_id = $1, handle = $3, posted_at = $4, matched_submission_id = $5,
-         match_tier = $6, match_overlap = $7, audio_match = $8, duration_delta = $9
+         match_tier = $6, match_overlap = $7, audio_match = $8, duration_delta = $9, possibly_related = $10
        RETURNING id`,
-      [userId, tiktokVideoId, handle, postedAt, matchedSubmissionId, matchTier, matchOverlap, audioMatch, durationDelta]
+      [userId, tiktokVideoId, handle, postedAt, matchedSubmissionId, matchTier, matchOverlap, audioMatch, durationDelta, possiblyRelated]
     );
     const postedVideoId = pvRows[0].id;
 
