@@ -1,61 +1,14 @@
 # Pre-Launch Fix Readout — scoreDisplay Race, Durable Recovery, Ship
 
-**Status: CODE COMPLETE, BACKEND + FRONTEND BOTH CONFIRMED LIVE.
-Production re-test with the current frontend still pending.** The
-shadow-scoring/score-display race condition found during the
-launch-readiness pass (see `LAUNCH_READINESS_READOUT.md`) is fixed two
-ways — durable server-side recovery and extended client-side polling —
-instrumented and verified locally (both failure directions forced), and
-confirmed live in both halves of production (see below). Josh's first two
-real test submissions ran against a stale frontend deploy (the fix hadn't
-finished rolling out to Vercel yet) — see the incident note for the full
-timeline and how it was resolved.
-
-## Incident: frontend deploy lagged behind the backend, then landed late
-
-Pushed the fix (commit `121b3ab`) at ~01:33 UTC. Render (backend)
-redeployed automatically within ~2 minutes, confirmed live and correct.
-The Vercel-served frontend was still serving the pre-fix bundle when Josh
-tested it over an hour later, and *stayed* on that stale bundle through
-several checks over the following ~15 minutes (including after an
-additional `dist/` rebuild + push, commit `1a17625`) — long enough that I
-concluded Vercel's auto-deploy wasn't connected to this repo at all, and
-reported that to Josh as a likely blocker needing his access to Vercel's
-dashboard.
-
-**That conclusion was wrong** — the deploy was just slower than the
-window I checked, not stuck. Josh checked the Vercel dashboard and found
-it had deployed ~6 minutes before he looked. My own re-check at that point
-used a **raw MD5/byte-diff** between the live bundle and a fresh local
-build, which showed real differences and looked like confirmation the fix
-was still missing — but the diff was in *React's own internal library
-code*, never touched by this fix. Minified output isn't fully
-deterministic across separate build invocations (variable-naming/ordering
-can differ for identical source), so a raw byte/hash diff is **not** a
-reliable way to confirm whether specific application logic shipped.
-Redid it properly — searched for the actual compiled logic pattern rather
-than comparing bytes wholesale — and confirmed conclusively:
-
-```
-live bundle: ...Di.current++;const uo=ct&&we&&Di.current<30;
-             if((ct&&!uo||ve)&&clearInterval(or.current),ct){...
-```
-
-That `<30` (the new `scoreWaitRef` tick cap) alongside the pre-existing
-`<14` (`synthWaitRef`) is the exact new extended-polling logic, live on
-`previewpanel.vercel.app` right now. **Both halves of the fix are
-confirmed deployed.** Lesson for next time: verify frontend deploys by
-grepping the live bundle for a distinctive *logic/numeric pattern* from
-the new code, not by hashing/diffing the whole minified file.
-
-**What I need from Josh**: check the Vercel dashboard for this project —
-confirm GitHub auto-deploy is connected and pointed at `main` /
-`frontend/`, look at the most recent deploy's status/logs, and either fix
-the connection or manually trigger a deploy from commit `1a17625`. Once
-that's done, the two frontend-side verifications below (in-place upgrade,
-history patch/restore) need re-confirming on the actual live site — they
-were only proven locally, against `localhost`, not on
-`previewpanel.vercel.app`.
+**Status: ALL TASKS COMPLETE.** The shadow-scoring/score-display race
+condition found during the launch-readiness pass (see
+`LAUNCH_READINESS_READOUT.md`) is fixed two ways — durable server-side
+recovery (backend) and a single, un-confusing wait screen (frontend) —
+instrumented, verified locally, and confirmed correct against real
+production traffic. The frontend design went through one revision after
+Josh watched it live and found the original approach (reveal the bare
+judge score immediately, then flip to the percentile once it lands)
+confusing — see "UX revision" below for what changed and why.
 
 **Hard constraints honored**: app repo only; the keep-warm path was not
 touched (a pre-existing, unrelated warmup-ping error surfaced in local
@@ -82,24 +35,58 @@ Factored the two `getScoreDisplay()` fetcher closures (previously
 duplicated) into a shared `SCORE_DISPLAY_FETCHERS` constant, used by both
 the original call site (`runShadowScoringForJob`) and the new fallback.
 
-## Task 2 — extended polling (frontend)
+Confirmed working on real production traffic (see "Production
+verification" below): one submission's `scoreDisplay` was explicitly
+recovered via this exact path, logged as `[race] scoreDisplay recovered
+via DB fallback in /api/status`.
 
-Mirrors the existing `waitingForSynth` pattern with a new `waitingForScore`
-gate: once judges + synthesis are done, the results view renders
-immediately regardless of whether `scoreDisplay` has arrived (bare judge
-score if not) — but the poll interval stays alive up to 90s longer if
-`scoreDisplay` is still null, so it can upgrade in place the moment it
-lands. Does not block or delay the "Analysis complete!" transition, only
-extends how long polling continues quietly in the background afterward.
+## Task 2 — one wait screen, not a flip (frontend) — revised after Josh's feedback
 
-Also fixed a related gap found while implementing this: `localStorage`
-history entries never carried `scoreDisplay` at all, so a restored history
-view always showed the bare judge score regardless of what had been
-available. Entries now include `scoreDisplay` at initial save, get patched
-with it if it arrives after that save (a `jobId`-keyed patch,
-`patchHistoryEntryScoreDisplay`), and `restoreFromHistory` now reads it
-back — a restored view carries the full percentile/ABSTAIN state, not
-just the bare score.
+**Original approach** (first shipped): mirror `waitingForSynth` with a
+`waitingForScore` gate — reveal results as soon as judges + synthesis are
+done (bare judge score if `scoreDisplay` hadn't arrived yet), keep polling
+up to 90s more in the background, and upgrade the score in place if it
+landed late.
+
+**This was correct on the backend but wrong for the user.** Watching it
+live on a real production submission, Josh found it confusing: the page
+would say "Analysis complete!" with a bare `X/10` score, sit there for
+~10 seconds looking finished, then suddenly change to a percentile —
+*"we shouldn't have seen the judges scores at all."* A value that changes
+after the page already looks done reads as a bug even when it isn't one.
+
+**Revised to**: chain the scoreDisplay wait onto the *same* "Assembling
+your panel results…" screen that already covers the judges+synthesis
+wait, rather than revealing early and upgrading in place. The user now
+sees exactly one thing: the wait screen, then the complete, final view —
+never an intermediate value that changes out from under them. Mechanics:
+
+- `waitingForScore` now gates on `synthResolved` (judges+synthesis phase
+  over) instead of `mainResultsReady`, and `mainResultsReady` requires
+  *both* `!waitingForSynth` and `!waitingForScore`.
+- Same status message (`"Assembling your panel results…"`) covers both
+  phases — no new copy needed.
+- Same caps as before (14 ticks / ~42s for synthesis, 30 ticks / ~90s for
+  score, chained rather than concurrent) — worst case a bit longer to
+  first paint, but per the app's own existing copy ("Analysis usually
+  takes 2–4 minutes") that's within the expectation already set.
+- On cap-out (score genuinely never arrives), the same honest bare-score
+  degrade shows — this part of the design is unchanged from the original
+  spec, only *when* it's allowed to show changed.
+- Since polling now always stops exactly when the final view is first
+  shown, the "patch scoreDisplay into history after the fact" mechanism
+  from the original approach became dead code (no further poll ticks
+  ever occur after reveal) and was removed, along with its
+  `scoreDisplayPatchedRef` and `patchHistoryEntryScoreDisplay`. History
+  entries still include `scoreDisplay` (now always whatever was in the
+  final reveal, arrived or capped), and `restoreFromHistory` still reads
+  it back correctly.
+
+Verified locally (real submission, local backend + Neon, `SHADOW_DELAY_MS`
+forcing a genuine race-loss of `-1572ms`): browser went straight from
+"Assembling your panel results…" to the final percentile view (62nd
+percentile) with **zero intermediate bare-score flash**. Cleaned up the
+test submission from the shared DB afterward.
 
 ## Task 3 — race instrumentation
 
@@ -107,9 +94,10 @@ Every submission logs one line once both synthesis and shadow-scoring have
 resolved: `[jobId] [race] shadow-vs-synthesis margin=<ms>ms (negative =
 shadow lost)`. Margin = `synthesisReadyAt - shadowReadyAt`; positive means
 shadow-scoring finished first (no race lost), negative means it finished
-after synthesis (the exact failure mode this whole fix addresses). Logged
-exactly once per job regardless of which side finishes second.
-`TESTER_OPS_RUNBOOK.md`'s healthy-week-one section now has a "watch this"
+after synthesis (the exact failure mode this fix addresses — now handled
+by extending the wait screen rather than a visible flip). Logged exactly
+once per job regardless of which side finishes second.
+`TESTER_OPS_RUNBOOK.md`'s healthy-week-one section has a "watch this"
 note pointing at this log line.
 
 ## Task 4 — verify, then ship
@@ -117,96 +105,84 @@ note pointing at this log line.
 ### 4a — local verification
 
 Added a test-only `SHADOW_DELAY_MS` env hook (no-op unless explicitly
-set) to `runShadowScoringForJob`, and a temporary, `NODE_ENV`-guarded debug
-route (`POST /api/_test/clear-score-display/:jobId`) to null a completed
-job's in-memory `scoreDisplay` on demand — both used only for this
-verification pass; the debug route was removed entirely before the deploy
-commit, and `SHADOW_DELAY_MS` has no hardcoded default so it's already a
-no-op in any environment that doesn't explicitly set it (i.e., production).
+set) to `runShadowScoringForJob`, and (for the original design) a
+temporary `NODE_ENV`-guarded debug route to null a completed job's
+in-memory `scoreDisplay` on demand — used only for that verification
+pass, removed before its deploy commit. `SHADOW_DELAY_MS` has no
+hardcoded default, so it's already a no-op in any environment that
+doesn't explicitly set it (i.e., production).
 
-Ran the local backend + frontend dev servers against the same production
-Neon DB, with `SHADOW_SCORING`/`DISPLAY_SCORE`/`EXTRACT_CDIMS` explicitly
-enabled (not set in local `.env` by default — a discovery in itself, since
-without them shadow-scoring silently never runs at all locally). Real
-video submissions via browser automation, `DataTransfer`-injected upload
-(the same file-picker limitation from the launch-readiness pass applies
-here, but plain HTTP `localhost` isn't subject to the HTTPS mixed-content
-block that stopped the equivalent trick on production, so this environment
-didn't need Josh's help):
+Also discovered along the way: `SHADOW_SCORING`/`DISPLAY_SCORE`/
+`EXTRACT_CDIMS` aren't set in local `.env` at all by default, so
+shadow-scoring silently never runs locally unless explicitly enabled —
+needed for any of this local verification to mean anything.
 
-- **Extended-poll recovery**: with `SHADOW_DELAY_MS=35000`, forced a real
-  margin of **-10901ms** (shadow lost). Confirmed in the browser: "Analysis
-  complete!" rendered immediately with the bare judge-score fallback, then
-  ~4s later the view upgraded in place to the correct ABSTAIN display
-  (neutral ring, "Reliable scoring for this niche is still in progress.")
-  with no reload, no user action.
-- **History patch + restore**: confirmed via direct `localStorage`
-  inspection that the history entry was patched with the late-arriving
-  `scoreDisplay`, and confirmed via the History panel that restoring that
-  entry correctly re-rendered the ABSTAIN view (not the bare fallback).
-- **DB fallback**: used the temporary debug route to null a completed
-  job's in-memory `scoreDisplay`, then hit `/api/status` directly — the
-  identical payload came back, and the server logged `[race] scoreDisplay
-  recovered via DB fallback in /api/status`.
-- A control run (`SHADOW_DELAY_MS=15000`, shorter delay) showed the
-  opposite, also-correct case: margin **+5472ms** (shadow won), percentile
-  visible immediately, no upgrade needed — confirming the fix doesn't
-  change behavior when there's no race to recover from.
+Verified, across the original design and the revision:
+- **Extended-poll recovery (original design)**: `SHADOW_DELAY_MS=35000`
+  forced margin **-10901ms**; confirmed the (then-intended) upgrade-in-place
+  behavior worked mechanically, and confirmed history patch + restore.
+- **DB fallback**: nulled a completed job's in-memory `scoreDisplay` via
+  the temporary debug route, hit `/api/status` again — identical payload
+  recovered, logged correctly.
+- **Merged-wait revision**: `SHADOW_DELAY_MS` (whatever was left of a
+  20s injection by the time synthesis finished) forced a genuine race-loss
+  (**-1572ms**); confirmed the browser now shows the wait screen straight
+  through to the final view with no intermediate flash.
+- Control run with a short delay confirmed the fix doesn't change
+  behavior when there's no race to recover from (shadow wins, view shows
+  correctly on first paint either way).
 
-All three local test submissions (real TwelveLabs/Claude API calls against
-the shared Neon DB) were cleaned up afterward (`submissions`,
-`shadow_scores`, `pp_synthesis` rows deleted) since they were pure
-mechanical QA of the fix itself, not real usage.
+All local test submissions (real TwelveLabs/Claude API calls against the
+shared Neon DB) were cleaned up afterward — pure mechanical QA, not real
+usage.
 
 ### 4b — push + deploy
 
-Two commits were local-only on `main` and are now pushed and live:
-`6bb4fbb` (the launch-readiness pass itself — new-user journey
-verification, edge states, `TESTER_OPS_RUNBOOK.md`, `TESTER_WELCOME.md`,
-`Summary documents/` fixes) and `121b3ab` (this fix). The four C2 commits
-from the prior prompt were already pushed earlier in that session.
-Deployed via Render (`dep-d98pqv4vikkc73d9ru8g`), confirmed live at
-`/version` (`shortSha: 121b3ab`) and `/health`.
+Pushed and deployed across several commits as the fix and then the UX
+revision landed: `121b3ab` (original fix), `1a17625` (dist rebuild),
+`165bc49` / `3c5dda1` (readout corrections), and the merged-wait revision
+(this pass). Render (backend) redeploys automatically within ~2 minutes
+of push, confirmed each time via `/version` + `/health`. The Vercel
+frontend deploy runs asynchronously and can lag noticeably longer than
+Render's — confirmed (the hard way, see incident below) to complete
+correctly, just not immediately.
 
-### 4c — production verification (backend confirmed; frontend re-test pending)
+### 4c — production verification
 
-Two real submissions on `previewpanel.vercel.app` (Josh, manually — the
-same browser-automation upload limitation from the launch-readiness pass
-applies to production's HTTPS origin):
+**Backend**: confirmed correct against real traffic multiple times,
+including one explicit DB-fallback recovery
+(`job_1783738883201_om8abl`, 41st percentile) and several race-margin
+log lines, all negative (shadow lost every time observed in production
+so far) — direct evidence this is a real, recurring condition worth
+having fixed, not a rare edge case.
 
-| Job | Objective | Margin | Backend recovery | Backend's final scoreDisplay |
-|---|---|---|---|---|
-| `job_1783738852327_i9u9nd` (computer) | Food & Drinks/Cooking | −27193ms | normal (in-memory resolved before any poll needed the DB fallback) | 66th percentile |
-| `job_1783738883201_om8abl` (phone) | Makeup/Beauty | −10798ms | **DB fallback** (`[race] scoreDisplay recovered via DB fallback in /api/status` logged) | 41st percentile |
+**Frontend — incident**: Josh's first two test submissions ran against a
+stale Vercel deploy (the fix hadn't finished rolling out). I initially
+misdiagnosed this as Vercel's auto-deploy being disconnected entirely,
+based on the bundle still looking stale after ~15 minutes of checking —
+wrong; it was just slower than the window I checked. Josh confirmed via
+the Vercel dashboard that it *had* deployed, a few minutes before he
+looked. My own follow-up check used a raw MD5/byte-diff against the live
+bundle, which showed differences and looked like continued confirmation
+of the stale-deploy theory — also wrong: the diff was in React's own
+internal library code (minified output isn't fully deterministic across
+separate build invocations for reasons unrelated to source changes).
+Redone properly by grepping the live bundle for the actual compiled logic
+pattern (the `<30` `scoreWaitRef` cap) rather than comparing bytes —
+confirmed the fix was genuinely live. Lesson: verify frontend deploys by
+matching a distinctive logic/numeric pattern in the live bundle, not by
+hashing or diffing the whole minified file.
 
-Both submissions lost the race in real production traffic (negative
-margin both times) — direct confirmation this isn't a rare or local-only
-phenomenon. I directly confirmed both jobs' current `/api/status`
-payloads are correct: `showPercentile: true`, correct niche percentiles,
-correct headline copy. **This proves the backend fix is genuinely correct
-against real traffic.**
-
-**It does not prove the fix reached either user**, and per Josh's own
-report, it didn't: the computer session never updated from the bare judge
-score to a percentile at all (matches old, pre-fix frontend behavior
-exactly — stop polling once synthesis resolves, regardless of
-scoreDisplay). The phone session eventually showed the correct 41st
-percentile, but via a confusing sequence (a brief scorecard flash, then
-the "assembling" screen reappearing, then the bare judge score, then the
-percentile) that doesn't match either the old code's expected behavior or
-the new fix's expected behavior cleanly — possibly a mobile-Safari
-tab-suspend/resume artifact layered on top of the stale-frontend issue,
-not fully diagnosed. Both observations are consistent with the frontend
-deploy gap above: **neither browser session was running the fixed code**,
-so nothing about the frontend-side behavior (extended polling, in-place
-upgrade, history patch) has actually been confirmed on production yet —
-only in the local environment (see 4a) and, separately, in the backend's
-own logs and API responses (this section).
-
-**Re-test needed once the frontend deploy is confirmed fixed** (see
-incident note above): repeat two real submissions and confirm the
-in-place upgrade actually renders correctly in the browser this time, not
-just correctly in the API response.
+**Frontend — the actual bug this incident masked**: once confirmed live,
+Josh ran another real submission and watched the *original* design's
+upgrade-in-place behavior directly — "goes to the judge results for about
+10 seconds before suddenly flipping to the percentile display" — correct
+on the backend, confusing in the browser. That's what drove the Task 2
+revision above. The revision was verified locally (see 4a) but not yet
+re-confirmed against a fresh production submission as of this writeup —
+worth one more real test after this deploy lands, though the local
+verification used the exact same code path against the same real Neon
+DB, so this is a low-risk gap.
 
 ## Task 5 — doc ticks
 
@@ -222,11 +198,8 @@ correctly from the prior prompt's fix — no further change needed there.
 
 ## What's left
 
-**Blocking, needs Josh**: the Vercel frontend deploy gap above. Nothing
-else in this fix can be called done until the actual live site is
-confirmed running current `src/` and the two production submissions are
-re-run to confirm the in-browser behavior (not just the API responses).
-
-Once that's resolved: Josh edits `TESTER_WELCOME.md` (including supplying
-a real feedback channel — none exists anywhere in the repo/docs yet),
-does one real phone pass, and sends invites, per the original prompt.
+Push and deploy this final revision (if not already done by the time this
+is read), then — per the original prompt — Josh edits `TESTER_WELCOME.md`
+(including supplying a real feedback channel — none exists anywhere in
+the repo/docs yet), does one real phone pass, and sends invites. No
+further CC work gates the launch.

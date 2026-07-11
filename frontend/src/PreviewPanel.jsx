@@ -46,21 +46,6 @@ function saveToHistory(entry) {
   } catch {}
 }
 
-// Pre-launch fix, Task 2 -- scoreDisplay can arrive after the initial
-// save-to-history write (see the extended-polling race in the poll effect
-// below). Patches it into the already-saved entry by jobId so a restored
-// history view carries the percentile/ABSTAIN display too, not just the
-// bare judge score that was all that existed at the moment of the first save.
-function patchHistoryEntryScoreDisplay(jobId, scoreDisplay) {
-  try {
-    const history = loadHistory();
-    const idx = history.findIndex((h) => h.jobId === jobId);
-    if (idx === -1) return;
-    history[idx] = { ...history[idx], scoreDisplay };
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  } catch {}
-}
-
 // ── Phase C, Task 1: identity-lite ────────────────────────────
 // A persistent, client-generated UUID -- NOT a login/account system. Created
 // once on first load, reused forever from localStorage, sent with every
@@ -358,10 +343,11 @@ export default function PreviewPanel() {
   const [uploadZoneError, setUploadZoneError] = useState(null);
   const pollRef = useRef(null);
   const synthWaitRef = useRef(0);
-  // Pre-launch fix, Task 2 -- extended polling for scoreDisplay (mirrors
-  // synthWaitRef's pattern for synthesis).
+  // Pre-launch fix, Task 2 -- chains a second capped wait onto the same
+  // "assembling" screen for scoreDisplay, right after the synthesis wait
+  // (mirrors synthWaitRef's pattern). Keeps the reveal to a single, final
+  // view instead of showing bare judges scores and upgrading in place.
   const scoreWaitRef = useRef(0);
-  const scoreDisplayPatchedRef = useRef(false);
   const objDropRef = useRef(null);
   const objInputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -423,7 +409,6 @@ export default function PreviewPanel() {
     if (!jobId) return;
     synthWaitRef.current = 0;
     scoreWaitRef.current = 0;
-    scoreDisplayPatchedRef.current = false;
     const poll = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/status/${jobId}`);
@@ -453,23 +438,30 @@ export default function PreviewPanel() {
         const synthPending = data.synthesisStatus === "pending" || data.synthesisStatus == null;
         if (jobDone && synthPending) synthWaitRef.current++;
         const waitingForSynth = jobDone && synthPending && synthWaitRef.current < 14;
-        if (waitingForSynth) setStatusMessage("Assembling your panel results…");
 
-        const mainResultsReady = jobDone && !waitingForSynth;
+        // Judges + synthesis phase fully resolved (arrived, or gave up waiting).
+        const synthResolved = jobDone && !waitingForSynth;
 
         // Pre-launch fix, Task 2 -- scoreDisplay comes from a separately-timed
         // shadow-scoring pipeline that can finish after judges+synthesis (the
-        // shadow-vs-synthesis race -- see LAUNCH_READINESS_READOUT.md). Once
-        // the main results are ready to show, DON'T block on scoreDisplay --
-        // render immediately (bare judge score if scoreDisplay isn't in yet)
-        // -- but keep the poll interval alive up to 90s more so it can upgrade
-        // in place if scoreDisplay lands late. Mirrors waitingForSynth's
-        // capped-wait pattern, just without holding up the results view.
+        // shadow-vs-synthesis race -- see LAUNCH_READINESS_READOUT.md). First
+        // version of this fix revealed results immediately and upgraded the
+        // score in place once scoreDisplay landed -- correct on the backend,
+        // but confusing in the browser (a visible flip from judges score to
+        // percentile after the page already looked "done"). Chaining this
+        // wait onto the same "assembling" screen instead means the user only
+        // ever sees ONE view: the complete one, or (if scoreDisplay never
+        // shows up within its own cap) the honest bare-score degrade -- never
+        // a value that changes out from under them.
         const scorePending = data.scoreDisplay == null;
-        if (mainResultsReady && scorePending) scoreWaitRef.current++;
-        const waitingForScore = mainResultsReady && scorePending && scoreWaitRef.current < 30;
+        if (synthResolved && scorePending) scoreWaitRef.current++;
+        const waitingForScore = synthResolved && scorePending && scoreWaitRef.current < 30;
 
-        if ((mainResultsReady && !waitingForScore) || jobErrored) {
+        if (waitingForSynth || waitingForScore) setStatusMessage("Assembling your panel results…");
+
+        const mainResultsReady = jobDone && !waitingForSynth && !waitingForScore;
+
+        if (mainResultsReady || jobErrored) {
           clearInterval(pollRef.current);
         }
 
@@ -486,9 +478,9 @@ export default function PreviewPanel() {
             new Notification("PreviewPanel 🦉", { body: "Your results are ready!" });
           }
 
-          // Issue #9: Auto-save to history. If scoreDisplay hasn't arrived yet,
-          // it's patched in separately once it does (see the effect below) --
-          // that's the whole point of not blocking this save on it.
+          // Issue #9: Auto-save to history. mainResultsReady only fires once
+          // scoreDisplay has arrived or its own wait has been exhausted, so
+          // whatever's in data.scoreDisplay here is final for this session.
           if (!savedRef.current) {
             savedRef.current = true;
             const scores = Object.entries(data.results || {})
@@ -525,17 +517,6 @@ export default function PreviewPanel() {
     pollRef.current = setInterval(poll, 3000);
     return () => clearInterval(pollRef.current);
   }, [jobId]);
-
-  // Pre-launch fix, Task 2 -- patches the late-arriving scoreDisplay into the
-  // already-saved history entry (see patchHistoryEntryScoreDisplay). Runs
-  // once per job, only after the initial save happened and only when
-  // scoreDisplay actually has a value.
-  useEffect(() => {
-    if (!jobId || !savedRef.current || !scoreDisplay || scoreDisplayPatchedRef.current) return;
-    scoreDisplayPatchedRef.current = true;
-    patchHistoryEntryScoreDisplay(jobId, scoreDisplay);
-    setHistory(loadHistory());
-  }, [jobId, scoreDisplay]);
 
   const handleSubmit = async () => {
     if (!videoFile || selectedJudges.length === 0) return;
