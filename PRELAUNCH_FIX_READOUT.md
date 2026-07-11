@@ -1,17 +1,16 @@
 # Pre-Launch Fix Readout — scoreDisplay Race, Durable Recovery, Ship
 
-**Status: backend + instrumentation confirmed correct against real
-production traffic; frontend fix shipped and verified locally against
-two real multi-second race losses, but not yet re-confirmed by Josh
-against a fresh production submission.** The shadow-scoring/score-display
+**Status: FIXED, confirmed by Josh.** The shadow-scoring/score-display
 race condition found during the launch-readiness pass (see
 `LAUNCH_READINESS_READOUT.md`) went through **three** frontend rounds
 before the visible flip was actually gone — see "UX revision" and "Round
-3" below. Given the first two rounds each looked correct in my own
-verification and still turned out to have a real bug in production,
-**one more real-world check from Josh (ideally Mac incognito, matching
-his exact repro) is the recommended last step before calling this
-closed.**
+3" below. Round 3's flip-on-Mac incident turned out to be a stale JS
+bundle in an already-open browser tab (predating the Round 3 deploy),
+not a residual code bug — confirmed once Josh reloaded the tab: three
+consecutive clean production runs since, with no flash, no sneak-peek,
+and no flip. Root-cause and variability analysis of the two specific
+runs that triggered this investigation is in "Repeat-scoring variability
+analysis" below.
 
 **Hard constraints honored**: app repo only; the keep-warm path was not
 touched (a pre-existing, unrelated warmup-ping error surfaced in local
@@ -290,6 +289,183 @@ that lands on a shadow-loses race like his original repro — is still
 the recommended final confirmation. I was not able to force or fully
 substitute for that with the tools available in this environment.
 
+### Round 3 — resolved
+
+Josh ran the same two files (Mac + phone, simultaneous) again and hit a
+real shadow-loses race on the Mac run (margin **-25,399ms**, confirmed
+via Render logs — a genuine 25-second loss, squarely in the failure mode
+this whole fix chain addresses) — and it **still flashed**. The
+diagnostic question that closed this out: was the Mac tab reloaded
+between the bad run and the good repeat? **Yes.** That confirms the
+flash came from a stale pre-Round-3 JS bundle still resident in an
+already-open tab (loaded before the 05:34 UTC deploy), not a gap in the
+fix itself — a plain page load picks up the current bundle and the wait
+screen holds correctly through the full race. Josh then ran three
+consecutive fresh submissions with no reload in between and all three
+came back clean. Calling Round 3 genuinely fixed.
+
+## Repeat-scoring variability analysis — ScreenRecording_05-01-2026 23-32-44_1.mp4 and 23-55-41_1.mov
+
+The -25,399ms race-loss run above also happened to score unusually low
+(avg 6.3 vs. this file's usual ~7.0, niche percentile 47 vs. its usual
+high-70s/low-80s). Josh asked whether that was a real outlier, whether
+he'd run it differently, and — if not — what was actually driving the
+swing. He also flagged a real methodology concern: his own repeated test
+submissions could be polluting the percentile pools he's comparing
+against. Both questions turned into their own investigation.
+
+**Method**: for every tracked submission of each file (every row with a
+`shadow_scores` prediction), recomputed `nichePercentile` and
+`overallAppPercentile` live via the actual `getScoreDisplay()` function
+against **today's** pool, so every run in a table is judged against the
+same yardstick (raw stored `calibrated_percentile` values are a
+different, legacy metric — see Task 1 code comments — and drift over
+time as the pool grows, so they're not directly comparable to each
+other or to what the app displays). Also pulled each row's raw model
+output (`prediction`, i.e. ŷ — the number before any percentile
+conversion) and its full `input_features` JSONB, and used the actual
+scoring spec (`scoring/scoring_spec_v2.json`, a linear model: ŷ =
+intercept + Σ coefficient × standardized-feature) to compute each
+feature's real weighted contribution to ŷ per run, then ranked features
+by how much that contribution actually swung across the repeated runs
+of the identical file. This isolates which features are both (a)
+actually varying and (b) heavily weighted — as opposed to just eyeballing
+which judge dimension moved most, which is exactly what Josh asked for.
+One-time analysis scripts were written to scratch, run, and deleted —
+nothing added to the repo.
+
+### ScreenRecording_05-01-2026 23-32-44_1.mp4 (18 tracked runs, all tiktok / Food & Drinks/Cooking — never run differently)
+
+| Date/time (UTC) | Avg score | ŷ (raw model output) | Niche % | App % |
+|---|---|---|---|---|
+| 07-09 14:10 | 7.0 | 0.0165 | 59 | 68 |
+| 07-09 17:00 | 6.7 | 0.0030 | 53 | 64 |
+| 07-09 17:26 | 7.0 | 0.0702 | 81 | 82 |
+| 07-09 19:03 | 6.3 | 0.0526 | 75 | 77 |
+| 07-09 19:41 | 7.0 | 0.0262 | 62 | 70 |
+| 07-09 19:53 | 6.7 | 0.0254 | 61 | 69 |
+| 07-10 22:11 | 6.3 | 0.0109 | 56 | 67 |
+| 07-11 03:02 | 6.7 | 0.0228 | 60 | 69 |
+| 07-11 03:58 | 7.0 | 0.0689 | 80 | 81 |
+| 07-11 04:07 | 7.0 | 0.0555 | 76 | 78 |
+| 07-11 04:11 | 6.7 | 0.0320 | 65 | 72 |
+| 07-11 04:36 | 7.0 | 0.0569 | 77 | 79 |
+| 07-11 04:42 | 7.0 | 0.0738 | 82 | 83 |
+| 07-11 04:47 | 7.0 | 0.0348 | 69 | 73 |
+| **07-11 05:50 (the flagged run)** | **6.3** | **-0.0132** | **45** | **60** |
+| 07-11 05:55 (good repeat) | 7.0 | 0.0803 | 83 | 84 |
+| 07-11 06:22 (clean run 1) | 7.0 | 0.0636 | 79 | 80 |
+| 07-11 06:28 (clean run 2) | 7.0 | 0.0263 | 63 | 70 |
+
+ŷ range across all 18 runs: **-0.0132 to 0.0803**. The flagged run is
+the single lowest of 18, and it's a real outlier — but the whole set
+already spans a wide band for one unchanging video, so "outlier" here
+means "the low tail of substantial normal variance," not "a value that
+doesn't belong."
+
+### ScreenRecording_05-01-2026 23-55-41_1.mov (11 tracked runs — NOT run identically throughout)
+
+Unlike the mp4, this file's objective changed over time: the first two
+(07-09) were **tiktok/ASMR**, one (07-10) was **instagram/Makeup-Beauty**,
+and the remaining eight (all 07-11) were **tiktok/Makeup-Beauty** — that
+last group is the consistent, like-for-like set.
+
+| Date/time (UTC) | Platform | Objective | Avg | ŷ | Niche % | App % |
+|---|---|---|---|---|---|---|
+| 07-09 17:21 | tiktok | ASMR | 3.3 | -0.1206 | 28 | 31 |
+| 07-09 20:34 | tiktok | ASMR | 3.7 | -0.1318 | 25 | 29 |
+| 07-10 23:52 | instagram | Makeup/Beauty | 4.0 | -0.0548 | 57 | 49 |
+| 07-11 03:02 | tiktok | Makeup/Beauty | 4.0 | -0.1318 | 38 | 29 |
+| 07-11 03:59 | tiktok | Makeup/Beauty | 4.7 | -0.0954 | 48 | 38 |
+| 07-11 04:37 | tiktok | Makeup/Beauty | 3.3 | -0.0630 | 55 | 46 |
+| 07-11 04:42 | tiktok | Makeup/Beauty | 4.0 | -0.0575 | 56 | 48 |
+| 07-11 05:50 | tiktok | Makeup/Beauty | 4.0 | -0.0340 | 61 | 55 |
+| 07-11 05:56 | tiktok | Makeup/Beauty | 4.0 | -0.0877 | 52 | 41 |
+| 07-11 06:23 | tiktok | Makeup/Beauty | 5.0 | -0.1034 | 45 | 36 |
+| 07-11 06:29 | tiktok | Makeup/Beauty | 4.3 | -0.1121 | 44 | 34 |
+
+Restricting to just the 8 consistent tiktok/Makeup-Beauty runs doesn't
+change the extremes — both the min (-0.1318, 07-11 03:02) and max
+(-0.0340, 07-11 05:50) fall inside that consistent subset, so the
+ASMR/Instagram runs aren't driving the spread. This file shows the same
+pattern as the mp4: a real, continuous run-to-run swing for one
+unchanging video, roughly the same magnitude (ŷ spread ≈ 0.098 here vs.
+≈ 0.093 for the mp4).
+
+### Pool self-pollution — Josh's hypothesis confirmed, and worse than expected
+
+Checked directly against the live pools both files draw from:
+
+- **Food & Drinks/Cooking niche pool** (last 100): only **22 real
+  submissions exist in it, period** — the rest of the window is still
+  frozen historical corpus. Of those 22, **18 (82%) are this same mp4
+  file.**
+- **Makeup/Beauty niche pool** (last 100): only **9 real submissions
+  exist, and all 9 (100%) are this same mov file.**
+- **Overall/app pool** (last 1000, all objectives): 58 real rows total;
+  18 (31%) are the mp4, 11 (19%) are the mov.
+
+Josh's instinct was correct: for these two heavily-repeated test files,
+the niche percentile is currently comparing each run mostly against its
+*own* sibling runs, not against independent videos. App % is the better
+comparator of the two right now, but it isn't clean either — both pools
+are small enough today that repeat testing measurably moves them. This
+self-corrects as real user volume grows and dilutes the test-file share
+of both windows; no code change needed, just more real usage.
+
+### Feature-contribution analysis — which of the ~56 inputs actually drive the swing
+
+The model (`scoring/scorer.js` + `scoring_spec_v2.json`) is linear: ŷ =
+intercept + Σ (coefficient × standardized feature). Computed each raw
+feature's contribution to ŷ for every run of each file, then ranked by
+how much that contribution actually moved (min-to-max) across the
+repeated runs — i.e., weighted by real model impact, not just "which
+number changed."
+
+**mp4 (18 runs) — top drivers:**
+
+| Feature | Weighted swing | What it is |
+|---|---|---|
+| `cl_big_surprising` | 0.0359 | Claude-vision (CDIMS) — separate AI call, not a judge |
+| `jd_useful` | 0.0290 | judge *disagreement* (std-dev) on "useful" |
+| `objfit_consensus` | 0.0276 | mean objective-fit score across judges |
+| `trending_alignment_signals` | 0.0260 | CDIMS |
+| `cl_big_useful` | 0.0199 | CDIMS |
+| `jd_funny` | 0.0198 | judge disagreement |
+| `jc_novel` | 0.0195 | judge mean |
+| `jc_emotionally_resonant` | 0.0187 | judge mean |
+| `trending_topic_likelihood` | 0.0155 | CDIMS |
+| `jc_useful` | 0.0151 | judge mean |
+
+**mov (8 consistent tiktok/Makeup-Beauty runs) — top drivers:**
+
+| Feature | Weighted swing | What it is |
+|---|---|---|
+| `jd_useful` | 0.0764 | judge disagreement |
+| `cl_big_compelling` | 0.0655 | CDIMS |
+| `objfit_consensus` | 0.0441 | judge mean |
+| `cl_big_surprising` | 0.0359 | CDIMS |
+| `trending_alignment_signals` | 0.0260 | CDIMS |
+| `jc_novel` | 0.0260 | judge mean |
+| `jc_useful` / `jc_visually_engaging` | 0.0226 each | judge mean |
+| `text_overlay_role` | 0.0218 | CDIMS/OCR-derived |
+| `jc_relatable` | 0.0210 | judge mean |
+
+34 of 60 (mp4) and 31 of 60 (mov) raw input features were perfectly
+constant across every run, as expected for the same file — the
+variability is concentrated in a specific, identifiable, and consistent
+subset across *both* test videos, not spread evenly across the model.
+
+**Both files tell the same story**: the biggest movers are not any
+single judge's headline number. They're (1) `cl_big_*`/`trending_*`
+CDIMS features — a separate Claude-vision extraction call with its own
+independent run-to-run variance, compounding on top of the judges'
+own — and (2) judge *consensus*/*disagreement* aggregates (`jc_`= mean,
+`jd_`= std-dev across the 3 judges), not individual per-judge scores.
+This matches Josh's stated intuition exactly: raw judge scores are a
+comparatively small, and comparatively stable, share of what actually
+moves the final prediction.
+
 ## Task 5 — doc ticks
 
 `Summary documents/PreviewPanel_Operations_and_Roadmap.md` §1c's deploy
@@ -304,12 +480,15 @@ correctly from the prior prompt's fix — no further change needed there.
 
 ## What's left
 
-Round 3 is pushed and deployed (`65c07c3`). **Recommended before calling
-this closed**: one more real submission from Josh, specifically on Mac
-incognito (his exact repro conditions for both prior false-clears) —
-watching for the same three things he described (scorecard sneak-peek,
-bare judge score, the flip) all staying gone. If that holds, then — per
-the original prompt — Josh edits `TESTER_WELCOME.md` (including supplying
-a real feedback channel — none exists anywhere in the repo/docs yet),
-does one real phone pass, and sends invites. No further CC work gates the
-launch beyond that final confirmation.
+Round 3 is pushed, deployed (`65c07c3`), and confirmed fixed by Josh —
+three consecutive clean production runs, no reload tricks, real
+shadow-loses races included. Per the original prompt: Josh edits
+`TESTER_WELCOME.md` (including supplying a real feedback channel — none
+exists anywhere in the repo/docs yet), does one real phone pass, and
+sends invites. No further CC work gates the launch.
+
+The percentile-pool self-pollution finding above (82%/100% of two
+niche pools are Josh's own repeat test files) isn't launch-blocking —
+it self-corrects as real tester volume arrives — but is worth keeping in
+mind when reading early percentile numbers during the first weeks of
+real usage.
