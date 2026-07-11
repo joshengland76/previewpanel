@@ -1,14 +1,17 @@
 # Pre-Launch Fix Readout — scoreDisplay Race, Durable Recovery, Ship
 
-**Status: ALL TASKS COMPLETE.** The shadow-scoring/score-display race
-condition found during the launch-readiness pass (see
-`LAUNCH_READINESS_READOUT.md`) is fixed two ways — durable server-side
-recovery (backend) and a single, un-confusing wait screen (frontend) —
-instrumented, verified locally, and confirmed correct against real
-production traffic. The frontend design went through one revision after
-Josh watched it live and found the original approach (reveal the bare
-judge score immediately, then flip to the percentile once it lands)
-confusing — see "UX revision" below for what changed and why.
+**Status: backend + instrumentation confirmed correct against real
+production traffic; frontend fix shipped and verified locally against
+two real multi-second race losses, but not yet re-confirmed by Josh
+against a fresh production submission.** The shadow-scoring/score-display
+race condition found during the launch-readiness pass (see
+`LAUNCH_READINESS_READOUT.md`) went through **three** frontend rounds
+before the visible flip was actually gone — see "UX revision" and "Round
+3" below. Given the first two rounds each looked correct in my own
+verification and still turned out to have a real bug in production,
+**one more real-world check from Josh (ideally Mac incognito, matching
+his exact repro) is the recommended last step before calling this
+closed.**
 
 **Hard constraints honored**: app repo only; the keep-warm path was not
 touched (a pre-existing, unrelated warmup-ping error surfaced in local
@@ -178,11 +181,68 @@ Josh ran another real submission and watched the *original* design's
 upgrade-in-place behavior directly — "goes to the judge results for about
 10 seconds before suddenly flipping to the percentile display" — correct
 on the backend, confusing in the browser. That's what drove the Task 2
-revision above. The revision was verified locally (see 4a) but not yet
-re-confirmed against a fresh production submission as of this writeup —
-worth one more real test after this deploy lands, though the local
-verification used the exact same code path against the same real Neon
-DB, so this is a low-risk gap.
+revision above.
+
+### Round 3 — the merged-wait revision still flashed in production
+
+The Task 2 revision (chaining `waitingForScore` onto the same "Assembling…"
+screen) passed my local verification and was confirmed deployed via the
+logic-pattern-grep method — but Josh reported it **still** happening:
+*"an inappropriate glimpse of the scorecard card before the awaiting your
+panel results window, then showing judge scores briefly, then showing
+percentile about ten seconds later... consistently on Mac incognito."*
+Not on phone, which was the clue that this was a real logic gap rather
+than a stale deploy — confirmed via Josh's own DevTools Network tab
+showing the exact bundle hash I'd already verified contained the Round 2
+fix.
+
+Root cause: `isFinished`/`isProcessing` — which gate *every*
+results-vs-processing render decision in the JSX — are derived from the
+`jobStatus` React state, completely separate from the `mainResultsReady`
+computation the Round 2 fix added. `setJobStatus(data.status)` was still
+being called unconditionally on every poll tick, flipping `isFinished`
+true (revealing the bare-judge-score view) the instant the backend said
+"done" — regardless of whether `scoreDisplay` had arrived. Round 2 had
+only ever gated the status *message text*, the poll-interval clearing,
+and the history-save timing — never the actual render gate. My original
+local test happened to pass because its race margin (-1572ms) was small
+enough to resolve within the same poll tick, masking the bug; Josh's
+real margins (10–27s) span many poll ticks and exposed it every time.
+
+**Fix**: withhold the terminal `done`/`partial` value from `jobStatus`
+until `mainResultsReady` is true; non-terminal statuses still update
+immediately so judge-by-judge progress keeps working during the wait.
+Also fixed a related gap while in there: `doStartAnalysis()`/`reset()`
+never reset `scoreDisplay`, so a stale score from a previous submission
+in the same session could leak into a new one's initial render. And
+updated `WaitingBanner`'s status text — it was ignoring `statusMessage`
+entirely and would repeat "3 of 3 judges have reached their verdict" for
+the whole combined wait (once judges finish, that's now the same
+`doneCount === totalCount` branch, so it correctly reads "Assembling your
+panel results…" instead) — not the flip bug itself, but the message
+Josh actually asked for.
+
+**Verified locally**: `SHADOW_DELAY_MS` forcing two separate real race
+losses (**-24990ms**, **-25632ms** — an order of magnitude larger than
+the original -1572ms test, deliberately, to make sure this reproduces the
+multi-poll-tick failure mode Josh saw). A `MutationObserver`-based render
+log (not just periodic screenshots, which could miss a single-frame
+flash) captured every DOM mutation across both full submissions: **zero**
+states where the "Analysis complete" bare-score view rendered before
+`scoreDisplay` was ready, across 105 and 117 captured mutations
+respectively. "Assembling your panel results…" was confirmed visible for
+the correct ~45s window before the atomic switch to the final view.
+Cleaned up both test submissions from the DB afterward.
+
+Pushed as `65c07c3`. Backend `/version` unchanged (`121b3ab` — this was a
+frontend-only commit, no backend redeploy needed). Did **not** re-run an
+automated production submission for this round: the Vercel frontend is
+HTTPS, and every local method for injecting a test video file into an
+HTTPS page's upload input hit either mixed-content blocking (fetching
+from a local HTTP file server) or an impractically large payload
+(base64-embedding the video directly). Given two prior "confirmed fixed"
+conclusions from me already turned out wrong, I'm not willing to call
+this closed on local verification alone a third time — see "What's left."
 
 ## Task 5 — doc ticks
 
@@ -198,8 +258,12 @@ correctly from the prior prompt's fix — no further change needed there.
 
 ## What's left
 
-Push and deploy this final revision (if not already done by the time this
-is read), then — per the original prompt — Josh edits `TESTER_WELCOME.md`
-(including supplying a real feedback channel — none exists anywhere in
-the repo/docs yet), does one real phone pass, and sends invites. No
-further CC work gates the launch.
+Round 3 is pushed and deployed (`65c07c3`). **Recommended before calling
+this closed**: one more real submission from Josh, specifically on Mac
+incognito (his exact repro conditions for both prior false-clears) —
+watching for the same three things he described (scorecard sneak-peek,
+bare judge score, the flip) all staying gone. If that holds, then — per
+the original prompt — Josh edits `TESTER_WELCOME.md` (including supplying
+a real feedback channel — none exists anywhere in the repo/docs yet),
+does one real phone pass, and sends invites. No further CC work gates the
+launch beyond that final confirmation.
