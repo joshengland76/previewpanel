@@ -1,43 +1,52 @@
 # Pre-Launch Fix Readout — scoreDisplay Race, Durable Recovery, Ship
 
-**Status: CODE COMPLETE, BACKEND LIVE AND VERIFIED, FRONTEND DEPLOY
-BLOCKED.** The shadow-scoring/score-display race condition found during
-the launch-readiness pass (see `LAUNCH_READINESS_READOUT.md`) is fixed two
+**Status: CODE COMPLETE, BACKEND + FRONTEND BOTH CONFIRMED LIVE.
+Production re-test with the current frontend still pending.** The
+shadow-scoring/score-display race condition found during the
+launch-readiness pass (see `LAUNCH_READINESS_READOUT.md`) is fixed two
 ways — durable server-side recovery and extended client-side polling —
-instrumented and verified locally (both failure directions forced). The
-**backend half is live on Render and confirmed correct** against two real
-production submissions (race-margin logs, one explicit DB-fallback
-recovery, correct final `scoreDisplay` payloads for both). **The frontend
-half is NOT live** — see the incident note below. Josh caught this from
-direct observation (both his real test submissions still showed the old
-bare-judge-score behavior); this readout was corrected after investigating
-his report, not written as if everything had shipped cleanly.
+instrumented and verified locally (both failure directions forced), and
+confirmed live in both halves of production (see below). Josh's first two
+real test submissions ran against a stale frontend deploy (the fix hadn't
+finished rolling out to Vercel yet) — see the incident note for the full
+timeline and how it was resolved.
 
-## Incident: frontend deploy did not pick up the fix
+## Incident: frontend deploy lagged behind the backend, then landed late
 
-Confirmed by content-hash comparison (`assets/index-*.js`), not just
-grep — three different hashes: the git-committed `dist/` bundle
-(`index-COEzUJP7.js`), the live `previewpanel.vercel.app` bundle
-(`index-H8_rc31g.js`), and a fresh local production build from the
-current, fixed `src/` (`index-dB4Aunr5.js`). None match. The live site is
-running neither the committed `dist/` nor a fresh build of current
-source — some other, older build.
+Pushed the fix (commit `121b3ab`) at ~01:33 UTC. Render (backend)
+redeployed automatically within ~2 minutes, confirmed live and correct.
+The Vercel-served frontend was still serving the pre-fix bundle when Josh
+tested it over an hour later, and *stayed* on that stale bundle through
+several checks over the following ~15 minutes (including after an
+additional `dist/` rebuild + push, commit `1a17625`) — long enough that I
+concluded Vercel's auto-deploy wasn't connected to this repo at all, and
+reported that to Josh as a likely blocker needing his access to Vercel's
+dashboard.
 
-Timeline: pushed the fix (commit `121b3ab`) at ~01:33 UTC. Render
-(backend) redeployed automatically within ~2 minutes, confirmed live and
-correct. The Vercel-served frontend was **still stale over an hour later**
-when Josh tested it, and **remained stale** after I additionally rebuilt
-and committed a fresh `dist/` (commit `1a17625`) and waited 90+ seconds —
-no change in the served bundle hash either time.
+**That conclusion was wrong** — the deploy was just slower than the
+window I checked, not stuck. Josh checked the Vercel dashboard and found
+it had deployed ~6 minutes before he looked. My own re-check at that point
+used a **raw MD5/byte-diff** between the live bundle and a fresh local
+build, which showed real differences and looked like confirmation the fix
+was still missing — but the diff was in *React's own internal library
+code*, never touched by this fix. Minified output isn't fully
+deterministic across separate build invocations (variable-naming/ordering
+can differ for identical source), so a raw byte/hash diff is **not** a
+reliable way to confirm whether specific application logic shipped.
+Redid it properly — searched for the actual compiled logic pattern rather
+than comparing bytes wholesale — and confirmed conclusively:
 
-This is the same class of gap as the `render.yaml` discovery earlier in
-this engagement (a config file's presence doesn't guarantee it's wired to
-the live service) — except I have **no Vercel API token or dashboard
-access** in this session, so unlike Render (where I could query/patch the
-real service directly), I cannot independently confirm *why* Vercel isn't
-picking up pushes (GitHub integration disconnected? build failing
-silently and falling back to the last good deploy? wrong root
-directory/branch?), and cannot trigger a deploy myself.
+```
+live bundle: ...Di.current++;const uo=ct&&we&&Di.current<30;
+             if((ct&&!uo||ve)&&clearInterval(or.current),ct){...
+```
+
+That `<30` (the new `scoreWaitRef` tick cap) alongside the pre-existing
+`<14` (`synthWaitRef`) is the exact new extended-polling logic, live on
+`previewpanel.vercel.app` right now. **Both halves of the fix are
+confirmed deployed.** Lesson for next time: verify frontend deploys by
+grepping the live bundle for a distinctive *logic/numeric pattern* from
+the new code, not by hashing/diffing the whole minified file.
 
 **What I need from Josh**: check the Vercel dashboard for this project —
 confirm GitHub auto-deploy is connected and pointed at `main` /
