@@ -237,6 +237,13 @@ function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploa
     statusText = "1 of 3 judges has reached their verdict";
   } else if (doneCount === 2) {
     statusText = "2 of 3 judges have reached their verdict";
+  } else if (doneCount === totalCount && totalCount > 0) {
+    // All judges done but still isProcessing means synthesis/scoreDisplay
+    // are still being assembled (see the merged-wait fix in the poll
+    // effect) -- match Josh's requested copy for this phase rather than
+    // repeating the "judges have reached their verdict" message, which
+    // otherwise sits there unchanged for up to the combined ~132s wait.
+    statusText = "Assembling your panel results…";
   } else {
     statusText = `${doneCount} of ${totalCount} judges have reached their verdict`;
   }
@@ -419,7 +426,6 @@ export default function PreviewPanel() {
           setStatusMessage("The server restarted during analysis. Please submit your video again.");
           return;
         }
-        setJobStatus(data.status);
         setJudgeResults(data.results || {});
         if (data.duration) setVideoDurationSecs(data.duration);
         setSynthesis(data.synthesis ?? null);
@@ -458,6 +464,24 @@ export default function PreviewPanel() {
         const waitingForScore = synthResolved && scorePending && scoreWaitRef.current < 30;
 
         if (waitingForSynth || waitingForScore) setStatusMessage("Assembling your panel results…");
+
+        // BUG FIX (found via Josh's real-world repro after the first merged-wait
+        // deploy still showed the flip): isFinished/isProcessing -- which gate
+        // EVERY results-vs-processing render decision in the JSX below -- are
+        // derived from the jobStatus REACT STATE, not from mainResultsReady.
+        // The old unconditional `setJobStatus(data.status)` here updated that
+        // state (and hence flipped isFinished true, revealing the bare-score
+        // view) the instant the backend said "done", regardless of whether
+        // scoreDisplay had arrived -- completely bypassing the wait logic above,
+        // which only ever controlled the status *message* and the poll
+        // interval, never the actual render gate. Withhold the terminal
+        // done/partial value from jobStatus until mainResultsReady so the
+        // processing view (and "Assembling…" message) stays up for the WHOLE
+        // combined wait; non-terminal statuses still update immediately so the
+        // judge-by-judge progress UI keeps working during that wait.
+        if (!jobDone || (!waitingForSynth && !waitingForScore)) {
+          setJobStatus(data.status);
+        }
 
         const mainResultsReady = jobDone && !waitingForSynth && !waitingForScore;
 
@@ -614,6 +638,7 @@ export default function PreviewPanel() {
     setStep(2);
     setJudgeResults({});
     setSynthesis(null); setSynthesisStatus(null); setTrimAvailable(false); setOpenJudgeIds(new Set());
+    setScoreDisplay(null); synthWaitRef.current = 0; scoreWaitRef.current = 0;
     setRestoredFileName(null);
     setJobStatus("uploading");
     setUploadProgress(0);
@@ -713,6 +738,7 @@ export default function PreviewPanel() {
     setStep(1); setJobId(null); setJobStatus(null);
     setJudgeResults({});
     setSynthesis(null); setSynthesisStatus(null); setTrimAvailable(false); setOpenJudgeIds(new Set()); synthWaitRef.current = 0;
+    setScoreDisplay(null); scoreWaitRef.current = 0;
     setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
     setRestoredFileName(null);
     setVideoDurationSecs(null);
