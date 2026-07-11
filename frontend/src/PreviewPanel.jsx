@@ -46,6 +46,21 @@ function saveToHistory(entry) {
   } catch {}
 }
 
+// Pre-launch fix, Task 2 -- scoreDisplay can arrive after the initial
+// save-to-history write (see the extended-polling race in the poll effect
+// below). Patches it into the already-saved entry by jobId so a restored
+// history view carries the percentile/ABSTAIN display too, not just the
+// bare judge score that was all that existed at the moment of the first save.
+function patchHistoryEntryScoreDisplay(jobId, scoreDisplay) {
+  try {
+    const history = loadHistory();
+    const idx = history.findIndex((h) => h.jobId === jobId);
+    if (idx === -1) return;
+    history[idx] = { ...history[idx], scoreDisplay };
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch {}
+}
+
 // ── Phase C, Task 1: identity-lite ────────────────────────────
 // A persistent, client-generated UUID -- NOT a login/account system. Created
 // once on first load, reused forever from localStorage, sent with every
@@ -343,6 +358,10 @@ export default function PreviewPanel() {
   const [uploadZoneError, setUploadZoneError] = useState(null);
   const pollRef = useRef(null);
   const synthWaitRef = useRef(0);
+  // Pre-launch fix, Task 2 -- extended polling for scoreDisplay (mirrors
+  // synthWaitRef's pattern for synthesis).
+  const scoreWaitRef = useRef(0);
+  const scoreDisplayPatchedRef = useRef(false);
   const objDropRef = useRef(null);
   const objInputRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -403,6 +422,8 @@ export default function PreviewPanel() {
   useEffect(() => {
     if (!jobId) return;
     synthWaitRef.current = 0;
+    scoreWaitRef.current = 0;
+    scoreDisplayPatchedRef.current = false;
     const poll = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/status/${jobId}`);
@@ -434,44 +455,65 @@ export default function PreviewPanel() {
         const waitingForSynth = jobDone && synthPending && synthWaitRef.current < 14;
         if (waitingForSynth) setStatusMessage("Assembling your panel results…");
 
-        if ((jobDone && !waitingForSynth) || jobErrored) {
+        const mainResultsReady = jobDone && !waitingForSynth;
+
+        // Pre-launch fix, Task 2 -- scoreDisplay comes from a separately-timed
+        // shadow-scoring pipeline that can finish after judges+synthesis (the
+        // shadow-vs-synthesis race -- see LAUNCH_READINESS_READOUT.md). Once
+        // the main results are ready to show, DON'T block on scoreDisplay --
+        // render immediately (bare judge score if scoreDisplay isn't in yet)
+        // -- but keep the poll interval alive up to 90s more so it can upgrade
+        // in place if scoreDisplay lands late. Mirrors waitingForSynth's
+        // capped-wait pattern, just without holding up the results view.
+        const scorePending = data.scoreDisplay == null;
+        if (mainResultsReady && scorePending) scoreWaitRef.current++;
+        const waitingForScore = mainResultsReady && scorePending && scoreWaitRef.current < 30;
+
+        if ((mainResultsReady && !waitingForScore) || jobErrored) {
           clearInterval(pollRef.current);
+        }
+
+        if (mainResultsReady) {
           // Synthesis never resolved within the cap → degrade to the fallback view.
-          if (jobDone && synthPending) setSynthesisStatus("failed");
-          if (jobDone) {
-            const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
-            const total = Object.keys(data.results||{}).length;
-            setStatusMessage(data.status === "done" ? "Analysis complete!" : `${succeeded} of ${total} judges completed.`);
+          if (synthPending) setSynthesisStatus("failed");
+          const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
+          const total = Object.keys(data.results||{}).length;
+          setStatusMessage(data.status === "done" ? "Analysis complete!" : `${succeeded} of ${total} judges completed.`);
 
-            // Notification
-            if (!notifiedRef.current && Notification?.permission === "granted") {
-              notifiedRef.current = true;
-              new Notification("PreviewPanel 🦉", { body: "Your results are ready!" });
-            }
+          // Notification
+          if (!notifiedRef.current && Notification?.permission === "granted") {
+            notifiedRef.current = true;
+            new Notification("PreviewPanel 🦉", { body: "Your results are ready!" });
+          }
 
-            // Issue #9: Auto-save to history
-            if (!savedRef.current) {
-              savedRef.current = true;
-              const scores = Object.entries(data.results || {})
-                .filter(([,v]) => v.status === "done")
-                .map(([id, v]) => ({ id, score: v.data?.overall }));
-              const entry = {
-                platform,
-                objective,
-                fileName: videoFile?.name || "video",
-                savedAt: Date.now(),
-                scores,
-                results: data.results,
-                synthesis: data.synthesis ?? null,
-                synthesisStatus: synthPending ? "failed" : data.synthesisStatus,
-                videoDuration: data.duration,
-                selectedJudges,
-                thumbnailDataUrl: data.thumbnailDataUrl || null,
-              };
-              saveToHistory(entry);
-              setHistory(loadHistory());
-            }
-          } else if (data.status === "timeout") {
+          // Issue #9: Auto-save to history. If scoreDisplay hasn't arrived yet,
+          // it's patched in separately once it does (see the effect below) --
+          // that's the whole point of not blocking this save on it.
+          if (!savedRef.current) {
+            savedRef.current = true;
+            const scores = Object.entries(data.results || {})
+              .filter(([,v]) => v.status === "done")
+              .map(([id, v]) => ({ id, score: v.data?.overall }));
+            const entry = {
+              jobId,
+              platform,
+              objective,
+              fileName: videoFile?.name || "video",
+              savedAt: Date.now(),
+              scores,
+              results: data.results,
+              synthesis: data.synthesis ?? null,
+              synthesisStatus: synthPending ? "failed" : data.synthesisStatus,
+              scoreDisplay: data.scoreDisplay ?? null,
+              videoDuration: data.duration,
+              selectedJudges,
+              thumbnailDataUrl: data.thumbnailDataUrl || null,
+            };
+            saveToHistory(entry);
+            setHistory(loadHistory());
+          }
+        } else if (jobErrored) {
+          if (data.status === "timeout") {
             setStatusMessage(data.error || "The panel took too long to reach a verdict.");
           } else {
             setStatusMessage(`Error: ${data.error}`);
@@ -483,6 +525,17 @@ export default function PreviewPanel() {
     pollRef.current = setInterval(poll, 3000);
     return () => clearInterval(pollRef.current);
   }, [jobId]);
+
+  // Pre-launch fix, Task 2 -- patches the late-arriving scoreDisplay into the
+  // already-saved history entry (see patchHistoryEntryScoreDisplay). Runs
+  // once per job, only after the initial save happened and only when
+  // scoreDisplay actually has a value.
+  useEffect(() => {
+    if (!jobId || !savedRef.current || !scoreDisplay || scoreDisplayPatchedRef.current) return;
+    scoreDisplayPatchedRef.current = true;
+    patchHistoryEntryScoreDisplay(jobId, scoreDisplay);
+    setHistory(loadHistory());
+  }, [jobId, scoreDisplay]);
 
   const handleSubmit = async () => {
     if (!videoFile || selectedJudges.length === 0) return;
@@ -699,6 +752,11 @@ export default function PreviewPanel() {
     // Older entries predate synthesis → no synthesis means the fallback view.
     setSynthesis(entry.synthesis ?? null);
     setSynthesisStatus(entry.synthesisStatus ?? (entry.synthesis ? "ready" : "failed"));
+    // Pre-launch fix, Task 2 -- entries predating this fix (or ones saved
+    // before scoreDisplay's late-arrival patch caught up) have no
+    // scoreDisplay field at all; ?? null degrades to the same bare
+    // judge-score view as before, not a crash.
+    setScoreDisplay(entry.scoreDisplay ?? null);
     setOpenJudgeIds(new Set());
     if (entry.videoDuration) setVideoDurationSecs(entry.videoDuration);
     setTrimAvailable(false); // history restore has no in-memory file → no trim

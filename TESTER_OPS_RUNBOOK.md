@@ -43,6 +43,14 @@ live — see `validation/OPERATIONS.md` for why). Missing a day costs nothing:
   (frame-sampling failures, unusual video formats) before it's worth alarming
   on — one-off failures degrade gracefully (missing C_dims just means a
   thinner feature vector for that row, not a broken submission).
+- **Watch this: shadow-vs-synthesis race margin.** Every submission logs
+  `[race] shadow-vs-synthesis margin=<ms>ms (negative = shadow lost)`.
+  Negative means shadow-scoring (percentile/ABSTAIN display) finished after
+  synthesis — the pre-launch fix (extended polling + DB fallback in
+  `/api/status`) recovers the display either way, but a consistently large
+  negative margin means shadow-scoring is running structurally slower than
+  judges+synthesis for real tester traffic, worth a look even though nothing
+  breaks user-facing.
 - **Cost line.** Per real preview submission: TwelveLabs judges
   ~$0.0262/min × video length + C_dims extraction ~$0.028/video ≈ **~$0.03–0.05
   typical video** (see Part B.6 below for the full projection). Nothing here

@@ -2256,6 +2256,8 @@ async function runSynthesisForJob(jobId) {
   job.synthesisStatus = syn ? "ready" : "failed";
   if (!syn) return;
   console.log(`[${jobId}] [synthesis] ready — score=${syn.verdict?.headline_score} action=${syn.verdict?.action} present=${panel.judges_present.join(",")}`);
+  job.synthesisReadyAt = Date.now();
+  maybeLogRaceMargin(jobId, job);
 
   if (pgPool) {
     try {
@@ -2268,6 +2270,46 @@ async function runSynthesisForJob(jobId) {
     }
   }
 }
+
+// Pre-launch fix, Task 3 -- race instrumentation. synthesis and shadow-scoring
+// (scoreDisplay) complete independently and asynchronously; the frontend's
+// poll loop stops once judges+synthesis are done, so if shadow-scoring
+// finishes AFTER that, scoreDisplay silently never reaches the client on its
+// own (see Task 1/2 for the fix; this is just the visibility into how often
+// it happens). Logs once per job, whichever of the two finishes second sets
+// job.synthesisReadyAt/job.shadowReadyAt and triggers the log line here.
+// margin = synthesisReadyAt - shadowReadyAt: positive means shadow won
+// (finished first, no race lost); negative means shadow lost (finished after
+// synthesis, exactly the failure mode this whole fix addresses).
+function maybeLogRaceMargin(jobId, job) {
+  if (job._raceMarginLogged || job.synthesisReadyAt == null || job.shadowReadyAt == null) return;
+  job._raceMarginLogged = true;
+  const marginMs = job.synthesisReadyAt - job.shadowReadyAt;
+  console.log(`[${jobId}] [race] shadow-vs-synthesis margin=${marginMs}ms (negative = shadow lost)`);
+}
+
+// Pre-launch fix -- shared getScoreDisplay() fetchers, factored out so the
+// durable DB-fallback path in /api/status (below) can rebuild the exact same
+// payload runShadowScoringForJob() computes the first time, rather than
+// duplicating these two queries a second time.
+const SCORE_DISPLAY_FETCHERS = {
+  fetchShadowRows: async () => {
+    const { rows } = await pgPool.query(
+      `SELECT id, prediction, objective, created_at, platform FROM shadow_scores
+       WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE`
+    );
+    return rows;
+  },
+  fetchPersonalPredictions: async (userId) => {
+    const { rows } = await pgPool.query(
+      `SELECT prediction FROM shadow_scores
+       WHERE user_id = $1 AND prediction IS NOT NULL AND is_posted_video IS NOT TRUE
+       ORDER BY created_at DESC LIMIT 500`,
+      [userId]
+    );
+    return rows.map((r) => r.prediction);
+  },
+};
 
 // runShadowScoringForJob — capstone v2 shadow scoring (Phase B2, Task 4).
 // INVISIBLE: nothing here is ever returned to the client or shown in any
@@ -2286,6 +2328,13 @@ async function runShadowScoringForJob(jobId) {
   // normal app path is.
   if (process.env.SHADOW_SCORING !== "true" && job?.source !== "validation") return;
   if (!job || !pgPool) return;
+
+  // Pre-launch fix, Task 4a -- test-only hook to force the shadow-vs-synthesis
+  // race for local verification. Never set in production; no-op (0ms) when
+  // the env var is absent, so this has zero effect on normal behavior.
+  if (process.env.SHADOW_DELAY_MS) {
+    await new Promise((resolve) => setTimeout(resolve, Number(process.env.SHADOW_DELAY_MS)));
+  }
 
   try {
     // Flatten job.results into the same critic_/trendsetter_/connector_
@@ -2397,31 +2446,10 @@ async function runShadowScoringForJob(jobId) {
       job.scoreDisplay = await getScoreDisplay(job.objective, shadowResult.prediction, job.userId ?? null, {
         selfKey: shadowResult.id != null ? `shadow:${shadowResult.id}` : null,
         platform: job.platform ?? null, // Phase C, Task 0d -- non-tiktok proxy note
-        fetchShadowRows: async () => {
-          // platform selected but not yet filtered on -- Phase C, Task 0b
-          // (plumbing only; pools stay unified pending the Task 0c gate).
-          // is_posted_video rows excluded -- Task 3: posted-video validation
-          // rescores must never pollute the niche/overall percentile pools.
-          const { rows } = await pgPool.query(
-            `SELECT id, prediction, objective, created_at, platform FROM shadow_scores
-             WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE`
-          );
-          return rows;
-        },
-        fetchPersonalPredictions: async (userId) => {
-          // This user's own history of PREVIEW submissions (this one
-          // included, per personalDisplay's contract). is_posted_video rows
-          // excluded -- Task 3: personal history = previews only; posted
-          // rescores are validation-side, not part of a user's own history.
-          const { rows } = await pgPool.query(
-            `SELECT prediction FROM shadow_scores
-             WHERE user_id = $1 AND prediction IS NOT NULL AND is_posted_video IS NOT TRUE
-             ORDER BY created_at DESC LIMIT 500`,
-            [userId]
-          );
-          return rows.map((r) => r.prediction);
-        },
+        ...SCORE_DISPLAY_FETCHERS,
       });
+      job.shadowReadyAt = Date.now();
+      maybeLogRaceMargin(jobId, job);
     }
   } catch (e) {
     console.error(`[${jobId}] [shadow_score] unexpected error (non-fatal, user path unaffected): ${e.message}`);
@@ -3775,13 +3803,50 @@ async function resumeInFlightTasks() {
 }
 
 // ── GET /api/status/:jobId ────────────────────────────────────
-app.get("/api/status/:jobId", (req, res) => {
+app.get("/api/status/:jobId", async (req, res) => {
   const job = jobs[req.params.jobId];
   if (!job) return res.status(404).json({ error: "Job not found" });
 
   // Report live queue position
   const queuePos = jobQueue.findIndex(q => q.jobId === req.params.jobId);
   const currentQueuePosition = queuePos >= 0 ? queuePos + 1 : (activeJob === req.params.jobId ? 0 : -1);
+
+  // Pre-launch fix, Task 1 -- durable scoreDisplay recovery. Whatever the
+  // reason the in-memory value never got set (a slow shadow-scoring pipeline
+  // that simply hasn't finished yet is the common, non-bug case; any other
+  // gap is exactly what this backstops), a completed job's scoreDisplay is
+  // fully reconstructable from the DB: shadow_scores is the durable source
+  // of truth, job.submissionId links the two, and getScoreDisplay() is the
+  // same function the original (in-process) computation used -- so this
+  // produces the identical payload, not an approximation. One indexed query;
+  // a genuine no-op when the in-memory value is already present, or when the
+  // shadow_scores row doesn't exist yet (shadow-scoring still in flight --
+  // correct to still show null in that case, nothing to recover).
+  const jobDoneForRecovery = job.status === "done" || job.status === "partial";
+  if (job.scoreDisplay == null && jobDoneForRecovery && process.env.DISPLAY_SCORE === "true"
+      && job.source !== "validation" && job.submissionId != null && pgPool) {
+    try {
+      const { rows } = await pgPool.query(
+        `SELECT id, objective, prediction, user_id, platform FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
+        [job.submissionId]
+      );
+      const row = rows[0];
+      if (row && row.prediction != null) {
+        job.scoreDisplay = await getScoreDisplay(row.objective, row.prediction, row.user_id ?? null, {
+          selfKey: `shadow:${row.id}`,
+          platform: row.platform ?? job.platform ?? null,
+          ...SCORE_DISPLAY_FETCHERS,
+        });
+        if (job.shadowReadyAt == null) {
+          job.shadowReadyAt = Date.now();
+          maybeLogRaceMargin(req.params.jobId, job);
+        }
+        console.log(`[${req.params.jobId}] [race] scoreDisplay recovered via DB fallback in /api/status`);
+      }
+    } catch (e) {
+      console.error(`[${req.params.jobId}] [race] scoreDisplay DB fallback failed (non-fatal): ${e.message}`);
+    }
+  }
 
   res.json({
     status: job.status,

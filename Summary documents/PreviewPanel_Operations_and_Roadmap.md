@@ -96,7 +96,13 @@ constraint on this path.
   blue-green deploy (two live prod containers, zero double-claims).
 - **Deploy notes:** Render env-var changes do **not** auto-redeploy — trigger
   one manually. Blue-green overlap (~15–30s of two containers) is normal and
-  now safe.
+  now safe. **`render.yaml` is documentation-only** — the live service was
+  never created as a Render Blueprint, so it's dashboard/API-configured;
+  editing the file alone changes nothing real. Apply build/start-command or
+  env-var changes via the Render dashboard or API (`PATCH
+  /v1/services/{id}`, `PUT /v1/services/{id}/env-vars/{key}`), and update
+  `render.yaml` alongside as the historical record, not the other way
+  around.
 - **Drift instrument:** 30-video **anchor set** rescored through the full live
   path monthly (~$2; `anchor_rescore.mjs` → `anchor_history.jsonl`); alert at
   |median Δŷ| > 0.02 or rank corr < 0.95. Next run ~Aug 9.
