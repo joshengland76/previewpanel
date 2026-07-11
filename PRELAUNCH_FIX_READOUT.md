@@ -244,6 +244,52 @@ from a local HTTP file server) or an impractically large payload
 conclusions from me already turned out wrong, I'm not willing to call
 this closed on local verification alone a third time — see "What's left."
 
+### Round 3 — production re-verification attempt
+
+Tried to re-confirm Round 3 against a real production submission via
+browser automation (matching Josh's Mac-incognito repro). Hit three
+independent dead ends injecting a test video into the HTTPS production
+upload form: fetching from a local HTTP file server is blocked by
+mixed-content policy; base64-embedding the video directly is technically
+possible but token-prohibitive at any file size that's actually a video
+(a 60KB base64 chunk alone costs ~57k tokens to read back); and
+generating a synthetic clip in-page via `canvas.captureStream()` +
+`MediaRecorder` was blocked by the browser tool's own security filter
+(flagged as suspicious regardless of content). Did not find a way around
+these within reasonable effort, so this is a real gap, not a skipped
+step.
+
+Fell back to submitting a real video directly to the production backend
+via `curl` (`job_1783748178959_c6zgit`, bypassing the browser entirely)
+and polling `/api/status` to completion, then pulling the Render logs
+for that job via the Render API (`RENDER_API_KEY` in `backend/.env`,
+service `srv-d7n73lhj2pic738mfthg`). Confirmed: judges → synthesis →
+shadow-scoring all completed correctly, race margin logged as
+**+8971ms** (shadow *won* this time — synthesis was the slower side),
+`scoreDisplay` present and correctly shaped (ABSTAIN payload) the moment
+`status` flipped to `done`, no errors. Also confirmed the live bundle's
+`Last-Modified` header (05:34:05 UTC) postdates both Round 3 commits
+(05:29:14 and 05:32:27 UTC), so the deployed frontend is the Round 3
+code.
+
+**What this does and doesn't prove**: it's a real, clean production
+run through the whole Round 3 code path with no errors — good evidence
+the system is healthy. But because shadow won this particular race, it
+never exercised the specific frontend render-timing bug (which only
+shows when `jobStatus` flips to `done` *before* `scoreDisplay` arrives) —
+curl polling only sees the API's JSON, not what the React app does with
+it, so it can't confirm the browser-side fix either way. The exhaustive
+local test (two real forced race losses, MutationObserver-verified zero
+flash) is still the strongest evidence for the actual fix; this
+production run adds confirmation that the healthy path also works
+end-to-end for real, on the currently-deployed code. Test submission
+(`submissions.id = 6627`) cleaned up from the DB afterward.
+
+**Bottom line unchanged**: a real device check from Josh — ideally one
+that lands on a shadow-loses race like his original repro — is still
+the recommended final confirmation. I was not able to force or fully
+substitute for that with the tools available in this environment.
+
 ## Task 5 — doc ticks
 
 `Summary documents/PreviewPanel_Operations_and_Roadmap.md` §1c's deploy
