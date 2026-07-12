@@ -57,6 +57,13 @@ export const SCORE_DISPLAY_COPY = {
     return `Beats ${Math.round(personal.value)}% of your own videos`;
   },
 
+  // Shown in the personal stat box in place of personalHeadline when there
+  // isn't enough history yet (below PERSONAL_MIN_VIDEOS, currently 5 -- i.e.
+  // this box always renders, unlike the niche/overall ones which are omitted
+  // entirely when there's nothing to show). Keep in sync with
+  // PERSONAL_MIN_VIDEOS in percentilePools.js if that threshold ever changes.
+  personalPlaceholder: "Rank among your videos when >4",
+
   // Shown once, as an info-tooltip trigger next to the niche/overall rows
   // (NOT the personal row -- personal is the user's own history, no corpus
   // is involved there). Phase C, Task 0d: one modest added sentence for

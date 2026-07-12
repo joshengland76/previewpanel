@@ -157,7 +157,8 @@ const under5 = await getScoreDisplay(predictObjective, 0.5, "user-1", {
   fetchPersonalPredictions: async () => personalRows([[0.1], [0.2], [0.3], [0.4]]), // 4 videos, below PERSONAL_MIN_VIDEOS
 });
 check("under-5-video user gets null personal", under5.personal, null);
-check("under-5-video user gets null personalHeadline", under5.personalHeadline, null);
+check("under-5-video user gets the placeholder personalHeadline (box always renders)",
+  under5.personalHeadline, "Rank among your videos when >4");
 
 invalidatePoolCache();
 const ordinalCase = await getScoreDisplay(predictObjective, 0.5, "user-2", {

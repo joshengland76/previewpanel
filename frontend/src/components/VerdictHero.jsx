@@ -123,16 +123,17 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
               {scoreDisplay.overallAppHeadline}
             </AutoFitText>
           )}
-          {(scoreDisplay.headline || scoreDisplay.personalHeadline) && (
-            <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "center" }}>
-              {scoreDisplay.headline && (
-                <SecondaryStat label={scoreDisplay.headline} sub={scoreDisplay.sub} />
-              )}
-              {scoreDisplay.personalHeadline && (
-                <SecondaryStat label={scoreDisplay.personalHeadline} />
-              )}
-            </div>
-          )}
+          <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "center" }}>
+            {scoreDisplay.headline && (
+              <SecondaryStat label={scoreDisplay.headline} sub={scoreDisplay.sub} />
+            )}
+            {/* Personal box always renders, even below the 5-video floor --
+                falls back client-side to the placeholder text for any
+                scoreDisplay computed/stored before this box became
+                unconditional (older submissions' personalHeadline is null,
+                not the placeholder, since it was persisted at scoring time). */}
+            <SecondaryStat label={scoreDisplay.personalHeadline || "Rank among your videos when >4"} />
+          </div>
           {scoreDisplay.precisionCaveatLine && (
             <div style={{ fontSize: 11, color: B.grey, marginTop: 8, maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
               {scoreDisplay.precisionCaveatLine}

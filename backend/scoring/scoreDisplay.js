@@ -144,7 +144,7 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     overallPoolSize,
     headline: copy.predictHeadline(niche, objective),
     sub: copy.predictSub(nichePoolSize),
-    personalHeadline: copy.personalHeadline(personal),
+    personalHeadline: copy.personalHeadline(personal) ?? copy.personalPlaceholder,
     overallAppHeadline: copy.overallAppHeadline(overallApp, overallPoolSize),
     poolInfoTooltip: copy.poolInfoTooltip(platform),
     groupAverageNote,
