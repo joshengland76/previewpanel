@@ -57,8 +57,8 @@ function SecondaryStat({ label, sub }) {
       flex: "1 1 0", background: B.bg, border: `1px solid ${B.border}`, borderRadius: 12,
       padding: "8px 12px", textAlign: "center", minWidth: 0,
     }}>
-      <div style={{ fontSize: 10, fontWeight: 800, color: B.body, lineHeight: 1.3 }}>{label}</div>
-      {sub && <div style={{ fontSize: 9, color: B.grey, marginTop: 2 }}>{sub}</div>}
+      <div style={{ fontSize: 11, fontWeight: 800, color: B.body, lineHeight: 1.3 }}>{label}</div>
+      {sub && <div style={{ fontSize: 10, color: B.grey, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -118,7 +118,7 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
       {hasPercentile && (
         <div style={{ marginTop: 4 }}>
           {scoreDisplay.overallAppHeadline && (
-            <div style={{ fontSize: 11.5, fontWeight: 800, color: B.body, whiteSpace: "nowrap" }}>{scoreDisplay.overallAppHeadline}</div>
+            <div style={{ fontSize: 12.5, fontWeight: 800, color: B.body, whiteSpace: "nowrap" }}>{scoreDisplay.overallAppHeadline}</div>
           )}
           {(scoreDisplay.headline || scoreDisplay.personalHeadline) && (
             <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "center" }}>
