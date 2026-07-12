@@ -34,7 +34,7 @@ export const STUDY_STATS = {
 
 // Verbatim -- minor layout edits allowed, wording must not change. (Score
 // display UI overhaul: dropped the "plus video length" callout -- duration
-// is one of 60 inputs, not a distinguishing one worth naming on its own --
+// is one of many inputs, not a distinguishing one worth naming on its own --
 // in favor of stating the model's actual scale.)
 export const METHODOLOGY_MODAL_TEXT =
   "PreviewPanel's scoring is a prediction of relative performance: how " +
@@ -42,7 +42,7 @@ export const METHODOLOGY_MODAL_TEXT =
   "on what's in the video itself. It comes from a study of about 4,900 " +
   "TikTok videos from 259 creators across 19 niches, tracking real 30-day " +
   "engagement (likes, shares, and saves per view). The model reads the same " +
-  "signals our judges do — hook, emotion, pacing, clarity — across 60 " +
+  "signals our judges do — hook, emotion, pacing, clarity — across 56 " +
   "correlated variables in total, and turns them into a single prediction. In held-out " +
   "testing on creators the model had never seen, videos it ranked in its " +
   "top tier beat the creator's typical engagement about 2 out of 3 times. " +
