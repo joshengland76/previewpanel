@@ -73,6 +73,17 @@ checkTrue("no-objective submission also suppresses percentile flag", noObjective
 checkTrue("no-objective submission gets the distinct no-objective line",
   noObjectiveDisplay.honestLine === "No objective selected, so no reliable scoring is available.");
 
+// Free-typed, unrecognized objective (the UI accepts arbitrary text) is a
+// third distinct case -- not "still in progress" (no model build exists for
+// it) and not "no objective selected" (one was typed).
+invalidatePoolCache();
+const unknownObjectiveDisplay = await getScoreDisplay("Underwater Basket Weaving", 0, "user-1", {
+  fetchShadowRows: async () => [],
+});
+checkTrue("unrecognized typed-in objective also suppresses percentile flag", unknownObjectiveDisplay.showPercentile === false);
+checkTrue("unrecognized typed-in objective gets the logged-for-future-build line",
+  unknownObjectiveDisplay.honestLine === "This objective has been logged for a future scoring model build. No reliable score is currently available.");
+
 // ── PREDICT tier: pool wiring, integer percentiles, selfKey exclusion ──────
 invalidatePoolCache();
 // Dates deliberately far in the future relative to the corpus seed (which is

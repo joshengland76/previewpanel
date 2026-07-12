@@ -82,7 +82,7 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
       personal: null,
       overallAppPercentile: null,
       headline: copy.abstainHeadline,
-      honestLine: copy.abstainHonestLine(objective),
+      honestLine: copy.abstainHonestLine(objective, tier),
       groupAverageNote,
     };
   }

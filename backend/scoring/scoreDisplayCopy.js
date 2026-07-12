@@ -85,15 +85,20 @@ export const SCORE_DISPLAY_COPY = {
 
   abstainHeadline: "We don't have enough reliable data yet to score this niche numerically.",
 
-  // Two distinct cases, not one: a real objective that just isn't reliably
-  // scoreable yet (data still accruing) vs. no objective at all (nothing to
-  // look up -- optional field, left blank at submission). Conflating them
-  // under one "still in progress" line was misleading for the no-objective
-  // case, which isn't "in progress," there's simply nothing selected.
-  abstainHonestLine: (objective) =>
-    objective
-      ? "Reliable scoring for this objective is still in progress."
-      : "No objective selected, so no reliable scoring is available.",
+  // Three distinct cases, not one: a recognized objective that just isn't
+  // reliably scoreable yet (data still accruing, tier === ABSTAIN) vs. a
+  // free-typed objective the UI accepts but that isn't in tiers_v2_1.json at
+  // all (tier is null even though the field isn't blank -- there's no model
+  // build for it yet, so it's logged rather than scored) vs. no objective at
+  // all (nothing typed -- optional field, left blank at submission).
+  // Conflating any two of these was misleading: "still in progress" implies
+  // an existing model build is catching up, which isn't true for an unknown
+  // objective, and "no objective selected" is simply false when one was typed.
+  abstainHonestLine: (objective, tier) => {
+    if (tier === "ABSTAIN") return "Reliable scoring for this objective is still in progress.";
+    if (objective) return "This objective has been logged for a future scoring model build. No reliable score is currently available.";
+    return "No objective selected, so no reliable scoring is available.";
+  },
 };
 
 function ordinal(n) {
