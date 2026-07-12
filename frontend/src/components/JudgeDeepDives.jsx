@@ -125,11 +125,8 @@ function JudgeCard({ judge, result, duration, open, onToggle }) {
           <div style={{ fontSize: 11, color: B.grey, marginTop: 1 }}>{judge.tagline}</div>
           {data.reaction && <div style={{ fontSize: 12, color: "#5c544a", lineHeight: 1.4, marginTop: 6, fontStyle: "italic" }}>"{data.reaction}"</div>}
         </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0 }}>
-          <span style={{ fontWeight: 800, fontSize: 24, lineHeight: 1, color: judge.color }}>{data.overall ?? "—"}</span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9C9281" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
-            style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .25s" }}><path d="m6 9 6 6 6-6" /></svg>
-        </div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9C9281" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+          style={{ flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform .25s" }}><path d="m6 9 6 6 6-6" /></svg>
       </button>
 
       {open && (
@@ -154,11 +151,6 @@ function JudgeCard({ judge, result, duration, open, onToggle }) {
                   color: of ? of.c : B.grey, background: of ? of.bg : B.bg, padding: "3px 8px", borderRadius: 6 }}>
                   {of ? of.label : data.objective_fit.verdict}
                 </span>
-                {data.objective_fit.score != null && (
-                  <span style={{ marginLeft: "auto", fontWeight: 800, fontSize: 18, color: B.body }}>
-                    {data.objective_fit.score}<span style={{ fontSize: 11, color: B.grey, fontWeight: 600 }}>/10</span>
-                  </span>
-                )}
               </div>
               {data.objective_fit.reasoning && <div style={{ fontSize: 12.5, lineHeight: 1.5, color: B.body, marginTop: 7 }}>{data.objective_fit.reasoning}</div>}
             </Section>

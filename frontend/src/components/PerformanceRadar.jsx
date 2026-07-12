@@ -68,6 +68,66 @@ function judgeAxisValue(data, axis) {
   return num(data?.dimensions?.big_picture?.[axis.key]);
 }
 
+// Dynamic inside/outside placement for each vertex's numeric label. Inside
+// (toward center) is the default look -- it keeps values well clear of the
+// axis labels, which sit further out past the rim. That breaks down on a
+// low-scoring video: every vertex sits close to the center already, so
+// insetting further inward only shrinks the room between them, and the
+// labels overlap each other. There's plenty of room on the OUTSIDE in that
+// exact case (the open ring between the small polygon and the rim is
+// unused), so the fix is to choose ALL-INSIDE or ALL-OUTSIDE once, from the
+// actual geometry (the chord distance between adjacent labels at the
+// average vertex radius, after the inward offset) rather than the values
+// looking "high" or "low" in the abstract -- then resolve any leftover
+// LOCAL collision (e.g. one axis much higher than its neighbors) by flipping
+// just that one label to the opposite side, greedily, pairwise.
+const LABEL_INSIDE_OFFSET = 15;
+const LABEL_OUTSIDE_OFFSET = 14;
+const MIN_LABEL_SPACING = 20; // px between label centers below which they read as overlapping
+
+function computeLabelPlacements(vals, n, pt, ang) {
+  const base = vals.map((v, i) => {
+    const val = Number(v) || 0;
+    const [vx, vy] = pt(i, val);
+    return { i, val, vx, vy, ux: Math.cos(ang(i)), uy: Math.sin(ang(i)) };
+  });
+
+  const avgVal = base.reduce((s, p) => s + p.val, 0) / (n || 1);
+  const avgR = (Math.max(0, Math.min(10, avgVal)) / 10) * R;
+  const chordAtInsideR = 2 * Math.max(0, avgR - LABEL_INSIDE_OFFSET) * Math.sin(Math.PI / n);
+  const globalSide = chordAtInsideR >= MIN_LABEL_SPACING ? "inside" : "outside";
+
+  const placements = base.map((p) => ({ ...p, side: globalSide }));
+  const labelXY = (p) => {
+    const offset = p.side === "inside" ? -LABEL_INSIDE_OFFSET : LABEL_OUTSIDE_OFFSET;
+    return [p.vx + p.ux * offset, p.vy + p.uy * offset];
+  };
+
+  let changed = true, guard = 0;
+  while (changed && guard < 20) {
+    changed = false; guard++;
+    for (let a = 0; a < placements.length; a++) {
+      for (let b = a + 1; b < placements.length; b++) {
+        const [ax, ay] = labelXY(placements[a]);
+        const [bx, by] = labelXY(placements[b]);
+        if (Math.hypot(ax - bx, ay - by) < MIN_LABEL_SPACING) {
+          // Flip whichever of the pair has the smaller value -- the larger
+          // one's vertex is closer to the rim already and more likely to
+          // have real room on its current side.
+          const flip = placements[a].val <= placements[b].val ? a : b;
+          placements[flip].side = placements[flip].side === "inside" ? "outside" : "inside";
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return placements.map((p) => {
+    const [x, y] = labelXY(p);
+    return { i: p.i, val: p.val, x, y };
+  });
+}
+
 export function PerformanceRadar({ results }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
@@ -141,23 +201,19 @@ export function PerformanceRadar({ results }) {
             </>
           )}
 
-          {/* numeric value at each vertex — avg values by default, the isolated judge's otherwise */}
+          {/* numeric value at each vertex — avg values by default, the isolated judge's
+              otherwise. Placement (inside vs outside) is dynamic -- see computeLabelPlacements. */}
           {(() => {
             const fj = focus === "avg" ? null : judgeVals.find((jv) => jv.judge.id === focus);
             const vals = fj ? fj.vals.map((v) => Number(v) || 0) : avgVals;
             const col = fj ? fj.judge.color : AVG;
-            return vals.map((v, i) => {
-              const [nx, ny] = pt(i, v);
-              const ux = Math.cos(ang(i)), uy = Math.sin(ang(i));
-              // offset INWARD (toward center) so the value never overlaps the rim axis label
-              const lx = nx - ux * 15, ly = ny - uy * 15;
-              return (
-                <text key={"n" + i} x={lx.toFixed(1)} y={(ly + 3.5).toFixed(1)} fontFamily="Montserrat, sans-serif"
-                  fontSize="10.5" fontWeight="800" fill={col} stroke="#fff" strokeWidth="3" paintOrder="stroke" textAnchor="middle">
-                  {v.toFixed(1)}
-                </text>
-              );
-            });
+            const placements = computeLabelPlacements(vals, axes.length, pt, ang);
+            return placements.map(({ i, val, x, y }) => (
+              <text key={"n" + i} x={x.toFixed(1)} y={(y + 3.5).toFixed(1)} fontFamily="Montserrat, sans-serif"
+                fontSize="10.5" fontWeight="800" fill={col} stroke="#fff" strokeWidth="3" paintOrder="stroke" textAnchor="middle">
+                {val.toFixed(1)}
+              </text>
+            ));
           })()}
         </svg>
 

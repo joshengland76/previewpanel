@@ -2,105 +2,88 @@ import { useState } from "react";
 import { B } from "../brand.js";
 import { METHODOLOGY_MODAL_TEXT, STUDY_STATS } from "../studyCopy.js";
 
-// "How this score works" -- a trigger + modal, with an in-app "full"
-// validation view. The full view used to be a real page navigation
-// (target="_blank" to /methodology) -- inside the installed PWA that could
-// open with no browser chrome and no way back, trapping the user (reported
-// bug: had to force-quit the app). Fixed by keeping everything inside this
-// same overlay: "See how we validated it" swaps to a second internal view,
-// not a new page, so the existing Back/Close buttons always work. The
-// static /methodology.html page still exists for external/shareable links,
-// it's just no longer where this in-app flow sends anyone.
-
-export function MethodologyTrigger({ pillStyle = false, platform = null }) {
+// "How this score works" -- score display UI overhaul: this now matches
+// PerformanceRadar's "What do these signals mean?" pattern exactly (icon +
+// text + chevron button, content revealed INLINE below, no modal for this
+// first level) rather than opening its own modal. "See how we validated it"
+// still drills one level deeper into a real modal (ValidationDetail) -- that
+// content is long enough (stats grid, several sections) that a modal still
+// earns its keep there; only the outer, first-click affordance changed to
+// stop behaving like a link and start behaving like the scorecard's dropdown.
+// poolInfoTooltip (the pool-composition note, previously a separate hover-
+// only "i" icon next to the percentile stats) is now folded into this same
+// expanded content -- one info affordance total, not two.
+export function MethodologyDropdown({ platform = null, poolInfoTooltip = null }) {
   const [open, setOpen] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
+
   return (
-    <>
+    <div style={{ marginTop: 12 }}>
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        style={pillStyle ? {
-          display: "flex", alignItems: "center", gap: 6, margin: "12px auto 0", background: B.bg,
+        onClick={() => setOpen((s) => !s)}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, margin: "0 auto", background: B.bg,
           border: `1px solid ${B.border}`, borderRadius: 999, padding: "6px 12px", cursor: "pointer",
           fontFamily: "inherit", fontSize: 11, fontWeight: 700, color: "#8a8178",
-        } : {
-          background: "none", border: "none", padding: 0, marginTop: 10,
-          fontSize: 12, color: B.grey, textDecoration: "underline", cursor: "pointer",
         }}
       >
-        {pillStyle && (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
-          </svg>
-        )}
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
+        </svg>
         How this score works
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+          style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}>
+          <path d="m6 9 6 6 6-6" />
+        </svg>
       </button>
-      {open && <MethodologyModal onClose={() => setOpen(false)} platform={platform} />}
-    </>
-  );
-}
 
-function MethodologyModal({ onClose, platform }) {
-  const [view, setView] = useState("summary"); // "summary" | "full"
+      {open && (
+        <div style={{
+          marginTop: 11, textAlign: "left", fontSize: 12.5, lineHeight: 1.55, color: B.body,
+          borderTop: `1px solid ${B.lightBrown}`, paddingTop: 12, whiteSpace: "pre-line",
+        }}>
+          {METHODOLOGY_MODAL_TEXT.replace(" See how we validated it →", "")}
+          {platform && platform !== "tiktok" && (
+            <div style={{ marginTop: 10 }}>
+              This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.
+            </div>
+          )}
+          {poolInfoTooltip && <div style={{ marginTop: 10 }}>{poolInfoTooltip}</div>}
+          <button
+            type="button"
+            onClick={() => setShowDetail(true)}
+            style={{
+              display: "inline-block", marginTop: 12, fontSize: 12.5, fontWeight: 700, color: B.action,
+              background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            See how we validated it →
+          </button>
+        </div>
+      )}
 
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(20,15,10,.45)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        padding: 20, zIndex: 1000,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "#fff", borderRadius: 20, maxWidth: 460, width: "100%",
-          maxHeight: "85vh", overflowY: "auto",
-          padding: "24px 22px", boxShadow: "0 12px 40px rgba(0,0,0,.25)",
-        }}
-      >
-        {view === "summary" ? (
-          <>
-            <div style={{ fontWeight: 800, fontSize: 16, color: B.body, marginBottom: 12 }}>
-              How this score works
-            </div>
-            <div style={{ fontSize: 13.5, lineHeight: 1.55, color: B.body, whiteSpace: "pre-line" }}>
-              {METHODOLOGY_MODAL_TEXT.replace(" See how we validated it →", "")}
-              {platform && platform !== "tiktok" && (
-                <div style={{ marginTop: 10 }}>
-                  This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.
-                </div>
-              )}
-              <div style={{ marginTop: 10 }}>
-                Scores naturally vary a few points between analyses of the same video; repeat runs of the same video are averaged.
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setView("full")}
-              style={{
-                display: "inline-block", marginTop: 14, fontSize: 13, fontWeight: 700, color: B.action,
-                background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit",
-              }}
-            >
-              See how we validated it →
-            </button>
-            <button
-              onClick={onClose}
-              style={{
-                display: "block", marginTop: 18, marginLeft: "auto", background: B.lightBrown,
-                border: "none", borderRadius: 999, padding: "8px 16px", fontSize: 12,
-                fontWeight: 700, color: B.body, cursor: "pointer",
-              }}
-            >
-              Close
-            </button>
-          </>
-        ) : (
-          <ValidationDetail onBack={() => setView("summary")} onClose={onClose} />
-        )}
-      </div>
+      {showDetail && (
+        <div
+          onClick={() => setShowDetail(false)}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(20,15,10,.45)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 20, zIndex: 1000,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff", borderRadius: 20, maxWidth: 460, width: "100%",
+              maxHeight: "85vh", overflowY: "auto",
+              padding: "24px 22px", boxShadow: "0 12px 40px rgba(0,0,0,.25)",
+            }}
+          >
+            <ValidationDetail onClose={() => setShowDetail(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -109,12 +92,12 @@ function MethodologyModal({ onClose, platform }) {
 // static page stays as the external/shareable version); duplicated rather
 // than shared at build time since one is a static asset and this is live
 // React, but both must be updated together if the study copy ever changes.
-function ValidationDetail({ onBack, onClose }) {
+function ValidationDetail({ onClose }) {
   return (
     <div>
       <button
         type="button"
-        onClick={onBack}
+        onClick={onClose}
         style={{
           display: "flex", alignItems: "center", gap: 4, background: "none", border: "none",
           padding: 0, marginBottom: 14, fontSize: 12, fontWeight: 700, color: B.grey, cursor: "pointer",
@@ -210,4 +193,4 @@ function Stat({ value, label }) {
   );
 }
 
-export default MethodologyTrigger;
+export default MethodologyDropdown;

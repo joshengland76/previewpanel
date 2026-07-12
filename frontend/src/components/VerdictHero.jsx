@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { B, JUDGES, ACTION } from "../brand.js";
-import { MethodologyTrigger } from "./MethodologyModal.jsx";
+import { MethodologyDropdown } from "./MethodologyModal.jsx";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Part B — Verdict hero + sticky condensed verdict bar.
@@ -14,16 +14,23 @@ import { MethodologyTrigger } from "./MethodologyModal.jsx";
 //   .scoreDisplay = the capstone-v2 percentile payload (null if DISPLAY_SCORE
 //                is off, or not ready yet, or an older submission predates it)
 //
-// The hero's main circle used to show the combined judge score (0-10). It
-// now shows the niche percentile instead, when available -- a real signal
-// (day-30 outcome prediction) rather than a raw judge average. Falls back to
-// the old judge-score gauge when scoreDisplay is absent, so the hero never
-// looks broken for submissions without it. Renders nothing when synthesis is
-// absent, same as before.
+// The hero's main circle used to show the combined judge score (0-10), then
+// (a later revision) the niche percentile. Score display UI overhaul: it now
+// shows the OVERALL-APP percentile (vs the last 1,000 videos scored) -- the
+// largest, most stable pool, so it's the most representative single number
+// for the main circle. Niche and personal percentiles are still shown, as
+// more prominent secondary stats (see SecondaryStat below) rather than
+// blended into small fine print. Falls back to the old judge-score gauge
+// when scoreDisplay is absent, so the hero never looks broken for
+// submissions without it. Renders nothing when synthesis is absent, same as
+// before.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Defensive: derive action from score if the model returns an unexpected value
 // (backend overwrites action deterministically, but the UI must never crash).
+// Still used for the no-scoreDisplay fallback gauge's color; the "POLISH
+// FIRST"/etc. label itself was removed from the hero (score display UI
+// overhaul) -- the percentile stats carry that signal now.
 function actionFor(verdict) {
   if (verdict?.action && ACTION[verdict.action]) return ACTION[verdict.action];
   const s = Number(verdict?.headline_score) || 0;
@@ -31,7 +38,9 @@ function actionFor(verdict) {
 }
 
 // Percentile -> color, same 3-color scale as the judge-score action colors
-// (green/amber/red), banded into rough thirds.
+// (green/amber/red), banded into rough thirds: >=66 green, >=33 amber, else
+// red. Unchanged by the score display UI overhaul (still applied to whichever
+// percentile drives the main gauge) -- only WHICH percentile it colors moved.
 function percentileColor(p) {
   if (p == null) return B.grey;
   if (p >= 66) return ACTION.post.color;
@@ -39,19 +48,18 @@ function percentileColor(p) {
   return ACTION.rework.color;
 }
 
-function InfoIcon({ text }) {
+// Secondary percentile stat (niche, personal) -- score display UI overhaul:
+// previously 12px grey text that read as fine print; now a bordered stat
+// pill with real weight, so these don't get lost next to the main gauge.
+function SecondaryStat({ label, sub }) {
   return (
-    <span
-      title={text}
-      style={{
-        display: "inline-flex", alignItems: "center", justifyContent: "center",
-        width: 13, height: 13, borderRadius: "50%", marginLeft: 5,
-        border: `1px solid ${B.grey}`, color: B.grey, fontSize: 9, fontWeight: 700,
-        cursor: "help", flexShrink: 0,
-      }}
-    >
-      i
-    </span>
+    <div style={{
+      background: B.bg, border: `1px solid ${B.border}`, borderRadius: 12,
+      padding: "8px 14px", textAlign: "center", minWidth: 0,
+    }}>
+      <div style={{ fontSize: 14, fontWeight: 800, color: B.body, lineHeight: 1.3 }}>{label}</div>
+      {sub && <div style={{ fontSize: 10.5, color: B.grey, marginTop: 2 }}>{sub}</div>}
+    </div>
   );
 }
 
@@ -110,7 +118,7 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
     }}>
       <div style={{ width: 132, height: 132, margin: "2px auto 4px" }}>
         {hasPercentile ? (
-          <Gauge value={scoreDisplay.nichePercentile} max={100} unitLabel="percentile" color={percentileColor(scoreDisplay.nichePercentile)} />
+          <Gauge value={scoreDisplay.overallAppPercentile} max={100} unitLabel="percentile" color={percentileColor(scoreDisplay.overallAppPercentile)} />
         ) : isAbstain ? (
           <AbstainRing />
         ) : (
@@ -120,18 +128,16 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
 
       {hasPercentile && (
         <div style={{ marginTop: 4 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: B.body }}>{scoreDisplay.headline}</div>
-          {scoreDisplay.sub && <div style={{ fontSize: 11, color: B.grey, marginTop: 2 }}>{scoreDisplay.sub}</div>}
-          {(scoreDisplay.overallAppHeadline || scoreDisplay.personalHeadline) && (
-            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
-              {scoreDisplay.overallAppHeadline && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, color: B.grey }}>
-                  {scoreDisplay.overallAppHeadline}
-                  {scoreDisplay.poolInfoTooltip && <InfoIcon text={scoreDisplay.poolInfoTooltip} />}
-                </div>
+          {scoreDisplay.overallAppHeadline && (
+            <div style={{ fontSize: 15, fontWeight: 800, color: B.body }}>{scoreDisplay.overallAppHeadline}</div>
+          )}
+          {(scoreDisplay.headline || scoreDisplay.personalHeadline) && (
+            <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+              {scoreDisplay.headline && (
+                <SecondaryStat label={scoreDisplay.headline} sub={scoreDisplay.sub} />
               )}
               {scoreDisplay.personalHeadline && (
-                <div style={{ fontSize: 12, color: B.grey }}>{scoreDisplay.personalHeadline}</div>
+                <SecondaryStat label={scoreDisplay.personalHeadline} />
               )}
             </div>
           )}
@@ -144,11 +150,8 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
         </div>
       )}
 
-      <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: ".12em",
-        textTransform: "uppercase", color: act.color, marginTop: 14 }}>{act.label}</div>
-
       {partial && (
-        <div style={{ fontSize: 11, color: B.grey, fontWeight: 700, marginTop: 3 }}>
+        <div style={{ fontSize: 11, color: B.grey, fontWeight: 700, marginTop: 14 }}>
           Based on {present.length} of {present.length + missing.length} judges
         </div>
       )}
@@ -168,7 +171,7 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
         </div>
       )}
 
-      <MethodologyTrigger pillStyle platform={platform} />
+      <MethodologyDropdown platform={platform} poolInfoTooltip={scoreDisplay?.poolInfoTooltip} />
     </div>
   );
 }
