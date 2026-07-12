@@ -50,10 +50,16 @@ landed lower where the 30–90-day mature supply was thinner — e.g.
 
 | Objective | Creators | Videos collected | Videos scored |
 |---|---|---|---|
-| Dancing | 9 | 180 | 180 |
-| Gaming | 7 | 132 | 132 |
-| Educational/How-To | 7 | 88 | 88 |
+| Dancing | 9 | 163 | 163 |
+| Gaming | 7 | 126 | 126 |
+| Educational/How-To | 7 | 111 | 111 |
 | **Total** | **23** | **400** | **400** |
+
+*(Corrected 2026-07-12 — see the "Correction" section below. This table
+originally reported 180/132/88, an arithmetic error caught while building
+`POOL_PARTITION_HOTFIX_READOUT.md`; the figures above are DB-verified via
+`SELECT c.objective, COUNT(*) FROM research_videos v JOIN research_creators
+c ... WHERE c.cohort='cohort_5' GROUP BY c.objective`.)*
 
 Metrics captured under interval label `backcatalog_day30_equiv_2026_07`
 (not plain `day_30`, per this prompt's explicit convention — distinct from
@@ -117,11 +123,12 @@ bar but not the top-pick precision bar.
 - New copy constant in `scoreDisplayCopy.js`: "Percentiles here reflect
   validated ranking for this niche; our top-pick hit rate is still
   maturing."
-- `corpus_reference_pool.json` gained 228 cohort_5 rows (117 Gaming + 111
-  Educational/How-To, per-video-classified objective matching the pool's
-  existing convention, native frozen-artifact predictions, no version
-  shift). Dancing's cohort_5 rows were deliberately not added — Dancing
-  doesn't clear `showPercentile`, so there's nothing for them to feed yet.
+- `corpus_reference_pool.json` gained 228 cohort_5 rows, native frozen-
+  artifact predictions, no version shift. Dancing's cohort_5 rows were
+  deliberately not added — Dancing doesn't clear `showPercentile`, so
+  there's nothing for them to feed yet. **This addition used per-video
+  classified objective, which was wrong — see the Correction section below;
+  superseded by `POOL_PARTITION_HOTFIX_READOUT.md` the same day.**
 - Both backend unit-test suites updated and passing (`scoreDisplayTest.mjs`
   gained explicit two-axis coverage; `percentilePoolsTest.mjs` unaffected).
 - Deployed; verified live against the exact deployed commit (`f1336ed`):
@@ -165,5 +172,31 @@ feature set captures — an open question, not assumed either way.
    displayed score works") far better than §1a (the submission pipeline
    section), so it was placed there instead of forcing a stale section
    number.
+
+## Correction (2026-07-12, same day) — pool partition + count error
+
+Two real errors found and fixed after this readout was first written, full
+detail in `POOL_PARTITION_HOTFIX_READOUT.md`:
+
+1. **Pool partition bug.** Phase 3d-3's `corpus_reference_pool.json`
+   addition (228 rows) was keyed on each video's own per-video Claude-
+   classified objective, not the enrolled creator's declared objective. This
+   is exactly the bug `PHASEB4_READOUT.md`'s Task 0 (prereg amendment 27)
+   already found and fixed once for the original 3,840-row corpus — the
+   standing convention is `objective_creator`, because live submissions
+   bucket the same way. Rebuilt: 126 Gaming + 111 Educational/How-To rows,
+   keyed on `objective_creator`; Dancing's rows still excluded (unchanged
+   rationale). Verified via a 10-row spot-check against
+   `research_creators.objective` (all matched) and an explicit check for
+   zero Dancing-creator videos in any pool.
+2. **Count reporting error.** The Phase 2 collection table above originally
+   read 180 Dancing / 132 Gaming / 88 Educational. These were wrong — an
+   arithmetic slip when the table was first written, not a data problem.
+   The real, DB-verified counts (used for the pool rebuild) are 163 / 126 /
+   111; the table above is corrected.
+
+Deployed (`00a087d`), verified live against that exact commit: Gaming shows
+`showPercentile=true` with the precision caveat line and a full 100-row
+pool window; Dancing still suppressed.
 
 STOP.
