@@ -72,6 +72,9 @@ function MethodologyModal({ onClose, platform }) {
                   This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.
                 </div>
               )}
+              <div style={{ marginTop: 10 }}>
+                Scores naturally vary a few points between analyses of the same video; repeat runs of the same video are averaged.
+              </div>
             </div>
             <button
               type="button"

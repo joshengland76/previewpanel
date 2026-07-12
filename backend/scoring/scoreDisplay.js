@@ -61,9 +61,11 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     tiers = loadTiers(),
     copy = SCORE_DISPLAY_COPY,
     platform = null, // Phase C, Task 0d -- non-tiktok proxy note in poolInfoTooltip
+    groupK = 1, // pool hygiene Task 2 -- >=2 means `prediction` is already the group mean
   } = deps;
 
   const tier = tierForObjective(objective, tiers);
+  const groupAverageNote = copy.groupAverageNote(groupK);
 
   if (tier !== "PREDICT") {
     return {
@@ -76,6 +78,7 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
       headline: copy.abstainHeadline,
       honestLine: copy.abstainHonestLine,
       trimNote: copy.trimNote,
+      groupAverageNote,
     };
   }
 
@@ -112,5 +115,6 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     overallAppHeadline: copy.overallAppHeadline(overallApp, overallPoolSize),
     poolInfoTooltip: copy.poolInfoTooltip(platform),
     trimNote: copy.trimNote,
+    groupAverageNote,
   };
 }

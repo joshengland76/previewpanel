@@ -63,13 +63,23 @@ export const SCORE_DISPLAY_COPY = {
   // (see PROJECT_PLAN_v14.md §6); this doesn't change if/when the Task 0c
   // framing gate passes, since the gate is about whether platform-specific
   // percentile pools are warranted, not about the model itself.
+  // Pool hygiene Task 3 -- one line, appended to the existing pool-info
+  // tooltip (no new UI element): scores naturally vary a few points between
+  // analyses of the same video; repeat runs are averaged (see
+  // groupAverageNote below for the mechanism this refers to).
   poolInfoTooltip: (platform) => {
     const base = "Includes PreviewPanel submissions and our 4,900-video research library; live submissions gradually replace the library.";
+    const varianceNote = " Scores naturally vary a few points between analyses of the same video; repeat runs of the same video are averaged.";
     if (platform && platform !== "tiktok") {
-      return `${base} This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.`;
+      return `${base} This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.${varianceNote}`;
     }
-    return base;
+    return `${base}${varianceNote}`;
   },
+
+  // Pool hygiene Task 2 -- shown on the score card whenever this run matched
+  // a Tier-1 fingerprint from the same user's own trailing-30d previews
+  // (k>=2); null (renders nothing) for a first/only run.
+  groupAverageNote: (k) => (k >= 2 ? `Average of ${k} analyses of this video.` : null),
 
   abstainHeadline: "We don't have enough reliable data yet to score this niche numerically.",
 

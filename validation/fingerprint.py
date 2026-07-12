@@ -209,8 +209,35 @@ def fingerprint_video(video_path: Path) -> dict:
 
 
 def main():
+    # Pre-launch fix, pool hygiene Task 2 -- fingerprint-group score
+    # consistency. `--match-candidates` compares an already-computed query
+    # fingerprint against a batch of candidate fingerprints in ONE process
+    # (no video decoding involved -- fp_json is already computed, this is
+    # pure hash comparison via match_score()), so a submission with several
+    # same-user candidates costs one Python startup, not one per candidate.
+    # Input: one JSON object on stdin, {"query": <fp_json>, "candidates":
+    # [{"id": <preview_fingerprints.id>, "fp": <fp_json>}, ...]}. Output: one
+    # JSON array on stdout, [{"id", "tier", "frame_overlap", "audio_match",
+    # "duration_delta_s"}, ...] in the same order as the input candidates.
+    # Same failure contract as the single-video mode: any error prints
+    # {"error": message} and exits 1; the caller treats that as "skip this
+    # submission's group lookup," never as a reason to fail scoring.
+    if len(sys.argv) == 2 and sys.argv[1] == "--match-candidates":
+        try:
+            payload = json.loads(sys.stdin.read())
+            query = payload["query"]
+            results = []
+            for cand in payload.get("candidates", []):
+                m = match_score(query, cand["fp"])
+                results.append({"id": cand["id"], **m})
+            print(json.dumps(results))
+            sys.exit(0)
+        except Exception as e:
+            print(json.dumps({"error": str(e)}))
+            sys.exit(1)
+
     if len(sys.argv) != 2:
-        print(json.dumps({"error": "usage: fingerprint.py <video_path>"}))
+        print(json.dumps({"error": "usage: fingerprint.py <video_path> | fingerprint.py --match-candidates"}))
         sys.exit(1)
     video_path = Path(sys.argv[1])
     if not video_path.exists():

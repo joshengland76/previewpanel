@@ -343,6 +343,26 @@ live path monthly (~$2/run, `anchor_history.jsonl`); alert thresholds
 `prompt_version` and `pegasus_model`, and an internal frozen-reference
 percentile field, so any future drift is auditable per-row.
 
+**Same-session repeat-run variability** (distinct from the drift above, which
+is measured months apart — this is immediate, same-day run-to-run noise on an
+*unchanged* video): 18 identical production runs of one test video measured
+**ŷ SD ≈ 0.025**, translating to roughly **±10 niche-percentile points** at
+mid-distribution (a video sitting near the 50th percentile can plausibly land
+anywhere from the low-40s to low-60s on a repeat run with zero real change).
+Decomposed by weighted contribution to ŷ across those runs: the variance is
+concentrated in the CDIMS (Claude-vision) extraction features and the
+judge-consensus/disagreement aggregates (`jc_`/`jd_` mean/std-dev across the
+3 judges), not any single judge's headline score — consistent with this
+section's broader finding that individual input channels are noisier than the
+full model's damped output. This is the same extractor-reliability pattern as
+8a/8b above, now quantified at the single-video level rather than across
+versions or months. Full methodology, data, and a second confirming video are
+in `PRELAUNCH_FIX_READOUT.md`'s "Repeat-scoring variability analysis" section.
+Operational response: `POOL_CONSISTENCY_READOUT.md`'s fingerprint-group
+averaging (repeat runs of the same video are detected and averaged before
+display) directly targets this noise source, rather than leaving users to see
+a different number each time they re-test the same cut.
+
 ### 8c. Judge-prompt governance (the input contract)
 
 **Durable rule:** the judge prompt's scored-field instructions are part of the

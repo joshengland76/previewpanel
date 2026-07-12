@@ -156,6 +156,12 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
       <p style={{ fontSize: 16, lineHeight: 1.5, color: B.body, fontWeight: 500,
         margin: "15px auto 4px", maxWidth: "34ch" }}>{verdict.gist}</p>
 
+      {scoreDisplay?.groupAverageNote && (
+        <div style={{ fontSize: 11, color: B.grey, marginTop: 8, maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
+          {scoreDisplay.groupAverageNote}
+        </div>
+      )}
+
       {scoreDisplay?.trimNote && (
         <div style={{ fontSize: 11, color: B.grey, marginTop: 8, fontStyle: "italic", maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
           {scoreDisplay.trimNote}

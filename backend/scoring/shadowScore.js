@@ -48,12 +48,23 @@ function specHash() {
 
 /**
  * recordShadowScore({ queryRW, submissionId, features, objective, pegasusModel,
- *   promptVersion, cdimsStatus }) -- fire-and-forget from the caller. Every
- * failure mode is caught internally and logged; nothing is ever re-thrown.
+ *   promptVersion, cdimsStatus, fpGroup }) -- fire-and-forget from the caller.
+ * Every failure mode is caught internally and logged; nothing is ever re-thrown.
+ *
+ * fpGroup (pool hygiene Task 2): null, or { fpGroupKey, existingPredictions }
+ * from server.js's resolveFingerprintGroup() -- a Tier-1 fingerprint match
+ * against the same user's own trailing-30d previews. When present, this row
+ * joins that group: group_k/group_mean_prediction fold this row's own
+ * (unchanged, separately-stored) prediction into the group, and the row is
+ * inserted pool_eligible=false (only a group's first member stays eligible).
+ * When null, this row is a fresh singleton -- pool_eligible=true, and its
+ * fp_group_key is self-assigned ('fp:'+its own id) right after insert, so any
+ * FUTURE row that matches it always finds a non-null key to adopt.
  */
 export async function recordShadowScore({
   queryRW, submissionId, features, objective, pegasusModel, promptVersion, cdimsStatus, platform, userId,
   source, isPostedVideo, postedVideoId, // Phase C, Task 3
+  fpGroup = null, // pool hygiene Task 2
 }) {
   try {
     const spec = loadSpec();
@@ -70,23 +81,38 @@ export async function recordShadowScore({
     const tiers = loadTiers();
     const tierAtScoreTime = tiers.per_objective?.[objective]?.tier ?? null;
 
+    const groupK = fpGroup ? fpGroup.existingPredictions.length + 1 : 1;
+    const groupMeanPrediction = fpGroup
+      ? (fpGroup.existingPredictions.reduce((a, b) => a + b, 0) + prediction) / groupK
+      : prediction;
+    const poolEligible = !fpGroup; // only a group's first row stays eligible
+    const fpGroupKey = fpGroup ? fpGroup.fpGroupKey : null; // null -> self-assigned below
+
     const { rows } = await queryRW(
       `INSERT INTO shadow_scores
         (submission_id, model_version, prompt_version, pegasus_model, spec_hash,
          input_features, prediction, calibrated_percentile, tier_at_score_time, extract_cdims_status,
-         objective, platform, user_id, source, is_posted_video, posted_video_id)
-       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         objective, platform, user_id, source, is_posted_video, posted_video_id,
+         pool_eligible, fp_group_key, group_k, group_mean_prediction)
+       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING id`,
       [
         submissionId ?? null, promptVersion ?? null, pegasusModel ?? null, specHash(),
         JSON.stringify(features), prediction, calibratedPercentile, tierAtScoreTime,
         cdimsStatus ?? null, objective ?? null, platform ?? null, userId ?? null,
         source ?? "app", isPostedVideo ?? false, postedVideoId ?? null,
+        poolEligible, fpGroupKey, groupK, groupMeanPrediction,
       ]
     );
     const id = rows[0]?.id ?? null;
+    let finalGroupKey = fpGroupKey;
+    if (id != null && !fpGroupKey) {
+      finalGroupKey = `fp:${id}`;
+      await queryRW(`UPDATE shadow_scores SET fp_group_key = $1 WHERE id = $2`, [finalGroupKey, id]);
+    }
     console.log(`[shadow_score] id=${id} submission_id=${submissionId} pred=${prediction.toFixed(4)} `
-      + `pctile=${calibratedPercentile != null ? calibratedPercentile.toFixed(1) : "n/a"} tier=${tierAtScoreTime}`);
+      + `pctile=${calibratedPercentile != null ? calibratedPercentile.toFixed(1) : "n/a"} tier=${tierAtScoreTime} `
+      + `group_key=${finalGroupKey} group_k=${groupK}`);
     // Pool-based percentile engine (Phase B3b, Task 2) sources niche/overall
     // percentiles from a live, windowed pool over shadow_scores -- invalidate
     // so the very next read picks up this row rather than waiting out the TTL.
@@ -94,7 +120,7 @@ export async function recordShadowScore({
     // Returned so a caller (e.g. the score-display module) can build a
     // display without recomputing scoreFeatures a second time, and so it can
     // exclude this row's own id from the niche/overall pools it just joined.
-    return { id, prediction, calibratedPercentile, tierAtScoreTime };
+    return { id, prediction, calibratedPercentile, tierAtScoreTime, groupK, groupMeanPrediction };
   } catch (e) {
     // Backpressure guard: never let a shadow-scoring failure surface to the
     // caller or affect the user-facing response in any way.

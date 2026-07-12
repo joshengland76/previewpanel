@@ -122,6 +122,22 @@ the Pegasus-version calibration question over time. Posted-video validation
 rescores are **excluded** from all pools. `calibrated_percentile` on shadow
 rows is an internal frozen-reference drift field, not the display path.
 
+**Pool eligibility** (`shadow_scores.pool_eligible`, default true; both
+windows filter on it): one-time backfill set `pool_eligible=false` for every
+row scored before **2026-07-12T00:22:39.032Z** (the whole dev/test period
+predating real testers — see `POOL_CONSISTENCY_READOUT.md`), a fixed,
+hardcoded cutoff safe to re-run on every boot. Going forward, it also
+implements **fingerprint-group dedupe**: at shadow-scoring time, a submission
+is matched (Tier-1 fingerprint overlap) against the same user's own previews
+from the trailing 30 days; if matched, only the group's *first* row stays
+pool_eligible — every repeat run of a video the user already scored is
+excluded, so testing/re-running a video doesn't inflate or skew the pools.
+Matched groups share `fp_group_key`; `group_k`/`group_mean_prediction` record
+the group's size and averaged ŷ as of each row's own insert. The *displayed*
+prediction/percentiles for a group (k≥2) use the group mean, not any single
+run's raw ŷ — the score card shows "Average of k analyses of this video."
+when that applies. Raw per-run `prediction` is always stored unchanged.
+
 ### 1e. Real-user validation subsystem (Phase C)
 
 - **Identity-lite:** persistent client UUID; `users` table with TikTok

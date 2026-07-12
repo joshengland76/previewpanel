@@ -808,6 +808,31 @@ async function initDb() {
         AND shadow_scores.platform IS NULL
         AND submissions.platform IS NOT NULL
     `);
+    // Pre-launch fix, pool hygiene Task 1 -- pool_eligible gates which rows
+    // percentilePools.js's two windows (niche + overall) draw from; the
+    // posted-video exclusion (is_posted_video) is unchanged and orthogonal.
+    // Every row up to this migration's execution was scored during dev/test
+    // (real testers hadn't launched yet), so ALL of it is retroactively
+    // excluded via a one-time, date-bounded backfill -- same pattern as the
+    // pegasus_model backfill above: a fixed, hardcoded cutoff, safe to run on
+    // every boot forever (only ever touches rows before that fixed instant).
+    // Epoch: 2026-07-12T00:22:39.032Z (captured via `SELECT now()` at the
+    // moment this migration was written -- see POOL_CONSISTENCY_READOUT.md).
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS pool_eligible BOOLEAN DEFAULT true`);
+    await client.query(`UPDATE shadow_scores SET pool_eligible = false WHERE created_at < '2026-07-12T00:22:39.032Z' AND pool_eligible IS DISTINCT FROM false`);
+    // Pre-launch fix, pool hygiene Task 2 -- fingerprint-group score
+    // consistency. fp_group_key ties together repeat previews of the same
+    // video by the same user (Tier-1 fingerprint match, see
+    // resolveFingerprintGroup()); group_k/group_mean_prediction cache the
+    // group's size and averaged ŷ as of THIS row's insert (not retroactively
+    // updated on earlier rows -- each row reflects what was true when it was
+    // scored). Only the group's first row stays pool_eligible; every
+    // subsequent group member is inserted with pool_eligible=false directly
+    // (see shadowScore.js), independent of the one-time backfill above.
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS fp_group_key TEXT`);
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_k INTEGER DEFAULT 1`);
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_mean_prediction DOUBLE PRECISION`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_fp_group_key ON shadow_scores(fp_group_key)`);
     await client.query("COMMIT");
 
     console.log("[db] PostgreSQL connected — submissions table ready");
@@ -1715,6 +1740,73 @@ async function fingerprintPreviewForJob(jobId, filePath, { userId, platform }) {
   }
 }
 
+// Pre-launch fix, pool hygiene Task 2 -- fingerprint-group score
+// consistency. At shadow-scoring time, looks up Tier-1 fingerprint matches
+// among the SAME user's own OTHER previews from the trailing 30 days. No
+// ffmpeg/frame-decoding involved here (fp_json is already computed for every
+// candidate) so this never touches the ffmpeg semaphore, unlike
+// fingerprintPreviewForJob above. Returns null (no group forming yet) or
+// { fpGroupKey, existingPredictions } for shadowScore.js to fold into this
+// row's group_k/group_mean_prediction. Never throws -- every failure mode
+// (no fingerprint yet, no user_id, matcher spawn failure) degrades to "skip
+// grouping for this submission," never to blocking or delaying scoring.
+async function resolveFingerprintGroup(job) {
+  if (!job.fingerprintId || !job.userId || !pgPool) return null;
+  try {
+    const ownRes = await pgPool.query(`SELECT fp_json FROM preview_fingerprints WHERE id = $1`, [job.fingerprintId]);
+    const ownFp = ownRes.rows[0]?.fp_json;
+    if (!ownFp) return null;
+
+    const { rows: candidates } = await pgPool.query(
+      `SELECT pf.id AS fingerprint_id, pf.fp_json, ss.id AS shadow_id, ss.fp_group_key, ss.prediction, ss.created_at
+       FROM preview_fingerprints pf
+       JOIN shadow_scores ss ON ss.submission_id = pf.submission_id
+       WHERE pf.user_id = $1 AND pf.id != $2 AND pf.submission_id IS NOT NULL
+         AND pf.created_at >= now() - interval '30 days'
+         AND ss.prediction IS NOT NULL
+       ORDER BY ss.created_at ASC`,
+      [job.userId, job.fingerprintId]
+    );
+    if (candidates.length === 0) return null;
+
+    const matchInput = { query: ownFp, candidates: candidates.map((c) => ({ id: c.fingerprint_id, fp: c.fp_json })) };
+    const matchResults = await new Promise((resolve, reject) => {
+      const proc = spawn(PYTHON_BIN, [FINGERPRINT_SCRIPT, "--match-candidates"], { stdio: ["pipe", "pipe", "pipe"] });
+      let stdout = "", stderr = "";
+      proc.stdout.on("data", (d) => { stdout += d.toString(); });
+      proc.stderr.on("data", (d) => { stderr = (stderr + d.toString()).slice(-2000); });
+      proc.on("error", reject);
+      proc.on("close", (code) => {
+        if (code !== 0) return reject(new Error(`fingerprint.py --match-candidates exited ${code}: ${stderr.slice(-500)}`));
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          if (parsed.error) return reject(new Error(`fingerprint.py --match-candidates reported: ${parsed.error}`));
+          resolve(parsed);
+        } catch (e) {
+          reject(new Error(`fingerprint.py --match-candidates output not valid JSON: ${e.message}`));
+        }
+      });
+      proc.stdin.write(JSON.stringify(matchInput));
+      proc.stdin.end();
+    });
+
+    const tier1Ids = new Set(matchResults.filter((r) => r.tier === 1).map((r) => r.id));
+    if (tier1Ids.size === 0) return null;
+    const matched = candidates.filter((c) => tier1Ids.has(c.fingerprint_id));
+
+    // Every past row already got a fp_group_key at its own insert time (see
+    // shadowScore.js) -- adopt the earliest matched member's key so a match
+    // against ANY member of an existing group joins that same group.
+    matched.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    const groupKey = matched[0].fp_group_key;
+    const groupMembers = groupKey ? matched.filter((c) => c.fp_group_key === groupKey) : [matched[0]];
+    return { fpGroupKey: groupKey, existingPredictions: groupMembers.map((c) => c.prediction) };
+  } catch (e) {
+    console.error(`[fingerprint_group] resolve failed (non-fatal, scoring unaffected): ${e.message}`);
+    return null;
+  }
+}
+
 async function convertToMp4(inputPath, { preProbed = null, forceReencode = false } = {}) {
   const outputPath = inputPath + ".mp4";
   const t0 = Date.now();
@@ -2294,9 +2386,13 @@ function maybeLogRaceMargin(jobId, job) {
 // duplicating these two queries a second time.
 const SCORE_DISPLAY_FETCHERS = {
   fetchShadowRows: async () => {
+    // Pool hygiene Task 1 -- pool_eligible excludes pre-launch dev/test rows
+    // (one-time backfill) and every non-first row of a fingerprint-matched
+    // repeat-video group (Task 2), so the niche/overall pools only ever see
+    // one row per genuinely distinct video. is_posted_video exclusion unchanged.
     const { rows } = await pgPool.query(
       `SELECT id, prediction, objective, created_at, platform FROM shadow_scores
-       WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE`
+       WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE AND pool_eligible`
     );
     return rows;
   },
@@ -2395,6 +2491,12 @@ async function runShadowScoringForJob(jobId) {
       clampDuration: process.env.CLAMP_DURATION !== "false",
     });
 
+    // Pool hygiene Task 2 -- fingerprint-group score consistency. A no-op
+    // (returns null immediately) for validation rescores, research traffic,
+    // and any submission without a ready fingerprint/user_id -- see
+    // resolveFingerprintGroup()'s own guards.
+    const fpGroup = await resolveFingerprintGroup(job);
+
     const shadowResult = await recordShadowScore({
       queryRW,
       submissionId: job.submissionId ?? null,
@@ -2411,6 +2513,7 @@ async function runShadowScoringForJob(jobId) {
       source: job.source === "validation" ? "validation" : "app",
       isPostedVideo: job.source === "validation",
       postedVideoId: job.postedVideoId ?? null,
+      fpGroup, // pool hygiene Task 2
     });
 
     // Phase C, Task 3 -- posted_videos gets the scoring result written back
@@ -2443,9 +2546,16 @@ async function runShadowScoringForJob(jobId) {
     // all, by design (nothing polls this job; the Mac worker gets a plain
     // JSON response from the ingestion endpoint instead).
     if (process.env.DISPLAY_SCORE === "true" && shadowResult && job.source !== "validation") {
-      job.scoreDisplay = await getScoreDisplay(job.objective, shadowResult.prediction, job.userId ?? null, {
+      // Pool hygiene Task 2 -- once k>=2 (this run matched a Tier-1
+      // fingerprint from the user's own trailing-30d previews), the DISPLAYED
+      // prediction is the group's mean ŷ INCLUDING this run, not this run's
+      // own raw prediction (still stored unchanged in shadow_scores.prediction
+      // — only the display and its percentiles use the mean).
+      const displayPrediction = shadowResult.groupK >= 2 ? shadowResult.groupMeanPrediction : shadowResult.prediction;
+      job.scoreDisplay = await getScoreDisplay(job.objective, displayPrediction, job.userId ?? null, {
         selfKey: shadowResult.id != null ? `shadow:${shadowResult.id}` : null,
         platform: job.platform ?? null, // Phase C, Task 0d -- non-tiktok proxy note
+        groupK: shadowResult.groupK, // pool hygiene Task 2 -- drives the "Average of k analyses" line
         ...SCORE_DISPLAY_FETCHERS,
       });
       job.shadowReadyAt = Date.now();
@@ -3827,14 +3937,19 @@ app.get("/api/status/:jobId", async (req, res) => {
       && job.source !== "validation" && job.submissionId != null && pgPool) {
     try {
       const { rows } = await pgPool.query(
-        `SELECT id, objective, prediction, user_id, platform FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
+        `SELECT id, objective, prediction, user_id, platform, group_k, group_mean_prediction FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
         [job.submissionId]
       );
       const row = rows[0];
       if (row && row.prediction != null) {
-        job.scoreDisplay = await getScoreDisplay(row.objective, row.prediction, row.user_id ?? null, {
+        // Pool hygiene Task 2 -- mirror runShadowScoringForJob's group-mean
+        // display logic exactly, so a job recovered via this fallback path
+        // shows the identical payload the original computation would have.
+        const displayPrediction = row.group_k >= 2 ? row.group_mean_prediction : row.prediction;
+        job.scoreDisplay = await getScoreDisplay(row.objective, displayPrediction, row.user_id ?? null, {
           selfKey: `shadow:${row.id}`,
           platform: row.platform ?? job.platform ?? null,
+          groupK: row.group_k,
           ...SCORE_DISPLAY_FETCHERS,
         });
         if (job.shadowReadyAt == null) {
