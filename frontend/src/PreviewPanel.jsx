@@ -69,6 +69,12 @@ function getOrCreateUserId() {
   }
 }
 
+// ── Sweep D: one-time TikTok connect nudge ───────────────────
+// Shown after the first score card ever, only if TikTok isn't connected.
+// Marked seen the first time it's eligible to render, so it never
+// reappears on later results even if the user ignores/dismisses it.
+const TIKTOK_NUDGE_SEEN_KEY = "pp_tiktok_nudge_seen_v1";
+
 // ── Elapsed time hook ─────────────────────────────────────────
 function useElapsed(running) {
   const [elapsed, setElapsed] = useState(0);
@@ -316,6 +322,8 @@ const OBJECTIVE_OPTIONS = [
 export default function PreviewPanel() {
   const [userId] = useState(getOrCreateUserId); // Phase C, Task 1 -- generated once, stable for component lifetime
   const [showAccountSettings, setShowAccountSettings] = useState(false);
+  const [tiktokConnected, setTiktokConnected] = useState(null); // Sweep D -- null = not yet checked
+  const [tiktokNudgeDismissed, setTiktokNudgeDismissed] = useState(false);
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
   const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
@@ -366,6 +374,17 @@ export default function PreviewPanel() {
   const isFinished = jobStatus === "done" || jobStatus === "partial";
   const isProcessing = !isFinished && jobStatus !== "error" && jobStatus !== "timeout" && jobStatus !== null;
 
+  // Sweep D -- one-time TikTok connect nudge, first score card only.
+  const scoreCardShowing = isFinished && synthesisStatus === "ready" && !!synthesis;
+  let tiktokNudgeAlreadySeen = false;
+  try { tiktokNudgeAlreadySeen = !!localStorage.getItem(TIKTOK_NUDGE_SEEN_KEY); } catch {}
+  const showTiktokNudge = scoreCardShowing && tiktokConnected === false && !tiktokNudgeDismissed && !tiktokNudgeAlreadySeen;
+
+  useEffect(() => {
+    if (!showTiktokNudge) return;
+    try { localStorage.setItem(TIKTOK_NUDGE_SEEN_KEY, "1"); } catch {}
+  }, [showTiktokNudge]);
+
   const elapsed = useElapsed(isProcessing);
 
   const fileSizeMBForEstimate = videoFile ? videoFile.size / 1024 / 1024 : null;
@@ -378,6 +397,26 @@ export default function PreviewPanel() {
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
+
+  // Sweep D -- check connect status so the post-score-card nudge knows
+  // whether to offer connecting TikTok.
+  const refreshTiktokConnected = async () => {
+    if (!userId) { setTiktokConnected(false); return; }
+    try {
+      const res = await fetch(`${API_BASE}/api/user/${encodeURIComponent(userId)}`);
+      setTiktokConnected(res.ok ? !!(await res.json()).tiktok_handle : false);
+    } catch {
+      setTiktokConnected(false);
+    }
+  };
+  useEffect(() => { refreshTiktokConnected(); }, [userId]);
+
+  // Re-check after the connect modal closes -- catches a handle the user
+  // just added, so an already-shown nudge won't outlive a real connection.
+  const handleAccountSettingsOpenChange = (v) => {
+    setShowAccountSettings(v);
+    if (!v) refreshTiktokConnected();
+  };
 
   useEffect(() => {
     if (!objDropOpen) {
@@ -849,7 +888,7 @@ export default function PreviewPanel() {
               )}
               {/* Phase C, Task 1: Connect-accounts trigger */}
               <div style={{ position: "absolute", top: "10px", left: "0" }}>
-                <AccountSettingsTrigger userId={userId} />
+                <AccountSettingsTrigger userId={userId} open={showAccountSettings} onOpenChange={handleAccountSettingsOpenChange} />
               </div>
             </div>
 
@@ -1264,6 +1303,29 @@ export default function PreviewPanel() {
             {isFinished && synthesisStatus === "ready" && synthesis && (
               <>
                 <VerdictPanel synthesis={synthesis} results={judgeResults} scoreDisplay={scoreDisplay} onJumpToJudge={jumpToJudge} platform={platform} />
+                {showTiktokNudge && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    background: B.lightBrown, border: `1px solid ${B.border}`,
+                    borderRadius: 12, padding: "10px 12px", marginBottom: 18,
+                  }}>
+                    <span style={{ fontSize: 12.5, color: B.body, lineHeight: 1.4, flex: 1 }}>
+                      Connect TikTok to see how this prediction compares to what actually happens when it goes live.
+                    </span>
+                    <button onClick={() => setShowAccountSettings(true)} style={{
+                      background: B.action, color: "#fff", border: "none", borderRadius: 8,
+                      padding: "6px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+                      fontFamily: "inherit", whiteSpace: "nowrap",
+                    }}>
+                      Connect
+                    </button>
+                    <button onClick={() => setTiktokNudgeDismissed(true)} aria-label="Dismiss" style={{
+                      background: "none", border: "none", fontSize: 16, color: "#aaa", cursor: "pointer", padding: 0,
+                    }}>
+                      ×
+                    </button>
+                  </div>
+                )}
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
                 <PerformanceRadar results={judgeResults} contentReadAxes={contentReadAxes} />

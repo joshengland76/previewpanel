@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { B } from "../brand.js";
 
-// Phase C, Task 1 -- "Connect your accounts." TikTok is required to
-// participate in validation (Task 4's Mac-side worker only scans TikTok this
-// phase); Instagram/YouTube are optional and stored for a future platform
-// validation pass -- no scanning code exists for them yet. Bio-code
-// verification is generated/displayed/stored here, but the actual
+// Phase C, Task 1 -- "Connect your accounts." None of the three platforms
+// is mandatory to connect (Sweep D removed the earlier TikTok-required
+// gate, both here and in POST /api/user/connect) -- TikTok is just the
+// only one the Mac-side validation worker (Task 4) currently scans, so
+// it's the one that actually feeds the prediction-vs-real-outcome
+// comparison this phase. Instagram/YouTube are stored for a future
+// platform validation pass -- no scanning code exists for them yet.
+// Bio-code verification is generated/displayed/stored here, but the actual
 // verification CHECK (confirming the code really is in the user's bio)
 // stays a dormant stub -- nothing reads real bio content in this pass.
 
@@ -39,10 +42,6 @@ function AccountSettingsModal({ userId, onClose }) {
 
   const handleSave = async () => {
     setError(null);
-    if (!tiktokHandle.trim()) {
-      setError("A TikTok handle is required to connect your account.");
-      return;
-    }
     setSaving(true);
     try {
       const res = await fetch(`${API_BASE}/api/user/connect`, {
@@ -88,15 +87,21 @@ function AccountSettingsModal({ userId, onClose }) {
           <div style={{ fontSize: 13, color: B.grey }}>Loading…</div>
         ) : (
           <>
-            <div style={{ fontSize: 12.5, lineHeight: 1.5, color: B.grey, marginBottom: 16 }}>
+            <div style={{ fontSize: 12.5, lineHeight: 1.5, color: B.grey, marginBottom: 10 }}>
               Connecting your TikTok lets us check our predictions against what actually happens
               when your videos go live — that's how we validate (and keep improving) the model.
-              Instagram and YouTube are optional; we're not scanning those yet, but connecting now
-              means you're ready when we do.
+              We're not scanning Instagram or YouTube yet, but connecting now means you're ready
+              when we do.
+            </div>
+
+            <div style={{ fontSize: 11.5, lineHeight: 1.5, color: B.grey, background: B.lightBrown, borderRadius: 10, padding: "9px 12px", marginBottom: 16 }}>
+              Your handle is only used to compare this prediction against your video's real
+              30-day results — nothing is posted publicly. Details at{" "}
+              <a href="/methodology" style={{ color: B.brown }}>previewpanel.vercel.app/methodology</a>.
             </div>
 
             <label style={{ fontSize: 11, fontWeight: 700, color: "#aaa", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              TikTok handle <span style={{ color: "#E53935" }}>*</span>
+              TikTok handle
             </label>
             <input
               value={tiktokHandle}
@@ -110,7 +115,7 @@ function AccountSettingsModal({ userId, onClose }) {
             />
 
             <label style={{ fontSize: 11, fontWeight: 700, color: "#aaa", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              Instagram handle (optional)
+              Instagram handle
             </label>
             <input
               value={instagramHandle}
@@ -124,7 +129,7 @@ function AccountSettingsModal({ userId, onClose }) {
             />
 
             <label style={{ fontSize: 11, fontWeight: 700, color: "#aaa", letterSpacing: "0.06em", textTransform: "uppercase" }}>
-              YouTube handle or channel URL (optional)
+              YouTube handle or channel URL
             </label>
             <input
               value={youtubeHandle}
@@ -172,8 +177,10 @@ function AccountSettingsModal({ userId, onClose }) {
   );
 }
 
-export function AccountSettingsTrigger({ userId }) {
-  const [open, setOpen] = useState(false);
+export function AccountSettingsTrigger({ userId, open: openProp, onOpenChange }) {
+  const [openState, setOpenState] = useState(false);
+  const open = openProp !== undefined ? openProp : openState;
+  const setOpen = onOpenChange || setOpenState;
   return (
     <>
       <button onClick={() => setOpen(true)} style={{

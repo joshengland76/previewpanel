@@ -2736,13 +2736,11 @@ app.post("/api/user/connect", async (req, res) => {
   const { userId, tiktokHandle, instagramHandle, youtubeHandle } = req.body || {};
   if (!userId) return res.status(400).json({ error: "userId is required" });
 
+  // Sweep D -- none of the three platforms is mandatory to connect. TikTok
+  // is simply the only one validation scanning (Task 4) reads this phase,
+  // so a TikTok-less connection just won't feed the prediction-vs-real-
+  // outcome comparison yet -- it's still a valid connection to store.
   const tiktok = normalizeHandle(tiktokHandle, "tiktok");
-  if (!tiktok) {
-    // TikTok is the required, primary handle -- validation scanning (Task 4)
-    // is TikTok-only this phase, so a user with no TikTok handle can't
-    // participate in validation at all.
-    return res.status(400).json({ error: "TikTok handle is required to connect your account" });
-  }
   const instagram = normalizeHandle(instagramHandle, "instagram");
   const youtube = normalizeHandle(youtubeHandle, "youtube");
 
@@ -2758,7 +2756,7 @@ app.post("/api/user/connect", async (req, res) => {
        RETURNING user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, verified, bio_code`,
       [userId, tiktok, instagram, youtube, bioCode]
     );
-    console.log(`[user] connected user_id=${userId} tiktok=${tiktok} instagram=${instagram ?? "—"} youtube=${youtube ?? "—"}`);
+    console.log(`[user] connected user_id=${userId} tiktok=${tiktok ?? "—"} instagram=${instagram ?? "—"} youtube=${youtube ?? "—"}`);
     res.json(rows[0]);
   } catch (err) {
     console.error(`[user] connect failed for user_id=${userId}: ${err.message}`);
