@@ -11,7 +11,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { SCORE_DISPLAY_COPY } from "./scoreDisplayCopy.js";
-import { getPools, midrankPercentile, personalDisplay, PERSONAL_MIN_VIDEOS } from "./percentilePools.js";
+import { getPools, midrankPercentile, personalDisplay, PERSONAL_MIN_VIDEOS, dedupePersonalGroups } from "./percentilePools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TIERS_PATH = path.join(__dirname, "tiers_v2_1.json");
@@ -38,9 +38,15 @@ export { PERSONAL_MIN_VIDEOS };
  * deps.selfKey -- the just-written row's pool key (e.g. `shadow:${id}`), so
  *   the niche/overall pools exclude the row being scored. Omit if the row
  *   isn't in the pool yet (e.g. computing a display before persisting).
- * deps.fetchPersonalPredictions(userId) -> Promise<number[]>  raw predictions
- *   for this user's past shadow-scored videos, THIS ONE INCLUDED. Defaults to
- *   an empty-pool stub -- there is no user-identity system in the app yet
+ * deps.fetchPersonalPredictions(userId) -> Promise<Array<{id, prediction,
+ *   fp_group_key, group_k, group_mean_prediction}>>  every raw row for this
+ *   user's past shadow-scored videos, THIS ONE INCLUDED -- deliberately not
+ *   pool_eligible-filtered (that flag is cross-user pool hygiene, unrelated
+ *   to a user's own history). dedupePersonalGroups() (percentilePools.js)
+ *   collapses repeat runs of the same video (fp_group_key) down to one entry
+ *   per distinct video before the >=5 floor / ordinal-vs-percentile logic
+ *   ever sees it, so "5 videos" means 5 DISTINCT videos, not 5 runs. Defaults
+ *   to an empty-pool stub -- there is no user-identity system in the app yet
  *   (Phase C's handle-connect attribution is the eventual real source), so by
  *   default this always resolves to "not enough data," which is honest.
  *
@@ -96,8 +102,8 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
   const nichePoolSize = objectivePool.length;
   const overallPoolSize = pools.overall.length;
 
-  const personalPreds = userId ? await fetchPersonalPredictions(userId) : [];
-  const personalPool = personalPreds.map((p) => ({ prediction: p }));
+  const personalRows = userId ? await fetchPersonalPredictions(userId) : [];
+  const personalPool = dedupePersonalGroups(personalRows);
   const personal = personalDisplay(prediction, personalPool);
 
   return {

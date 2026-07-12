@@ -2396,14 +2396,21 @@ const SCORE_DISPLAY_FETCHERS = {
     );
     return rows;
   },
+  // Personal-percentile group dedup -- deliberately NOT filtered on
+  // pool_eligible. That flag is cross-user pool hygiene (niche/overall pools,
+  // epoch-backfilled false for the pre-launch period, plus every non-first
+  // row of a fingerprint-matched group); a user's OWN history is a different
+  // concern entirely -- video identity there is the fingerprint group, not
+  // pool membership, so every row this user ever scored is fetched and
+  // dedupePersonalGroups() (percentilePools.js) collapses repeats itself.
   fetchPersonalPredictions: async (userId) => {
     const { rows } = await pgPool.query(
-      `SELECT prediction FROM shadow_scores
+      `SELECT id, prediction, fp_group_key, group_k, group_mean_prediction FROM shadow_scores
        WHERE user_id = $1 AND prediction IS NOT NULL AND is_posted_video IS NOT TRUE
        ORDER BY created_at DESC LIMIT 500`,
       [userId]
     );
-    return rows.map((r) => r.prediction);
+    return rows;
   },
 };
 

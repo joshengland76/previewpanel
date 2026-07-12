@@ -1,7 +1,7 @@
 // scoring/percentilePoolsTest.mjs — unit tests for percentilePools.js
 // (Phase B3b, Task 2). Run: node backend/scoring/percentilePoolsTest.mjs
 
-import { midrankPercentile, personalDisplay, PERSONAL_MIN_VIDEOS, PERSONAL_ORDINAL_CEILING } from "./percentilePools.js";
+import { midrankPercentile, personalDisplay, PERSONAL_MIN_VIDEOS, PERSONAL_ORDINAL_CEILING, dedupePersonalGroups } from "./percentilePools.js";
 
 let failures = [];
 function check(name, got, expected) {
@@ -64,6 +64,29 @@ const twentyPool = Array.from({ length: 20 }, (_, i) => ({ prediction: i + 1 }))
 const result20 = personalDisplay(20, twentyPool);
 check("percentile path returns type percentile", result20.type, "percentile");
 check("percentile path value for the max of 20", result20.value, 98); // below=19,equal=1 -> 19.5/20*100=97.5->round 98
+
+// ── 4. Personal-percentile group dedup ─────────────────────────────────────
+// Rows with no fp_group_key (null) are each their own singleton group.
+const allSingletons = [
+  { id: 1, prediction: 0.1, fp_group_key: null, group_k: 1, group_mean_prediction: 0.1 },
+  { id: 2, prediction: 0.2, fp_group_key: null, group_k: 1, group_mean_prediction: 0.2 },
+];
+check("no-group rows each stay their own singleton", dedupePersonalGroups(allSingletons).length, 2);
+
+// A 3-run group collapses to ONE entry, valued at the LATEST row's
+// group_mean_prediction (the running mean, up to date as of the last insert).
+const groupedRows = [
+  { id: 10, prediction: 0.1, fp_group_key: "fp:10", group_k: 1, group_mean_prediction: 0.1 },
+  { id: 11, prediction: 0.3, fp_group_key: "fp:10", group_k: 2, group_mean_prediction: 0.2 },
+  { id: 12, prediction: 0.5, fp_group_key: "fp:10", group_k: 3, group_mean_prediction: 0.3 },
+];
+const dedupedGroup = dedupePersonalGroups(groupedRows);
+check("a 3-run group collapses to exactly 1 entry", dedupedGroup.length, 1);
+check("the collapsed entry uses the group's up-to-date mean, not any single run", dedupedGroup[0].prediction, 0.3);
+
+// Mixed: 1 group of 3 + 2 singletons = 3 distinct videos, not 5 raw rows.
+const mixedRows = [...groupedRows, ...allSingletons];
+check("mixed rows dedupe to distinct-video count, not raw row count", dedupePersonalGroups(mixedRows).length, 3);
 
 console.log("percentilePools.js checks complete.");
 if (failures.length) {

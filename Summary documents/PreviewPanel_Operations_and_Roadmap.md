@@ -138,6 +138,13 @@ prediction/percentiles for a group (k≥2) use the group mean, not any single
 run's raw ŷ — the score card shows "Average of k analyses of this video."
 when that applies. Raw per-run `prediction` is always stored unchanged.
 
+**Personal pool = distinct videos, not runs**: the ≥5 activation floor and
+the ordinal "rank X of N" count distinct fingerprint groups (a repeat run
+counts once, at its group mean), never raw runs — deliberately *not*
+filtered on `pool_eligible` (that flag is cross-user pool hygiene; a user's
+own history dedupes by video identity via the fingerprint group instead).
+See `PERSONAL_DEDUP_READOUT.md`.
+
 ### 1e. Real-user validation subsystem (Phase C)
 
 - **Identity-lite:** persistent client UUID; `users` table with TikTok

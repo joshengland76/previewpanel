@@ -112,6 +112,34 @@ export const PERSONAL_MIN_VIDEOS = 5;
 export const PERSONAL_ORDINAL_CEILING = 20; // n < this -> ordinal payload instead of a percentile
 
 /**
+ * Personal-percentile group dedup -- collapses a user's raw shadow_scores
+ * rows (as returned by fetchPersonalPredictions) down to one entry per
+ * DISTINCT VIDEO, keyed by fp_group_key (a row with no fingerprint/group --
+ * pre-dates fingerprinting, or the match never resolved -- is its own
+ * singleton group via a synthetic `row:<id>` key, never merged with anything
+ * else). Within a group, every member's group_mean_prediction already equals
+ * the mean of ALL that group's raw predictions up to and including that
+ * row (see shadowScore.js -- it is never retroactively updated on older
+ * rows), so the member with the highest group_k is simply the most
+ * up-to-date mean for the whole group; no extra averaging needed here.
+ * Returns rows shaped for personalDisplay()'s existing {prediction} pool
+ * contract, unchanged downstream of this function.
+ */
+export function dedupePersonalGroups(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    const key = r.fp_group_key ?? `row:${r.id}`;
+    const existing = groups.get(key);
+    if (!existing || (r.group_k ?? 1) > (existing.group_k ?? 1)) {
+      groups.set(key, r);
+    }
+  }
+  return [...groups.values()].map((r) => ({
+    prediction: (r.group_k ?? 1) >= 2 ? r.group_mean_prediction : r.prediction,
+  }));
+}
+
+/**
  * Personal display: below PERSONAL_MIN_VIDEOS -> null (not enough data).
  * [PERSONAL_MIN_VIDEOS, PERSONAL_ORDINAL_CEILING) -> ordinal {rank, total}
  * ("you rank 2nd of 7") -- a percentile computed from under 20 points reads
