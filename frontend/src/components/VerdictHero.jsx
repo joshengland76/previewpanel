@@ -130,6 +130,11 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
               )}
             </div>
           )}
+          {scoreDisplay.precisionCaveatLine && (
+            <div style={{ fontSize: 11, color: B.grey, marginTop: 8, maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
+              {scoreDisplay.precisionCaveatLine}
+            </div>
+          )}
         </div>
       )}
 

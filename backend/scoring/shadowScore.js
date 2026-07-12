@@ -15,7 +15,7 @@ import { invalidatePoolCache } from "./percentilePools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REF_PATH = path.join(__dirname, "reference_distributions_v2.json");
-const TIERS_PATH = path.join(__dirname, "tiers_v2_1.json");
+const TIERS_PATH = path.join(__dirname, "tiers_v2_2.json");
 
 let _refDist = null;
 function loadRefDist() {

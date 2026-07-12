@@ -84,6 +84,32 @@ checkTrue("unrecognized typed-in objective also suppresses percentile flag", unk
 checkTrue("unrecognized typed-in objective gets the logged-for-future-build line",
   unknownObjectiveDisplay.honestLine === "This objective has been logged for a future scoring model build. No reliable score is currently available.");
 
+// ── Cohort_5 Phase 3d: two-axis gate (showPercentile on p_gt0 alone, tier
+// label can lag on precision) ──────────────────────────────────────────────
+// Gaming: PROVISIONAL tier (fails the 0.55 precision bar for PREDICT) but
+// p_gt0=0.9905 clears the 0.95 ranking-confidence bar -- percentile should
+// show, paired with the precision caveat line, NOT the honest-line
+// suppression a PROVISIONAL tier would have gotten under the old binary gate.
+invalidatePoolCache();
+const provisionalObjective = tiers.tiers.PROVISIONAL[0];
+check(`tierForObjective PROVISIONAL sample (${provisionalObjective})`, tierForObjective(provisionalObjective, tiers), "PROVISIONAL");
+const provisionalDisplay = await getScoreDisplay(provisionalObjective, 0.5, null, {
+  fetchShadowRows: async () => [],
+});
+checkTrue(`PROVISIONAL objective (${provisionalObjective}) with p_gt0>=0.95 still shows percentile`,
+  provisionalDisplay.showPercentile === true);
+checkTrue(`PROVISIONAL objective (${provisionalObjective}) gets the precision caveat line (precision<0.55)`,
+  provisionalDisplay.precisionCaveatLine === "Percentiles here reflect validated ranking for this niche; our top-pick hit rate is still maturing.");
+
+// Dancing-style case: a real, recognized objective whose p_gt0 itself is
+// below 0.95 (not just precision) -- showPercentile must stay false here,
+// distinguishing "ranking claim unsupported" from "ranking claim supported,
+// precision claim isn't." abstainObjective (Dancing) already covers this via
+// the assertions above; this just confirms precisionCaveatLine is absent
+// (not merely falsy-by-coincidence) when percentile is suppressed outright.
+check(`ABSTAIN objective (${abstainObjective}) has no precisionCaveatLine (percentile fully suppressed)`,
+  abstainDisplay.precisionCaveatLine, undefined);
+
 // ── PREDICT tier: pool wiring, integer percentiles, selfKey exclusion ──────
 invalidatePoolCache();
 // Dates deliberately far in the future relative to the corpus seed (which is
@@ -106,6 +132,12 @@ checkTrue("PREDICT tier has an integer nichePercentile", Number.isInteger(predic
 checkTrue("PREDICT tier has a headline", typeof predictDisplay.headline === "string" && predictDisplay.headline.length > 0);
 checkTrue("headline uses direct percentile framing, no Top-N% inversion", predictDisplay.headline.startsWith("Beats "));
 checkTrue("sub-line reports the pool size", predictDisplay.sub.includes(String(predictDisplay.nichePoolSize)));
+
+// Confirm no regression for the 16 carried-forward PREDICT objectives: all
+// have precision>=0.55 by construction (PREDICT requires it), so none should
+// ever show the precision caveat line.
+checkTrue(`PREDICT objective (${predictObjective}) has no precision caveat line`,
+  predictDisplay.precisionCaveatLine === undefined || predictDisplay.precisionCaveatLine === null);
 
 // Pool size reported to the user INCLUDES self (it's genuinely one of "the
 // videos we've scored") -- this must NOT shift depending on selfKey, even

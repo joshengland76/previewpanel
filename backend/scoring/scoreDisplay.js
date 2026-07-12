@@ -14,7 +14,7 @@ import { SCORE_DISPLAY_COPY } from "./scoreDisplayCopy.js";
 import { getPools, midrankPercentile, personalDisplay, PERSONAL_MIN_VIDEOS, dedupePersonalGroups } from "./percentilePools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TIERS_PATH = path.join(__dirname, "tiers_v2_1.json");
+const TIERS_PATH = path.join(__dirname, "tiers_v2_2.json");
 
 let _tiers = null;
 export function loadTiers() {
@@ -24,6 +24,25 @@ export function loadTiers() {
 
 export function tierForObjective(objective, tiers = loadTiers()) {
   return tiers.per_objective?.[objective]?.tier ?? null;
+}
+
+// Cohort_5 Phase 3d -- the display gate is two-axis, not the tier label
+// itself. showPercentile answers "is the RANKING claim (this percentile)
+// statistically supported?" -- gated on P(WC>0) alone, independent of
+// whether the objective also clears the separate PREDICT precision bar.
+// tier_policy_v2_1's tier label still requires BOTH p_gt0>=0.95 AND
+// precision>=0.55 to reach PREDICT, so an objective can clear the ranking
+// bar (p_gt0>=0.95) while its tier stays PROVISIONAL/ABSTAIN on precision
+// alone (e.g. Gaming, Educational/How-To post-cohort_5) -- those objectives
+// now show real percentiles, paired with a separate precision caveat line
+// rather than being fully suppressed. This intentionally surfaces the
+// nuance flagged in this file's original header comment (see git history):
+// a positive, confident RANK signal is a different claim from "our
+// top-pick/decile hit rate is proven," and each should be gated on the
+// statistic that actually backs it.
+function showPercentileFor(objective, tiers) {
+  const p = tiers.per_objective?.[objective]?.p_gt0;
+  return typeof p === "number" && p >= 0.95;
 }
 
 export { PERSONAL_MIN_VIDEOS };
@@ -50,14 +69,17 @@ export { PERSONAL_MIN_VIDEOS };
  *   (Phase C's handle-connect attribution is the eventual real source), so by
  *   default this always resolves to "not enough data," which is honest.
  *
- * Tier gate is deliberately BINARY (PREDICT vs everything else). ABSTAIN
- * suppresses ALL THREE percentiles, not just niche. tiers_v2_1.json
- * separately flags Gaming/Educational as having a positive, reasonably
- * confident RANK signal (within_creator_spearman positive, p_gt0 high)
- * despite failing the absolute-precision bar that puts them in ABSTAIN -- a
- * real nuance that could justify a third display state later ("directionally
- * confident, absolute score still calibrating") rather than full suppression.
- * Not shipped this pass; binary logic only, per spec.
+ * Cohort_5 Phase 3d: the percentile gate is TWO-AXIS, not the tier label.
+ * showPercentile (see showPercentileFor below) gates purely on P(WC>0)>=0.95
+ * -- "is the ranking claim statistically supported" -- independent of
+ * whether the objective also clears the separate precision>=0.55 bar that
+ * tier_policy_v2_1 additionally requires for the PREDICT label. An objective
+ * can therefore show real percentiles while its tier stays
+ * PROVISIONAL/ABSTAIN on precision alone (Gaming, Educational/How-To as of
+ * tiers_v2_2.json) -- those get a separate precisionCaveatLine instead of
+ * full suppression. This is the "third display state" this file used to
+ * flag as a future possibility (see git history); it's now the general rule
+ * for every objective, not a one-off carve-out.
  */
 export async function getScoreDisplay(objective, prediction, userId, deps = {}) {
   const {
@@ -72,8 +94,9 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
 
   const tier = tierForObjective(objective, tiers);
   const groupAverageNote = copy.groupAverageNote(groupK);
+  const showPercentile = showPercentileFor(objective, tiers);
 
-  if (tier !== "PREDICT") {
+  if (!showPercentile) {
     return {
       objective,
       tier,
@@ -86,6 +109,11 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
       groupAverageNote,
     };
   }
+
+  const precisionAtDecile = tiers.per_objective?.[objective]?.precision_at_decile;
+  const precisionCaveatLine = typeof precisionAtDecile === "number" && precisionAtDecile < 0.55
+    ? copy.precisionCaveatLine
+    : null;
 
   const pools = await getPools(fetchShadowRows);
   const objectivePool = pools.byObjective[objective] || [];
@@ -120,5 +148,6 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     overallAppHeadline: copy.overallAppHeadline(overallApp, overallPoolSize),
     poolInfoTooltip: copy.poolInfoTooltip(platform),
     groupAverageNote,
+    precisionCaveatLine,
   };
 }

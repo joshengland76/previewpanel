@@ -86,19 +86,32 @@ export const SCORE_DISPLAY_COPY = {
   abstainHeadline: "We don't have enough reliable data yet to score this niche numerically.",
 
   // Three distinct cases, not one: a recognized objective that just isn't
-  // reliably scoreable yet (data still accruing, tier === ABSTAIN) vs. a
-  // free-typed objective the UI accepts but that isn't in tiers_v2_1.json at
-  // all (tier is null even though the field isn't blank -- there's no model
-  // build for it yet, so it's logged rather than scored) vs. no objective at
-  // all (nothing typed -- optional field, left blank at submission).
-  // Conflating any two of these was misleading: "still in progress" implies
-  // an existing model build is catching up, which isn't true for an unknown
-  // objective, and "no objective selected" is simply false when one was typed.
+  // clearing the ranking-confidence bar yet (data still accruing -- tier is
+  // ABSTAIN/PROVISIONAL/THIN, any non-null tier, since showPercentileFor
+  // already handles the one case where a recognized objective wouldn't reach
+  // here: PREDICT implies p_gt0>=0.95 by construction, so a PREDICT tier
+  // never lands in this branch) vs. a free-typed objective the UI accepts
+  // but that isn't in tiers_v2_2.json at all (tier is null even though the
+  // field isn't blank -- there's no model build for it yet, so it's logged
+  // rather than scored) vs. no objective at all (nothing typed -- optional
+  // field, left blank at submission). Conflating any two of these was
+  // misleading: "still in progress" implies an existing model build is
+  // catching up, which isn't true for an unknown objective, and "no
+  // objective selected" is simply false when one was typed.
   abstainHonestLine: (objective, tier) => {
-    if (tier === "ABSTAIN") return "Reliable scoring for this objective is still in progress.";
+    if (tier != null) return "Reliable scoring for this objective is still in progress.";
     if (objective) return "This objective has been logged for a future scoring model build. No reliable score is currently available.";
     return "No objective selected, so no reliable scoring is available.";
   },
+
+  // Cohort_5 Phase 3d -- shown as an additional line whenever showPercentile
+  // is true but the objective's precision@decile is still below the 0.55
+  // PREDICT bar (Gaming, Educational/How-To as of tiers_v2_2.json): the
+  // ranking claim (this percentile) is statistically supported, but the
+  // separate "our top pick for you is usually right" claim isn't yet.
+  // Josh-editable constant, not a function -- one line, same for every
+  // objective that trips this condition.
+  precisionCaveatLine: "Percentiles here reflect validated ranking for this niche; our top-pick hit rate is still maturing.",
 };
 
 function ordinal(n) {
