@@ -332,6 +332,7 @@ export default function PreviewPanel() {
   const [synthesis, setSynthesis] = useState(null);
   const [synthesisStatus, setSynthesisStatus] = useState(null);
   const [scoreDisplay, setScoreDisplay] = useState(null); // populated when the server's DISPLAY_SCORE flag is on
+  const [contentReadAxes, setContentReadAxes] = useState(null); // Sweep C -- Curiosity/Inspiration spider axes, populated when EXTRACT_CDIMS is on
   const [trimAvailable, setTrimAvailable] = useState(false);
   const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
   const [statusMessage, setStatusMessage] = useState("");
@@ -431,6 +432,7 @@ export default function PreviewPanel() {
         setSynthesis(data.synthesis ?? null);
         setSynthesisStatus(data.synthesisStatus ?? null);
         setScoreDisplay(data.scoreDisplay ?? null);
+        setContentReadAxes(data.contentReadAxes ?? null);
         setTrimAvailable(!!data.trimAvailable);
 
         const jobDone = data.status === "done" || data.status === "partial";
@@ -1264,7 +1266,7 @@ export default function PreviewPanel() {
                 <VerdictPanel synthesis={synthesis} results={judgeResults} scoreDisplay={scoreDisplay} onJumpToJudge={jumpToJudge} platform={platform} />
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
-                <PerformanceRadar results={judgeResults} />
+                <PerformanceRadar results={judgeResults} contentReadAxes={contentReadAxes} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
@@ -1274,7 +1276,7 @@ export default function PreviewPanel() {
                 still produced via the new components (no synthesis overview). */}
             {isFinished && synthesisStatus !== "ready" && synthesisStatus !== "pending" && (
               <>
-                <PerformanceRadar results={judgeResults} />
+                <PerformanceRadar results={judgeResults} contentReadAxes={contentReadAxes} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>

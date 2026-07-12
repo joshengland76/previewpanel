@@ -36,6 +36,7 @@ import "dotenv/config";
 // enabled. See scoring/README (PHASEB2_READOUT.md in the research repo) for
 // the full design.
 import { extractCdims } from "./scoring/cdims.js";
+import { computeContentReadAxes } from "./scoring/contentReadAxes.js";
 import { buildScoringFeatures } from "./scoring/buildFeatures.js";
 import { recordShadowScore } from "./scoring/shadowScore.js";
 import { getScoreDisplay } from "./scoring/scoreDisplay.js";
@@ -2498,6 +2499,12 @@ async function runShadowScoringForJob(jobId) {
       clampDuration: process.env.CLAMP_DURATION !== "false",
     });
 
+    // Sweep C -- spider chart's Curiosity/Inspiration axes, derived from the
+    // same C_dims fields already in `features` (no new extraction). Attached
+    // to `job` (not just returned locally) so it survives for the /api/status
+    // response the same way job.scoreDisplay does.
+    job.contentReadAxes = computeContentReadAxes(features);
+
     // Pool hygiene Task 2 -- fingerprint-group score consistency. A no-op
     // (returns null immediately) for validation rescores, research traffic,
     // and any submission without a ready fingerprint/user_id -- see
@@ -3970,6 +3977,27 @@ app.get("/api/status/:jobId", async (req, res) => {
     }
   }
 
+  // Sweep C -- same durable-recovery shape as scoreDisplay above: the
+  // Curiosity/Inspiration axes are computable from input_features (already
+  // stored on every shadow_scores row for every past submission), so a job
+  // whose in-memory contentReadAxes never got set (reload, restart, or a
+  // job predating this feature) recovers identically rather than showing
+  // nothing.
+  if (job.contentReadAxes == null && jobDoneForRecovery && job.submissionId != null && pgPool) {
+    try {
+      const { rows } = await pgPool.query(
+        `SELECT input_features FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
+        [job.submissionId]
+      );
+      const row = rows[0];
+      if (row && row.input_features) {
+        job.contentReadAxes = computeContentReadAxes(row.input_features);
+      }
+    } catch (e) {
+      console.error(`[${req.params.jobId}] contentReadAxes DB fallback failed (non-fatal): ${e.message}`);
+    }
+  }
+
   res.json({
     status: job.status,
     results: job.results,
@@ -3982,6 +4010,10 @@ app.get("/api/status/:jobId", async (req, res) => {
     trimAvailable: retainedTrims.has(req.params.jobId),
     // Dark-launched (Phase B3, Task 5) -- always null unless DISPLAY_SCORE="true".
     scoreDisplay: job.scoreDisplay ?? null,
+    // Sweep C -- panel-only spider axes (Curiosity, Inspiration), always
+    // present once C_dims extraction has run (EXTRACT_CDIMS="true"); null
+    // otherwise, same as every other C_dims-derived field.
+    contentReadAxes: job.contentReadAxes ?? null,
   });
 });
 

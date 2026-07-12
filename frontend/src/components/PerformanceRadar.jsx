@@ -2,29 +2,52 @@ import { useState } from "react";
 import { B, JUDGES } from "../brand.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Part B — Performance radar. Phase B4, Task 4: redesigned so its axes are
-// exactly the dims that carry nonzero weight in the scoring model (per
-// scoring_spec_v2.json's coefficients) — "authentic" dropped (zero weight on
-// both judge and Claude sides; Task 1 verdict PRUNABLE), and the old
-// hook_strength/completion_likelihood/share_save_worthiness/platform-specific
-// dims dropped too (none ever had model weight; that was a separate, useful
-// UI concept but not what this chart is for now). Claude-side "polished" is
-// NOT included: it's a single C_dims-extracted value with no natural
-// per-judge breakdown, so it doesn't fit this chart's panel-average +
-// ghosted-per-judge-lines structure "sensibly" (the explicit bar Task 4 set
-// for including it) — flagged in PHASEB4_READOUT.md as a deliberate
-// exclusion, not an oversight.
+// Part B — Performance radar. Phase B4, Task 4 originally set the axes to
+// every dim carrying nonzero model weight; Sweep C (this revision) narrowed
+// that further, now that the FULL nonzero-coefficient table exists
+// (scoring_spec_v2.json, 56 of 116 nonzero) rather than just a presence/
+// absence read. Signs, from that table (jc_* = judge consensus mean):
+//   jc_compelling            +0.0118   KEPT
+//   jc_novel                 +0.0277   KEPT
+//   jc_emotionally_resonant  +0.0202   KEPT
+//   jc_emotion_intensity     +0.0120   KEPT
+//   jc_funny                 +0.0122   KEPT
+//   jc_surprising            -0.0111   REMOVED (negative)
+//   jc_relatable             -0.0179   REMOVED (negative)
+//   jc_visually_engaging     -0.0211   REMOVED (negative)
+//   jc_useful                -0.0302   REMOVED (negative)
+//   cl_big_polished          -0.0072   never included here (single C_dims value,
+//                                      no per-judge breakdown -- PHASEB4_READOUT.md)
+// "authentic" was already dropped pre-Sweep-C (zero weight both sides).
+// objective_fit is judge-scored but lives outside big_picture (its own
+// per-judge column) -- kept, unaffected by any of the above.
+//
+// Sweep C also adds two PANEL-ONLY "content read" axes -- Curiosity and
+// Inspiration -- backed by contentReadAxes (prop, from the API response's
+// job.contentReadAxes, computed server-side in
+// backend/scoring/contentReadAxes.js from the C_dims emotion_primary/
+// emotion_targeted/emotion_combination/emotion_*_intensity fields, NOT from
+// judge output). These are the only two emotions with nonzero model
+// coefficients anywhere in emotion_targeted/emotion_primary/
+// emotion_combination (emotion_combination_curiosity_inspiration is the
+// single largest categorical coefficient in the whole model, +0.1394).
+// There is no per-judge breakdown for these -- a single scalar per video, no
+// ghost lines, marked with a subtle "content read" legend note rather than a
+// judge chip. Final: 8 axes (6 judge-scored + 2 content-read).
 //
 // Field names read from .results[id].data.dimensions.big_picture[key] (the
 // REAL judge output shape). Works identically for v1 rows and v2 rows: v1's
 // big_picture object has 10 keys (including "authentic"), v2 has 9 — this
-// component only ever reads the 9 it cares about, so no version check and no
-// data migration are needed.
+// component only ever reads the ones it cares about, so no version check and
+// no data migration are needed.
 //
 //   • Bold panel-AVERAGE polygon (present judges only) — ALWAYS prominent, no fill.
 //   • Per-judge thin color lines — GHOSTED by default (the judges nearly coincide
 //     on real data, so the average is the clean default signal). Tap a legend chip
 //     to bring that judge to full strength; tap again to re-ghost. No fill, no dots.
+//     At the two content-read vertices, every per-judge line and the avg line
+//     coincide at the same point (by design -- there's one scalar, not a
+//     per-judge reading, at those two axes).
 //   • Partial: average from present judges only; missing judge absent from the
 //     chart and greyed/struck in the legend.
 //   • Graceful: no per-judge dimension data -> renders nothing.
@@ -32,14 +55,17 @@ import { B, JUDGES } from "../brand.js";
 
 const BIG_PICTURE_AXES = [
   { key: "compelling", label: "Compelling" },
+  { key: "novel", label: "Novel" },
   { key: "emotionally_resonant", label: "Emotional" },
   { key: "emotion_intensity", label: "Intensity" },
   { key: "funny", label: "Funny" },
-  { key: "novel", label: "Novel" },
-  { key: "relatable", label: "Relatable" },
-  { key: "surprising", label: "Surprising" },
-  { key: "useful", label: "Useful" },
-  { key: "visually_engaging", label: "Visual" },
+];
+
+// Panel-only, no ghost lines -- see header comment. contentReadAxes is
+// {curiosity, inspiration}, each 0-10, from computeContentReadAxes().
+const CONTENT_READ_AXES = [
+  { key: "curiosity", label: "Curiosity", contentRead: true },
+  { key: "inspiration", label: "Inspiration", contentRead: true },
 ];
 
 // Dimension explanations. Every entry obeys the same two hard rules as the
@@ -52,18 +78,21 @@ const DIMENSION_INFO = {
   emotion_intensity: `How intense or "loud" the emotions depicted in the video are, regardless of which emotion — calm and neutral videos score low, dramatic or ecstatic ones score high. This describes the content itself, not a judgment that either end of the scale is better.`,
   funny: `Whether the video produces genuine humor, not just an attempt at it. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
   novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
-  relatable: `Whether the video speaks to something specific in the viewer's own life or experience. Relatable content tends to get shared directly to a specific person, rather than posted generally.`,
-  surprising: `Whether the video subverts what the viewer expects, in a way that lands. Content that plays with expectation tends to hold attention longer and get rewatched more.`,
-  useful: `Whether the viewer walks away with something concrete — information, a technique, an idea they can use. Useful content tends to be saved for later far more than it's liked.`,
-  visually_engaging: `Whether the imagery itself rewards looking, independent of what's being said. Visually engaging content tends to perform well even without sound, which matters since many viewers watch muted.`,
   objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
+  curiosity: `A content read (not a judge score) of how much this video leans on open questions, reveals, or "wait, what?" moments to pull viewers in. In our data, curiosity paired with a payoff is one of the strongest patterns behind above-average performance.`,
+  inspiration: `A content read (not a judge score) of how much this video leans on aspiration, transformation, or "you can do this too" framing. In our data, inspiration is one of the more consistently positive signals across niches.`,
 };
 
 const CX = 160, CY = 150, R = 88;
 const AVG = "#1F1B16"; // bold near-black for the panel average
 
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
-function judgeAxisValue(data, axis) {
+// contentReadAxes is only consulted for axis.contentRead entries -- every
+// per-judge polygon reads the SAME value there (see header comment: these
+// are single scalars per video, not per-judge readings), so `data` (the
+// per-judge payload) is simply irrelevant for those two axes.
+function judgeAxisValue(data, axis, contentReadAxes) {
+  if (axis.contentRead) return num(contentReadAxes?.[axis.key]);
   if (axis.key === "__objfit") return num(data?.objective_fit?.score);
   return num(data?.dimensions?.big_picture?.[axis.key]);
 }
@@ -128,7 +157,7 @@ function computeLabelPlacements(vals, n, pt, ang) {
   });
 }
 
-export function PerformanceRadar({ results }) {
+export function PerformanceRadar({ results, contentReadAxes }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
 
@@ -138,9 +167,9 @@ export function PerformanceRadar({ results }) {
   const presentIds = new Set(present.map((x) => x.judge.id));
   if (present.length === 0) return null;
 
-  const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }];
+  const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }, ...CONTENT_READ_AXES];
 
-  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a) != null))) return null;
+  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, contentReadAxes) != null))) return null;
 
   const ang = (i) => (-90 + i * (360 / axes.length)) * Math.PI / 180;
   const pt = (i, v) => {
@@ -149,7 +178,7 @@ export function PerformanceRadar({ results }) {
   };
   const polyPoints = (vals) => vals.map((v, i) => pt(i, v ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
 
-  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a)) }));
+  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, contentReadAxes)) }));
   const avgVals = axes.map((_, i) => {
     const xs = judgeVals.map((jv) => jv.vals[i]).filter((v) => v != null);
     return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : 0;
@@ -176,7 +205,9 @@ export function PerformanceRadar({ results }) {
               <g key={a.key}>
                 <line x1={CX} y1={CY} x2={sp[0]} y2={sp[1]} stroke={B.border} strokeWidth="1" />
                 <text x={lp[0].toFixed(1)} y={(lp[1] + dy).toFixed(1)} fontFamily="Montserrat, sans-serif"
-                  fontSize="8.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>{a.label}</text>
+                  fontSize="8.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>
+                  {a.label}{a.contentRead ? " †" : ""}
+                </text>
               </g>
             );
           })}
@@ -218,6 +249,11 @@ export function PerformanceRadar({ results }) {
         </svg>
 
         <div style={{ textAlign: "center", fontSize: 10, color: B.grey, margin: "4px 0 7px" }}>Tap a judge to isolate their line</div>
+        {CONTENT_READ_AXES.some((a) => judgeAxisValue(null, a, contentReadAxes) != null) && (
+          <div style={{ textAlign: "center", fontSize: 9.5, color: B.grey, margin: "-3px 0 7px" }}>
+            † content read, not a judge score — same for every judge
+          </div>
+        )}
 
         {/* legend — one row, all chips equal height; Avg restores the default view, a judge isolates its line */}
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 4, flexWrap: "nowrap" }}>
