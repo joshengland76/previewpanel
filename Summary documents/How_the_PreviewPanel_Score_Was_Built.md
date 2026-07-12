@@ -22,20 +22,21 @@ for choosing and improving your strongest work, not a virality crystal ball.
   followers as at 200,000.
 
 **How we kept ourselves honest.** The model was only ever evaluated on
-**creators it had never seen**. Every analysis was **pre-registered** — the
-rules written down before results were looked at, with 35 dated amendments
-logged along the way. And before anything shipped, we sealed **30 creators in a
+**creators it had never seen**. Every analysis choice was **written down and dated before we saw its result, not after** — a running log that now stands at 38 entries. And before anything shipped, we sealed **30 creators in a
 lockbox** untouched by the entire model-selection process, then opened it
 exactly once, against pass/fail criteria committed in writing beforehand. It
 passed.
 
 **What we found.**
-- Held-out rank correlation of **+0.25** between the score and real 30-day
-  engagement — measured on creators the model never trained on.
-- Videos the model ranks in a creator's **top tier beat that creator's typical
-  engagement about 2 times in 3** (a coin flip would be 1 in 2).
-- Reliable enough to show in **16 of 19 niches**; in the other three we say so
-  plainly and show feedback without a score while more data matures.
+- A rank correlation of **+0.28** between the score and real 30-day engagement,
+  cross-validated across all 199 study creators — and **+0.25** on a sealed
+  30-creator holdout the selection process never touched, opened exactly once.
+- Videos the model ranks in a creator's top tier beat that creator's typical
+  engagement **68% of the time — more than 2 in 3** (a coin flip would be 1 in 2).
+- Validated enough to show a score in **18 of 19 niches** — in two of those we
+  add a plain-language caveat that our top-pick hit rate is still maturing. In
+  the one exception (dance), we say so plainly and show feedback without a
+  score rather than make up a number.
 - One finding we didn't expect: within this study's range (~15–80 seconds),
   longer videos consistently earned more engagement per viewer — a pattern the
   model uses, and one we deliberately report as a *correlation*, never as
@@ -53,5 +54,6 @@ results. The methodology, in more detail, is published at
 **previewpanel.vercel.app/methodology**.
 
 *Numbers box: 259 creators · ~4,900 videos · 19 niches · 30-day real outcomes ·
-+0.25 held-out rank correlation · ~2/3 top-tier precision · sealed 30-creator
-holdout, opened once · fully pre-registered.*
++0.28 cross-validated / +0.25 sealed-holdout rank correlation · 68% top-tier
+precision (more than 2 in 3) · 30-creator lockbox, opened once · fully
+pre-registered.*

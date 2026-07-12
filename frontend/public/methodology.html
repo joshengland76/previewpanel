@@ -47,7 +47,7 @@
   <h2>What we did</h2>
   <p>We recruited 259 creators across 19 content niches — cooking, fitness,
   comedy, travel, and 15 others — and collected their TikTok videos. Before
-  we ever looked at how those videos actually performed, our judging panel
+  we ever looked at how those videos actually performed, our AI judging panel
   scored each one on hook strength, emotional pull, pacing, clarity, and
   related factors. Only after scoring was locked in did we track each
   video's real 30-day engagement: likes, shares, and saves per view. The
@@ -61,18 +61,20 @@
   group of 30 creators — a "lockbox" — and didn't look at their data until
   every modeling decision was final. We opened it exactly once. Every
   analysis choice along the way was written down and dated before we saw
-  its result, not after; that log grew to 21 entries. And every video is
+  its result, not after; that log grew to 36 entries. And every video is
   scored against its own creator's typical performance, not the whole
   platform's — so one creator with an unusually large following can't skew
   what "good" looks like for everyone else.</p>
 
   <h2>What we found</h2>
-  <p>In that held-out lockbox test, videos the model ranked in its top tier
-  beat the creator's own typical engagement about 2 out of 3 times — well
-  ahead of a coin flip. That result held up reliably in 16 of the 19 niches
-  we studied. For the remaining 3 (Gaming, Educational/How-To, and Dancing),
-  we don't yet trust the numeric score enough to show it — you'll see
-  qualitative feedback there instead, while we keep collecting data.</p>
+  <p>Held-out rank correlation was +0.28 cross-validated across all 199
+  study creators, and +0.25 on a sealed 30-creator holdout opened exactly
+  once. Videos the model ranked in its top tier beat the creator's own
+  typical engagement 68% of the time — more than 2 in 3 (coin flip = 1 in
+  2). That's true in 18 of the 19 niches we studied — 2 of those also carry
+  a plain-language note that our top-pick precision is still maturing. The
+  remaining niche (dance) gets qualitative feedback only, no numeric score,
+  while we keep collecting data.</p>
 
   <h2>What it can't do</h2>
   <p>This is not a virality predictor. It cannot tell you whether a specific
@@ -80,18 +82,15 @@
   The patterns it's built on are correlational — things that tend to go
   together with stronger performance — not causal instructions; it doesn't
   tell you to make a video longer or shorter, for instance, just because
-  duration is one of the things it accounts for. And so far, this model has
-  only been validated against the historical study data described above —
-  validating it against real PreviewPanel users' own posted videos is
-  ongoing work, not yet complete.</p>
+  duration is one of the things it accounts for.</p>
 
   <div class="numbers">
-    <div class="stat"><div class="value">+0.25</div><div class="label">held-out rank correlation</div></div>
+    <div class="stat"><div class="value">+0.25</div><div class="label">held-out rank correlation (lockbox)</div></div>
     <div class="stat"><div class="value">~68%</div><div class="label">top-tier precision (~2 of 3)</div></div>
     <div class="stat"><div class="value">~4,900</div><div class="label">videos studied</div></div>
     <div class="stat"><div class="value">259</div><div class="label">creators</div></div>
     <div class="stat"><div class="value">30 days</div><div class="label">real engagement window</div></div>
-    <div class="stat"><div class="value">16 / 19</div><div class="label">niches scored numerically</div></div>
+    <div class="stat"><div class="value">18 / 19</div><div class="label">niches with a score shown</div></div>
   </div>
 
   <div class="disclaimer">

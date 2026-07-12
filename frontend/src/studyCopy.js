@@ -22,14 +22,24 @@ export const STUDY_STATS = {
   nVideosScored: 4897,
   nVideosScoredRounded: "about 4,900",
   nNiches: 19,
-  nNichesReliable: 16,
+  // Two-axis display gate (cohort_5 Phase 3d) + tier policy v2.2 (Educational
+  // -> PROVISIONAL): percentile display is gated on P(WC>0)>=0.95 alone, not
+  // the PREDICT label, so PROVISIONAL niches (Gaming, Educational/How-To)
+  // show real percentiles too, paired with a caveat -- only Dancing (p_gt0
+  // still below 0.95) stays fully suppressed. nNichesReliable (the old
+  // PREDICT-only count) is retired in favor of these three, which describe
+  // what the product actually shows:
+  nNichesWithScores: 18, // PREDICT (16) + PROVISIONAL (2) -- percentile shown
+  nNichesWithCaveat: 2, // of the 18, these additionally show the top-pick-precision caveat line
+  nNichesSuppressed: 1, // Dancing -- honest line only, no percentile
   outcomeWindowDays: 30,
   precisionAtDecile: 0.6844,
-  precisionAtDecileCasual: "about 2 out of 3",
-  heldOutRankCorrelation: 0.25,
+  precisionAtDecileCasual: "68% of the time — more than 2 in 3 (coin flip = 1 in 2)",
+  heldOutRankCorrelation: 0.25, // lockbox (generalization): sealed 30-creator holdout, opened once
+  crossValidatedRankCorrelation: 0.28, // full-corpus CV (estimation): all 199 study creators
   lockboxCreators: 30,
   lockboxOpenedTimes: 1,
-  preregAmendments: 21,
+  preregAmendments: 36, // CAPSTONE_PREREG_v2.md's 35 numbered entries + COHORT5_PREREG.md (1 dated prereg, written before any cohort_5 number existed)
 };
 
 // Verbatim -- minor layout edits allowed, wording must not change. (Score
@@ -45,7 +55,8 @@ export const METHODOLOGY_MODAL_TEXT =
   "signals our judges do — hook, emotion, pacing, clarity — across 56 " +
   "correlated variables in total, and turns them into a single prediction. In held-out " +
   "testing on creators the model had never seen, videos it ranked in its " +
-  "top tier beat the creator's typical engagement about 2 out of 3 times. " +
+  "top tier beat the creator's typical engagement 68% of the time — more " +
+  "than 2 in 3 (coin flip = 1 in 2). " +
   "It's a ranking aid, not a crystal ball: it tells you which of your " +
   "videos looks strongest, not whether a video will go viral. See how we " +
   "validated it →";

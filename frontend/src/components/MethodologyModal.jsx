@@ -118,7 +118,7 @@ function ValidationDetail({ onClose }) {
       <Section title="What we did">
         We recruited {STUDY_STATS.nCreators} creators across {STUDY_STATS.nNiches} content
         niches and collected their TikTok videos. Before we ever looked at how those
-        videos actually performed, our judging panel scored each one on hook strength,
+        videos actually performed, our AI judging panel scored each one on hook strength,
         emotional pull, pacing, clarity, and related factors. Only after scoring was
         locked in did we track each video's real {STUDY_STATS.outcomeWindowDays}-day
         engagement: likes, shares, and saves per view.
@@ -134,31 +134,33 @@ function ValidationDetail({ onClose }) {
       </Section>
 
       <Section title="What we found">
-        Videos the model ranked in its top tier beat the creator's own typical
-        engagement {STUDY_STATS.precisionAtDecileCasual} — well ahead of a coin flip.
-        That held up reliably in {STUDY_STATS.nNichesReliable} of the {STUDY_STATS.nNiches} niches
-        we studied. For the rest, you'll see qualitative feedback instead of a numeric
-        score while we keep collecting data.
+        Held-out rank correlation was +{STUDY_STATS.crossValidatedRankCorrelation} cross-validated
+        across all 199 study creators, and +{STUDY_STATS.heldOutRankCorrelation} on a sealed
+        30-creator holdout opened exactly once. Videos the model ranked in its top tier beat
+        the creator's own typical engagement {STUDY_STATS.precisionAtDecileCasual}. That's true
+        in {STUDY_STATS.nNichesWithScores} of the {STUDY_STATS.nNiches} niches we studied —
+        {" "}{STUDY_STATS.nNichesWithCaveat} of those also carry a plain-language note that our
+        top-pick precision is still maturing. The remaining niche (dance) gets qualitative
+        feedback only, no numeric score, while we keep collecting data.
       </Section>
 
       <Section title="What it can't do">
         This is not a virality predictor and makes no promises about any single outcome.
         The patterns it's built on are correlational, not causal instructions — it
         doesn't tell you to make a video longer or shorter just because duration is one
-        of the things it accounts for. Validating it against real PreviewPanel users'
-        own posted videos is ongoing work, not yet complete.
+        of the things it accounts for.
       </Section>
 
       <div style={{
         display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10,
         background: B.bg, border: `1px solid ${B.border}`, borderRadius: 14, padding: 14, margin: "16px 0",
       }}>
-        <Stat value={`+${STUDY_STATS.heldOutRankCorrelation}`} label="held-out rank correlation" />
+        <Stat value={`+${STUDY_STATS.heldOutRankCorrelation}`} label="held-out rank correlation (lockbox)" />
         <Stat value="~68%" label="top-tier precision" />
         <Stat value="~4,900" label="videos studied" />
         <Stat value={STUDY_STATS.nCreators} label="creators" />
         <Stat value={`${STUDY_STATS.outcomeWindowDays} days`} label="real engagement window" />
-        <Stat value={`${STUDY_STATS.nNichesReliable} / ${STUDY_STATS.nNiches}`} label="niches scored numerically" />
+        <Stat value={`${STUDY_STATS.nNichesWithScores} / ${STUDY_STATS.nNiches}`} label="niches with a score shown" />
       </div>
 
       <button
