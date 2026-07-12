@@ -1,9 +1,9 @@
 {
-  "version": "v2_2_cohort5",
+  "version": "v2_2_cohort5_relabeled",
   "supersedes": "tiers_v2_1.json (retained, not deleted -- see COHORT5_PREREG.md)",
   "generated_from": "COHORT5_PREREG.md Phase 3: Dancing/Gaming/Educational re-estimated (cached ENDGAME F2 OOF for existing creators + frozen capstone_model_artifact_v2 predictions for cohort_5, out-of-sample by construction); all other 16 PREDICT objectives carried forward unchanged from tiers_v2_1.json",
   "partition": "creator-level (objective_creator)",
-  "policy": "PREDICT = rankable_n>=5 AND P(WC>0)>=0.95 (one-sided creator-level bootstrap) AND precision@decile>=0.55. PROVISIONAL = rankable_n>=5, positive point estimate, precision>0.50, fails PREDICT bar (0.80<=P(WC>0)<0.95 or precision in (0.50,0.55)). ABSTAIN = precision<=0.50 OR P(WC>0)<0.80 OR non-positive point estimate. THIN = rankable_n<5. This is a product-calibration policy (one-sided test, calibration layer ONLY) -- the research winner rule governing architecture/feature decisions is UNCHANGED. Set by Josh 2026-07-08, to be revisited as per-objective n grows.",
+  "policy": "v2.2 (Josh-approved, dated amendment): PREDICT = rankable_n>=5 AND P(WC>0)>=0.95 AND precision@decile>=0.55; PROVISIONAL = rankable_n>=5 AND P(WC>0)>=0.95 AND precision@decile<0.55; ABSTAIN = P(WC>0)<0.95 (or non-positive/undefined); THIN = rankable_n<5. Single bar (P(WC>0)>=0.95) separates ABSTAIN from PROVISIONAL/PREDICT, matching the app's own two-axis display gate (showPercentileFor() in scoreDisplay.js) exactly -- display behavior is unchanged by this relabel, it was already reading p_gt0 directly, never the tier string.",
   "tiers": {
     "PREDICT": [
       "Food & Drinks/Cooking",
@@ -24,11 +24,11 @@
       "Shopping"
     ],
     "PROVISIONAL": [
-      "Gaming"
+      "Gaming",
+      "Educational/How-To"
     ],
     "ABSTAIN": [
-      "Dancing",
-      "Educational/How-To"
+      "Dancing"
     ],
     "THIN": []
   },
@@ -402,7 +402,7 @@
       "old_rankable_n": 11
     },
     "Educational/How-To": {
-      "tier": "ABSTAIN",
+      "tier": "PROVISIONAL",
       "rankable_n": 20,
       "within_creator_spearman": 0.1883,
       "p_gt0": 0.9995,

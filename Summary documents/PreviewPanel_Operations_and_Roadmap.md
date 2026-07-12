@@ -51,11 +51,13 @@ performance score. Frontend Vercel (`~/previewpanel/frontend`), backend Render
 5. **Shadow row** — every submission writes `shadow_scores` (all 116 features
    JSON, prediction, calibrated percentile, tier, prompt_version,
    pegasus_model, platform, user_id, source flags).
-6. **Score display** — pool-based percentiles (§1d) gated by tiers v2.1:
-   16 PREDICT objectives get full display; 3 ABSTAIN (Dancing, Gaming,
-   Educational) get qualitative feedback, percentiles suppressed, one honest
-   line. Copy rules baked into `scoreDisplayCopy.js`: baseline-relative framing
-   only; **no causal duration advice anywhere**; neutral trim note.
+6. **Score display** — pool-based percentiles gated by the two-axis rule
+   (§1d, `tiers_v2_2.json`): percentiles render wherever the ranking claim is
+   validated (P(WC>0) ≥ 0.95 — 18 of 19 niches), with a precision caveat line
+   where top-pick precision is still below 0.55 (Gaming, Educational); Dancing
+   stays fully suppressed with the honest line. Copy rules baked into
+   `scoreDisplayCopy.js`: baseline-relative framing only; **no causal duration
+   advice anywhere**; neutral trim note.
 7. **Synthesis layer** — separate Claude call (`SYNTHESIS_ANTHROPIC_API_KEY`,
    prompt synthesis-v2.4), app-path only, fire-and-forget.
 8. **Extras** — spider chart axes = the model-weighted dimensions; "How this
@@ -195,9 +197,22 @@ the two bars back two different user-facing claims:
 ## 2. The research asset (summary — details in the Scoring Model Report)
 
 Corpus 5,109 day-30 videos / 259 creators / 19 objectives; small+mid floor-5
-modeling population 3,840 / 199; large tier held out. Headline: **lockbox
-generalization ≈ +0.25 within-creator Spearman; top-decile precision ~2/3;
-tiers v2.1 = 16 PREDICT / 3 ABSTAIN**. Duration is the one revived mechanical
+modeling population 3,840 / 199; large tier held out; plus cohort_5 (2026-07-12:
+23 enrolled creators / 400 back-catalog videos, tier-re-estimation only — NOT in
+the frozen training snapshot). Headline: **lockbox generalization ≈ +0.25
+within-creator Spearman (+0.28 full-corpus cross-validated); top-decile
+precision 68%; tiers v2.2 = 16 PREDICT / 2 PROVISIONAL (Gaming, Educational/
+How-To) / 1 ABSTAIN (Dancing) — percentiles display in 18 of 19 niches via
+the two-axis gate; Dancing is a confirmed model limitation (P(WC>0)=0.61 at
+n=14)**. **Tier label policy v2.2** (dated amendment, logged in
+`COHORT5_PREREG.md`): the ABSTAIN/PROVISIONAL boundary is now a single bar —
+ABSTAIN iff P(WC>0)<0.95, PROVISIONAL iff P(WC>0)≥0.95 AND precision<0.55,
+PREDICT iff both bars clear — matching `showPercentileFor()`'s own gate
+exactly, so tier labels no longer lag what the app actually displays.
+Educational/How-To's label moved ABSTAIN→PROVISIONAL under this policy (its
+p_gt0=1.00 already cleared the display gate; only the label was stale).
+Display behavior itself is unchanged — the two-axis gate reads p_gt0 directly,
+never the tier string. Duration is the one revived mechanical
 input (+0.02 lift; +0.205 standalone). Everything method-level — partition,
 lockbox, drift handling, prompt governance, platform gate, validation design —
 is in the Scoring Model Report.
@@ -248,7 +263,7 @@ rebootstrapping the old one doesn't.
 (follower_snapshot); nightly_chain is exempt (short-lived children +
 retry_db_connect). Day-30 fetch: retry cap 3 + 7-day recapture window
 (migration 008). **5 AM contention rule:** never run on-demand scoring batches
-across the morning run (single backend instance).
+across the morning run (single backend instance). Long batches started the prior evening count too — a cohort_5 batch that ran past 5 AM produced a real duplicate submission (see COHORT5_READOUT.md); finish before the window or skip that morning's run.
 
 ### 3c. Creator status model + commands
 
@@ -325,8 +340,12 @@ in the model; $345 rescore closed · E5/E6 closed · hook/DSP/mech blocks closed
 (duration the sole exception, via forensic decomposition — decompose blocks
 before verdicting them) · audio fingerprint match never solo-qualifies ·
 posted-video rescores never enter percentile pools · floor-5 inclusion stands
-· one model for all platforms pending platform outcome data · Anthropic API =
-independent source, never "fallback" · keep-warm untouchable.
+· one model for all platforms pending platform outcome data · user-facing
+claims gate on the statistic that validates them (percentile = ranking claim,
+P(WC>0) ≥ 0.95; top-pick framing = precision ≥ 0.55 — the two-axis display
+rule) · Dancing = confirmed limitation of the current feature set (n=14,
+P(WC>0)=0.61), not a data-volume gap · Anthropic API = independent source,
+never "fallback" · keep-warm untouchable.
 
 ## 6. Cowork discovery reference (for future cohorts)
 

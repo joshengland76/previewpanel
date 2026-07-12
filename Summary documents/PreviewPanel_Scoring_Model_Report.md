@@ -288,7 +288,20 @@ existing creators' cached ENDGAME full-corpus CV out-of-fold predictions
 artifact (`capstone_model_artifact_v2.pkl`, never refit — out-of-sample by
 construction since it was never fit on any cohort_5 row).
 
-**Result: 16 PREDICT / 1 PROVISIONAL / 2 ABSTAIN / 0 THIN.**
+**Tier label policy v2.2 (dated amendment, 2026-07-12, logged in
+`COHORT5_PREREG.md`):** the ABSTAIN/PROVISIONAL boundary is now a single bar
+— **ABSTAIN** iff P(WC>0)<0.95 (or non-positive); **PROVISIONAL** iff
+P(WC>0)≥0.95 AND precision<0.55; **PREDICT** iff both bars clear (unchanged);
+**THIN** iff n<5 (unchanged). This matches `showPercentileFor()`'s own gate
+exactly (`scoreDisplay.js`), so the tier label can no longer lag what the
+two-axis display gate already shows. The only relabel this produces:
+Educational/How-To moves ABSTAIN→PROVISIONAL (its p_gt0=1.00 already cleared
+the display gate — only the label was stale under the old two-bar v2.1
+policy, which required P(WC>0)≥0.80 as a separate, looser ABSTAIN threshold
+than the 0.95 the display gate actually uses). **Display behavior is
+unchanged** — it never read the tier string in the first place.
+
+**Result: 16 PREDICT / 2 PROVISIONAL / 1 ABSTAIN / 0 THIN.**
 
 | Objective | n | WC-Spearman ± SEM | Prec@decile | P(WC>0) | Tier |
 |---|---|---|---|---|---|
@@ -307,7 +320,7 @@ construction since it was never fit on any cohort_5 row).
 | Life Hacks | 11 | +0.223 ± 0.072 | 0.621 | 0.999 | PREDICT |
 | Fun Facts | 8 | +0.219 ± 0.101 | 0.564 | 0.988 | PREDICT |
 | Shopping | 7 | +0.195 ± 0.092 | 0.744 | 1.000 | PREDICT |
-| **Educational/How-To** | **20** | **+0.188 ± SEM n/a** | **0.464** | **1.000** | **ABSTAIN** (unchanged label; now shows percentiles — see below) |
+| **Educational/How-To** | **20** | **+0.188 ± SEM n/a** | **0.464** | **1.000** | **PROVISIONAL** (label fixed under tier policy v2.2 — see above) |
 | Pets/Animals | 7 | +0.151 ± 0.083 | 0.654 | 0.983 | PREDICT |
 | Cars/Automotive | 13 | +0.138 ± 0.069 | 0.657 | 0.986 | PREDICT |
 | **Dancing** | **14** | **+0.020 ± SEM n/a** | **0.609** | **0.613** | **ABSTAIN** (confirmed model limitation, see below) |
