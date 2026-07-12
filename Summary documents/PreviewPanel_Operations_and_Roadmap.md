@@ -145,6 +145,29 @@ filtered on `pool_eligible` (that flag is cross-user pool hygiene; a user's
 own history dedupes by video identity via the fingerprint group instead).
 See `PERSONAL_DEDUP_READOUT.md`.
 
+**Two-axis percentile gate (`tiers_v2_2.json`, cohort_5 Phase 3d):** whether
+a percentile *renders at all* is no longer read off the tier label
+(PREDICT/PROVISIONAL/ABSTAIN/THIN). `scoreDisplay.js`'s `showPercentile` is
+computed directly from the objective's own `p_gt0` (one-sided bootstrap
+P(within-creator-Spearman>0)): `showPercentile = p_gt0 >= 0.95`. This is
+deliberately independent of the separate `precision_at_decile >= 0.55` bar
+that `tier_policy_v2_1` additionally requires to reach the PREDICT label —
+the two bars back two different user-facing claims:
+- **Ranking claim** ("beats N% of..."): backed by P(WC>0), a within-creator
+  rank-correlation confidence. Gates `showPercentile` alone.
+- **Top-pick / precision claim** (implicit in a high percentile reading as
+  "this will likely perform well"): backed by `precision_at_decile`, a
+  hit-rate-in-the-top-decile measure. When `showPercentile` is true but
+  precision is still below 0.55, the score card adds one extra line
+  (`precisionCaveatLine`, a constant in `scoreDisplayCopy.js`): "Percentiles
+  here reflect validated ranking for this niche; our top-pick hit rate is
+  still maturing." Objectives that don't clear `p_gt0>=0.95` at all
+  (Dancing: 0.613) stay fully suppressed with the existing honest-line copy.
+  Every objective that was already PREDICT clears both bars by construction,
+  so all 16 render exactly as before — this only changes behavior for
+  objectives that clear the ranking bar but not the precision bar (Gaming,
+  Educational/How-To as of `tiers_v2_2.json`).
+
 ### 1e. Real-user validation subsystem (Phase C)
 
 - **Identity-lite:** persistent client UUID; `users` table with TikTok
@@ -236,6 +259,11 @@ across the morning run (single backend instance).
   back-catalog collected **once** (30–90-day-old window, **20-video cap**,
   day-30-equivalent interval label via `backcatalog_recapture.py`-style
   collection). Non-backfill policy for cohort_1/2 pre-enrollment catalogs.
+  cohort_5 (23 Dancing/Gaming/Educational creators, 2026-07-12) followed this
+  convention exactly, and additionally populated `follower_count_at_start`
+  at enrollment time (a live scrape, written alongside `follower_count_current`)
+  — closing the fleet-wide gap where that column had been 100% NULL for
+  every prior cohort (see `CAPSTONE_PREREG_v2.md` amendment 1).
 
 Neon is the source of truth; `sync_creators.py` overwrites SQLite each night:
 ```
@@ -265,14 +293,22 @@ C_dims $0.028/video · posted-video validation rescore ~$0.10 · anchor run ~$2
   beat the same users' Tier-1 posts?) entry criterion: first users with ≥5
   collected posted videos.
 - **Phase D — post-validation:**
-  1. **Cohort_5 enrollment** (vetting done 2026-07-09; block in
-     STAGED_WORK.md): Dancing 9 · Gaming 8 · Educational 7 keeps (+4
-     reserves), 20-video cap, re-verify the 30–90-day window at enrollment,
-     50/500 tier convention. Then **tier re-estimation** for the three ABSTAIN
-     objectives (projected rankable n ≈ 14/19/20).
-  2. Gaming/Educational precision recheck (both rank-confident already;
-     ABSTAIN on precision only — a possible third display state is stubbed in
-     code).
+  1. **Cohort_5 enrollment + tier re-estimation: COMPLETE (2026-07-12).**
+     Enrolled 23 of the planned 24 (Dancing 9, Gaming 7, Educational 7 —
+     Gaming landed one short: `puckykat` no longer existed under that handle,
+     `ecocacolaaa` failed the 10-video floor, and only one Gaming reserve
+     existed to fill both gaps). Re-estimated Dancing/Gaming/Educational
+     against pooled cached-OOF + frozen-artifact predictions: Dancing stays
+     ABSTAIN (p_gt0=0.613 — a confirmed model limitation for this niche, not
+     a data problem); Gaming flips ABSTAIN→PROVISIONAL (p_gt0=0.9905,
+     precision=0.507); Educational/How-To stays ABSTAIN on tier label but
+     also clears p_gt0 (0.9995, precision=0.464). See `tiers_v2_2.json` and
+     `COHORT5_READOUT.md`.
+  2. **Gaming/Educational precision resolved via the two-axis display gate**
+     (§1d above) — shipped, not stubbed. Both objectives now show real
+     percentiles (gated on p_gt0 alone) paired with a precision caveat line,
+     rather than staying fully suppressed pending a future third display
+     state.
   3. Platform-specific models — revisit only with platform outcome data.
   4. v3 sharpened C_dims extractor — parked lab avenue.
 - **Standing calendar:** anchor rescore ~Aug 9 · drift retest ~Sept ·

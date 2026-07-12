@@ -7,10 +7,10 @@ study and the scoring model, written to be understood and replicated a year from
 now without reference to any prior version. The one companion document is
 `PreviewPanel_Operations_and_Roadmap.md` (how the system runs operationally); this one is the science. (Supersedes the Scoring Study Writeup v1/v2 lineage, both retained unmodified for history.)
 
-**Scheduled touch-ups:** (1) cohort_5 tier re-estimation for Dancing / Gaming /
-Educational once ~24 new creators' data matures; (2) first real-user validation
-numbers from the Phase-C dashboard; (3) the ~Sept 2026 back-catalog 60-day drift
-retest.
+**Scheduled touch-ups:** (1) ~~cohort_5 tier re-estimation for Dancing / Gaming /
+Educational once ~24 new creators' data matures~~ **DONE 2026-07-12** — see §7's
+v2.2 update; (2) first real-user validation numbers from the Phase-C dashboard;
+(3) the ~Sept 2026 back-catalog 60-day drift retest.
 
 ---
 
@@ -67,6 +67,7 @@ an alternate 150K/750K band briefly used at cohort-3/4 enrollment was reconciled
 | cohort_2 | 2,222 | Active daily monitoring, then capped |
 | cohort_3 | 684 | **Enrolled** back-catalog (see below) |
 | cohort_4 | 462 | **Enrolled** back-catalog |
+| cohort_5 | 400 | **Enrolled** back-catalog, Dancing/Gaming/Educational only (2026-07-12; 23 creators, `backcatalog_day30_equiv_2026_07` label) |
 | Path-4 backfill | +114 (within c1/c2) | One-time back-catalog depth on existing creators |
 
 **The `enrolled` collection mode (cohorts 3+):** creators are inserted with
@@ -93,6 +94,13 @@ Path-4 was the one scoped exception).
 
 Floor-5 = a creator needs ≥5 scored videos to be rankable. Sensitivity at floors
 10/15 was tested (§6d) — floor-5 stands.
+
+**cohort_5 is NOT part of this frozen snapshot.** The 400 cohort_5 videos
+(3a) postdate the 2026-07-07 capstone snapshot and were never used to refit
+or retrain the model — they were scored out-of-sample with the frozen shipped
+artifact (`capstone_model_artifact_v2.pkl`) purely for the Dancing/Gaming/
+Educational tier re-estimation in §7. The model itself, and the 3,840/199
+population above, are unchanged by cohort_5.
 
 ### 3c. Feature sources (what the model sees)
 
@@ -271,38 +279,61 @@ originally shipped v2 table had a code bug — its own precision≤0.50 clause w
 never checked, mislabeling Gaming and Educational; fixed and logged separately
 from the policy change.)
 
-**Result: 16 PREDICT / 0 PROVISIONAL / 3 ABSTAIN / 0 THIN.**
+**Updated 2026-07-12 (`tiers_v2_2.json`) — cohort_5 re-estimation.** Dancing,
+Gaming, and Educational/How-To were re-estimated after enrolling 23 cohort_5
+creators (see `COHORT5_READOUT.md`); the other 16 PREDICT objectives below are
+unchanged from v2.1. Predictions pool two out-of-sample sources per objective:
+existing creators' cached ENDGAME full-corpus CV out-of-fold predictions
+(unchanged), and cohort_5's own creators scored with the frozen shipped
+artifact (`capstone_model_artifact_v2.pkl`, never refit — out-of-sample by
+construction since it was never fit on any cohort_5 row).
 
-| Objective | n | WC-Spearman ± SEM | Prec@decile | Max creator share | Tier |
+**Result: 16 PREDICT / 1 PROVISIONAL / 2 ABSTAIN / 0 THIN.**
+
+| Objective | n | WC-Spearman ± SEM | Prec@decile | P(WC>0) | Tier |
 |---|---|---|---|---|---|
-| Travel | 10 | +0.446 ± 0.060 | 0.819 | 24.1% | PREDICT |
-| Myth Busting | 7 | +0.421 ± 0.097 | 0.789 | 18.3% | PREDICT |
-| Makeup/Beauty | 15 | +0.384 ± 0.076 | 0.863 | 11.7% | PREDICT |
-| Business/Finance | 13 | +0.369 ± 0.064 | 0.662 | 12.0% | PREDICT |
-| Storytelling | 12 | +0.368 ± 0.058 | 0.698 | 15.8% | PREDICT |
-| Fashion | 7 | +0.366 ± 0.087 | 0.745 | 33.3% | PREDICT |
-| Aesthetic/Vibes | 12 | +0.333 ± 0.109 | 0.766 | 13.6% | PREDICT |
-| Food & Drinks/Cooking | 9 | +0.307 ± 0.126 | 0.659 | 20.0% | PREDICT |
-| Funny Videos/Comedy | 13 | +0.295 ± 0.092 | 0.656 | 14.2% | PREDICT |
-| Fitness/Wellness | 15 | +0.256 ± 0.054 | 0.729 | 20.4% | PREDICT |
-| Gaming | 11 | +0.244 ± 0.110 | 0.500 | 11.1% | **ABSTAIN** |
-| ASMR | 11 | +0.223 ± 0.098 | 0.648 | 13.6% | PREDICT |
-| Life Hacks | 11 | +0.223 ± 0.072 | 0.621 | 14.2% | PREDICT |
-| Fun Facts | 8 | +0.219 ± 0.101 | 0.564 | 15.5% | PREDICT |
-| Shopping | 7 | +0.195 ± 0.092 | 0.744 | 19.5% | PREDICT |
-| Educational/How-To | 13 | +0.169 ± 0.076 | 0.414 | 10.9% | **ABSTAIN** |
-| Pets/Animals | 7 | +0.151 ± 0.083 | 0.654 | 23.9% | PREDICT |
-| Cars/Automotive | 13 | +0.138 ± 0.069 | 0.657 | 10.3% | PREDICT |
-| Dancing | 5 | −0.082 ± 0.108 | 0.533 | 20.6% | **ABSTAIN** |
+| Travel | 10 | +0.446 ± 0.060 | 0.819 | 1.000 | PREDICT |
+| Myth Busting | 7 | +0.421 ± 0.097 | 0.789 | 1.000 | PREDICT |
+| Makeup/Beauty | 15 | +0.384 ± 0.076 | 0.863 | 1.000 | PREDICT |
+| Business/Finance | 13 | +0.369 ± 0.064 | 0.662 | 1.000 | PREDICT |
+| Storytelling | 12 | +0.368 ± 0.058 | 0.698 | 1.000 | PREDICT |
+| Fashion | 7 | +0.366 ± 0.087 | 0.745 | 1.000 | PREDICT |
+| Aesthetic/Vibes | 12 | +0.333 ± 0.109 | 0.766 | 1.000 | PREDICT |
+| Food & Drinks/Cooking | 9 | +0.307 ± 0.126 | 0.659 | 0.992 | PREDICT |
+| Funny Videos/Comedy | 13 | +0.295 ± 0.092 | 0.656 | 1.000 | PREDICT |
+| Fitness/Wellness | 15 | +0.256 ± 0.054 | 0.729 | 1.000 | PREDICT |
+| **Gaming** | **18** | **+0.183 ± SEM n/a** | **0.507** | **0.991** | **PROVISIONAL** (was ABSTAIN) |
+| ASMR | 11 | +0.223 ± 0.098 | 0.648 | 0.990 | PREDICT |
+| Life Hacks | 11 | +0.223 ± 0.072 | 0.621 | 0.999 | PREDICT |
+| Fun Facts | 8 | +0.219 ± 0.101 | 0.564 | 0.988 | PREDICT |
+| Shopping | 7 | +0.195 ± 0.092 | 0.744 | 1.000 | PREDICT |
+| **Educational/How-To** | **20** | **+0.188 ± SEM n/a** | **0.464** | **1.000** | **ABSTAIN** (unchanged label; now shows percentiles — see below) |
+| Pets/Animals | 7 | +0.151 ± 0.083 | 0.654 | 0.983 | PREDICT |
+| Cars/Automotive | 13 | +0.138 ± 0.069 | 0.657 | 0.986 | PREDICT |
+| **Dancing** | **14** | **+0.020 ± SEM n/a** | **0.609** | **0.613** | **ABSTAIN** (confirmed model limitation, see below) |
 
-Nuance worth preserving: **Gaming and Educational are rank-confident**
-(P(WC>0) ≈ 0.99) and ABSTAIN **only on precision** — top-decile flags there are
-coin-flip or worse, so the product suppresses percentile claims while internal
-ranking remains meaningful. Dancing at n=5 cannot distinguish −0.08 from noise.
-All three are targeted by the staged cohort_5 topoff (~24 keeps: Dancing 9,
-Gaming 8, Educational 7), after which tiers get re-estimated. In the product,
-ABSTAIN objectives receive qualitative feedback with percentiles suppressed and
-one honest line.
+**Claims-to-statistics mapping (why the table above no longer fully determines
+what the product shows):** a percentile makes a *ranking* claim ("beats N% of
+similar videos"), backed by P(WC>0) — the confidence that within-creator rank
+correlation is genuinely positive. A high percentile *reading* as "pick this
+one" is a separate *precision* claim, backed by precision@decile — whether the
+top-decile-predicted videos actually over-perform. Historically these were
+conflated: the PREDICT label required both, so an objective failing precision
+alone was fully suppressed even when its ranking claim was solid. As of the
+cohort_5 pass, the product's display gate reads these two statistics directly
+(`showPercentile = P(WC>0) ≥ 0.95`, independent of the tier label) rather than
+the tier string — see `PreviewPanel_Operations_and_Roadmap.md` §1d. Gaming and
+Educational/How-To both clear the ranking bar (P(WC>0) ≈ 0.99–1.00) without
+clearing precision (0.51, 0.46) — they now show real percentiles paired with a
+caveat line, rather than staying suppressed pending a hypothetical third
+display state. **Dancing is the one confirmed model limitation from this
+pass**: even at n=14 (up from 5), P(WC>0)=0.613 is far below the 0.95 ranking
+bar — the model does not yet demonstrate a reliable within-creator ranking
+signal for this niche, and its percentile stays suppressed with the existing
+honest-line copy. This is a real, stated limitation, not a data-volume
+artifact to paper over — more cohort_5-style enrollment could resolve it, or
+could confirm Dancing genuinely needs different features/signal than the
+current locked feature set captures.
 
 ## 8. Measurement stability — versions, drift, and prompt governance
 
