@@ -118,7 +118,7 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
       {hasPercentile && (
         <div style={{ marginTop: 4 }}>
           {scoreDisplay.overallAppHeadline && (
-            <div style={{ fontSize: 11, fontWeight: 800, color: B.body, whiteSpace: "nowrap" }}>{scoreDisplay.overallAppHeadline}</div>
+            <div style={{ fontSize: 11.5, fontWeight: 800, color: B.body, whiteSpace: "nowrap" }}>{scoreDisplay.overallAppHeadline}</div>
           )}
           {(scoreDisplay.headline || scoreDisplay.personalHeadline) && (
             <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "center" }}>
