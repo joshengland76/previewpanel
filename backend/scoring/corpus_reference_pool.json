@@ -23172,6 +23172,12 @@
     "posted_at": "2026-04-22T15:14:05+00:00"
   },
   {
+    "video_id": 6157,
+    "objective": "Gaming",
+    "prediction_cal": -0.26499972269124955,
+    "posted_at": "2026-04-22T19:13:30+00:00"
+  },
+  {
     "video_id": 5992,
     "objective": "Gaming",
     "prediction_cal": -0.1384883762086655,
@@ -23196,6 +23202,12 @@
     "posted_at": "2026-04-24T14:30:00+00:00"
   },
   {
+    "video_id": 6158,
+    "objective": "Gaming",
+    "prediction_cal": -0.13594248233362854,
+    "posted_at": "2026-04-23T16:59:19+00:00"
+  },
+  {
     "video_id": 6159,
     "objective": "Gaming",
     "prediction_cal": -0.0661577074432563,
@@ -23212,6 +23224,12 @@
     "objective": "Educational/How-To",
     "prediction_cal": 0.19679774016555998,
     "posted_at": "2026-04-25T09:07:42+00:00"
+  },
+  {
+    "video_id": 6236,
+    "objective": "Educational/How-To",
+    "prediction_cal": -0.019696186962773272,
+    "posted_at": "2026-04-25T12:08:08+00:00"
   },
   {
     "video_id": 6272,
@@ -23286,6 +23304,12 @@
     "posted_at": "2026-04-28T15:06:04+00:00"
   },
   {
+    "video_id": 6161,
+    "objective": "Gaming",
+    "prediction_cal": 0.039063002789230486,
+    "posted_at": "2026-04-28T17:26:14+00:00"
+  },
+  {
     "video_id": 6214,
     "objective": "Educational/How-To",
     "prediction_cal": 0.16586988659238266,
@@ -23308,6 +23332,12 @@
     "objective": "Gaming",
     "prediction_cal": -0.21061647179290569,
     "posted_at": "2026-04-29T17:29:41+00:00"
+  },
+  {
+    "video_id": 6116,
+    "objective": "Gaming",
+    "prediction_cal": 0.08927326729561073,
+    "posted_at": "2026-04-30T01:35:23+00:00"
   },
   {
     "video_id": 6238,
@@ -23350,6 +23380,12 @@
     "objective": "Gaming",
     "prediction_cal": -0.11755240527683954,
     "posted_at": "2026-05-01T21:08:28+00:00"
+  },
+  {
+    "video_id": 6009,
+    "objective": "Gaming",
+    "prediction_cal": -0.20297763591542325,
+    "posted_at": "2026-05-02T02:20:10+00:00"
   },
   {
     "video_id": 6145,
@@ -23472,6 +23508,12 @@
     "posted_at": "2026-05-06T16:21:49+00:00"
   },
   {
+    "video_id": 6165,
+    "objective": "Gaming",
+    "prediction_cal": -0.13172197287453372,
+    "posted_at": "2026-05-06T18:52:24+00:00"
+  },
+  {
     "video_id": 6121,
     "objective": "Gaming",
     "prediction_cal": 0.09241688904835119,
@@ -23542,12 +23584,6 @@
     "objective": "Gaming",
     "prediction_cal": 0.14954483458173293,
     "posted_at": "2026-05-11T00:29:33+00:00"
-  },
-  {
-    "video_id": 6088,
-    "objective": "Educational/How-To",
-    "prediction_cal": -0.25771007706270826,
-    "posted_at": "2026-05-11T01:45:34+00:00"
   },
   {
     "video_id": 6241,
@@ -23856,6 +23892,12 @@
     "posted_at": "2026-05-24T17:31:20+00:00"
   },
   {
+    "video_id": 6097,
+    "objective": "Gaming",
+    "prediction_cal": -0.17517077036121206,
+    "posted_at": "2026-05-24T18:33:56+00:00"
+  },
+  {
     "video_id": 6265,
     "objective": "Educational/How-To",
     "prediction_cal": -0.009530615645006176,
@@ -23920,6 +23962,12 @@
     "objective": "Educational/How-To",
     "prediction_cal": -0.05328788130692934,
     "posted_at": "2026-05-27T14:41:29+00:00"
+  },
+  {
+    "video_id": 6150,
+    "objective": "Gaming",
+    "prediction_cal": 0.07503704826649066,
+    "posted_at": "2026-05-28T01:09:08+00:00"
   },
   {
     "video_id": 6101,
@@ -24370,6 +24418,12 @@
     "objective": "Educational/How-To",
     "prediction_cal": 0.060106946100566425,
     "posted_at": "2026-06-11T13:46:37+00:00"
+  },
+  {
+    "video_id": 6024,
+    "objective": "Gaming",
+    "prediction_cal": -0.23978986340139216,
+    "posted_at": "2026-06-11T14:24:52+00:00"
   },
   {
     "video_id": 5896,
