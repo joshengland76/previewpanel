@@ -37,13 +37,13 @@ export const STUDY_STATS = {
 // is one of 60 inputs, not a distinguishing one worth naming on its own --
 // in favor of stating the model's actual scale.)
 export const METHODOLOGY_MODAL_TEXT =
-  "PreviewPanel's score is a prediction of relative performance: how this " +
-  "video is likely to do compared with your own typical video, based on " +
-  "what's in the video itself. It comes from a study of about 4,900 TikTok " +
-  "videos from 259 creators across 19 niches, tracking real 30-day " +
+  "PreviewPanel's scoring is a prediction of relative performance: how " +
+  "this video is likely to do compared with your own typical video, based " +
+  "on what's in the video itself. It comes from a study of about 4,900 " +
+  "TikTok videos from 259 creators across 19 niches, tracking real 30-day " +
   "engagement (likes, shares, and saves per view). The model reads the same " +
   "signals our judges do — hook, emotion, pacing, clarity — across 60 " +
-  "variables in total, and turns them into a single prediction. In held-out " +
+  "correlated variables in total, and turns them into a single prediction. In held-out " +
   "testing on creators the model had never seen, videos it ranked in its " +
   "top tier beat the creator's typical engagement about 2 out of 3 times. " +
   "It's a ranking aid, not a crystal ball: it tells you which of your " +

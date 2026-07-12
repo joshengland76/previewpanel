@@ -31,7 +31,7 @@ export function MethodologyDropdown({ platform = null, poolInfoTooltip = null })
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
         </svg>
-        How this score works
+        How the scoring works
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
           style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}>
           <path d="m6 9 6 6 6-6" />

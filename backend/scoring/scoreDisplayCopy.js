@@ -33,12 +33,14 @@ export const SCORE_DISPLAY_COPY = {
       ? "This video's predicted score is still being calibrated for your niche."
       : `Beats ${Math.round(nichePercentile)}% of ${objective} videos`,
 
-  // "vs the last 100 Fitness videos we've scored" -- poolSize is the fixed
-  // window ceiling (100/1,000), not the self-excluded count used internally
-  // for the percentile math itself; see scoreDisplay.js for why those two
-  // numbers are deliberately different.
-  predictSub: (objective, poolSize) =>
-    poolSize ? `vs the last ${poolSize} ${objective} videos we've scored` : null,
+  // "vs the last 100" -- poolSize is the fixed window ceiling (100/1,000),
+  // not the self-excluded count used internally for the percentile math
+  // itself; see scoreDisplay.js for why those two numbers are deliberately
+  // different. Deliberately no objective/"videos we've scored" suffix here
+  // (score display UI overhaul) -- the niche name is already in the stat's
+  // own headline right above this line, so repeating it read as redundant.
+  predictSub: (poolSize) =>
+    poolSize ? `vs the last ${poolSize}` : null,
 
   // "Beats 68% of the last 1,000 videos we've scored"
   overallAppHeadline: (overallAppPercentile, poolSize) =>
@@ -50,7 +52,7 @@ export const SCORE_DISPLAY_COPY = {
   personalHeadline: (personal) => {
     if (!personal) return null;
     if (personal.type === "ordinal") {
-      return `You rank ${ordinal(personal.rank)} out of your last ${personal.total} videos`;
+      return `Ranks ${ordinal(personal.rank)} out of your last ${personal.total} videos`;
     }
     return `Beats ${Math.round(personal.value)}% of your own videos`;
   },
@@ -83,11 +85,15 @@ export const SCORE_DISPLAY_COPY = {
 
   abstainHeadline: "We don't have enough reliable data yet to score this niche numerically.",
 
-  abstainHonestLine: "Reliable scoring for this niche is still in progress.",
-
-  // Neutral by design: describes what a re-cut changes (the analyzed footage)
-  // without ever implying a specific trim direction improves the score.
-  trimNote: "A shorter resubmitted cut may score differently than this one — the prediction reflects the specific cut you analyzed, not a general judgment on length.",
+  // Two distinct cases, not one: a real objective that just isn't reliably
+  // scoreable yet (data still accruing) vs. no objective at all (nothing to
+  // look up -- optional field, left blank at submission). Conflating them
+  // under one "still in progress" line was misleading for the no-objective
+  // case, which isn't "in progress," there's simply nothing selected.
+  abstainHonestLine: (objective) =>
+    objective
+      ? "Reliable scoring for this objective is still in progress."
+      : "No objective selected, so no reliable scoring is available.",
 };
 
 function ordinal(n) {

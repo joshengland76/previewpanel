@@ -82,8 +82,7 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
       personal: null,
       overallAppPercentile: null,
       headline: copy.abstainHeadline,
-      honestLine: copy.abstainHonestLine,
-      trimNote: copy.trimNote,
+      honestLine: copy.abstainHonestLine(objective),
       groupAverageNote,
     };
   }
@@ -116,11 +115,10 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
     overallAppPercentile: overallApp,
     overallPoolSize,
     headline: copy.predictHeadline(niche, objective),
-    sub: copy.predictSub(objective, nichePoolSize),
+    sub: copy.predictSub(nichePoolSize),
     personalHeadline: copy.personalHeadline(personal),
     overallAppHeadline: copy.overallAppHeadline(overallApp, overallPoolSize),
     poolInfoTooltip: copy.poolInfoTooltip(platform),
-    trimNote: copy.trimNote,
     groupAverageNote,
   };
 }

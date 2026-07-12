@@ -38,27 +38,27 @@ function actionFor(verdict) {
 }
 
 // Percentile -> color, same 3-color scale as the judge-score action colors
-// (green/amber/red), banded into rough thirds: >=66 green, >=33 amber, else
-// red. Unchanged by the score display UI overhaul (still applied to whichever
-// percentile drives the main gauge) -- only WHICH percentile it colors moved.
+// (green/amber/red). Thresholds: >=50 green, 25-49 amber, <25 red.
 function percentileColor(p) {
   if (p == null) return B.grey;
-  if (p >= 66) return ACTION.post.color;
-  if (p >= 33) return ACTION.polish.color;
+  if (p >= 50) return ACTION.post.color;
+  if (p >= 25) return ACTION.polish.color;
   return ACTION.rework.color;
 }
 
 // Secondary percentile stat (niche, personal) -- score display UI overhaul:
 // previously 12px grey text that read as fine print; now a bordered stat
 // pill with real weight, so these don't get lost next to the main gauge.
+// flex: "1 1 0" (rather than each sizing to its own content) so the niche
+// and personal boxes always match width, whichever has more/less text.
 function SecondaryStat({ label, sub }) {
   return (
     <div style={{
-      background: B.bg, border: `1px solid ${B.border}`, borderRadius: 12,
-      padding: "8px 14px", textAlign: "center", minWidth: 0,
+      flex: "1 1 0", background: B.bg, border: `1px solid ${B.border}`, borderRadius: 12,
+      padding: "8px 12px", textAlign: "center", minWidth: 0,
     }}>
-      <div style={{ fontSize: 14, fontWeight: 800, color: B.body, lineHeight: 1.3 }}>{label}</div>
-      {sub && <div style={{ fontSize: 10.5, color: B.grey, marginTop: 2 }}>{sub}</div>}
+      <div style={{ fontSize: 10, fontWeight: 800, color: B.body, lineHeight: 1.3 }}>{label}</div>
+      {sub && <div style={{ fontSize: 9, color: B.grey, marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -86,20 +86,6 @@ function Gauge({ value, max, unitLabel, color, size = 132 }) {
   );
 }
 
-// ABSTAIN: a neutral ring (no fill, no number) -- there is deliberately no
-// percentile to show here, the honest line below explains why.
-function AbstainRing({ size = 132 }) {
-  const stroke = 11;
-  const r = (size - stroke) / 2;
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block" }}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={B.lightBrown} strokeWidth={stroke} />
-      <text x="50%" y="53%" dominantBaseline="middle" textAnchor="middle"
-        fontSize="40" fontWeight="800" fill={B.grey} fontFamily="Montserrat, sans-serif">—</text>
-    </svg>
-  );
-}
-
 function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform }) {
   const verdict = synthesis.verdict || {};
   const act = actionFor(verdict);
@@ -116,23 +102,26 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
       boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)",
       padding: "24px 20px 18px", textAlign: "center", position: "relative", overflow: "hidden",
     }}>
-      <div style={{ width: 132, height: 132, margin: "2px auto 4px" }}>
-        {hasPercentile ? (
-          <Gauge value={scoreDisplay.overallAppPercentile} max={100} unitLabel="percentile" color={percentileColor(scoreDisplay.overallAppPercentile)} />
-        ) : isAbstain ? (
-          <AbstainRing />
-        ) : (
-          <Gauge value={verdict.headline_score} max={10} unitLabel="/ 10" color={act.color} />
-        )}
-      </div>
+      <p style={{ fontSize: 16, lineHeight: 1.5, color: B.body, fontWeight: 500,
+        margin: "0 auto 16px", maxWidth: "34ch" }}>{verdict.gist}</p>
+
+      {!isAbstain && (
+        <div style={{ width: 132, height: 132, margin: "2px auto 4px" }}>
+          {hasPercentile ? (
+            <Gauge value={scoreDisplay.overallAppPercentile} max={100} unitLabel="percentile" color={percentileColor(scoreDisplay.overallAppPercentile)} />
+          ) : (
+            <Gauge value={verdict.headline_score} max={10} unitLabel="/ 10" color={act.color} />
+          )}
+        </div>
+      )}
 
       {hasPercentile && (
         <div style={{ marginTop: 4 }}>
           {scoreDisplay.overallAppHeadline && (
-            <div style={{ fontSize: 15, fontWeight: 800, color: B.body }}>{scoreDisplay.overallAppHeadline}</div>
+            <div style={{ fontSize: 11, fontWeight: 800, color: B.body, whiteSpace: "nowrap" }}>{scoreDisplay.overallAppHeadline}</div>
           )}
           {(scoreDisplay.headline || scoreDisplay.personalHeadline) && (
-            <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "center" }}>
               {scoreDisplay.headline && (
                 <SecondaryStat label={scoreDisplay.headline} sub={scoreDisplay.sub} />
               )}
@@ -156,18 +145,9 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
         </div>
       )}
 
-      <p style={{ fontSize: 16, lineHeight: 1.5, color: B.body, fontWeight: 500,
-        margin: "15px auto 4px", maxWidth: "34ch" }}>{verdict.gist}</p>
-
       {scoreDisplay?.groupAverageNote && (
         <div style={{ fontSize: 11, color: B.grey, marginTop: 8, maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
           {scoreDisplay.groupAverageNote}
-        </div>
-      )}
-
-      {scoreDisplay?.trimNote && (
-        <div style={{ fontSize: 11, color: B.grey, marginTop: 8, fontStyle: "italic", maxWidth: 320, marginLeft: "auto", marginRight: "auto" }}>
-          {scoreDisplay.trimNote}
         </div>
       )}
 

@@ -60,7 +60,18 @@ checkTrue("ABSTAIN tier suppresses percentile flag", abstainDisplay.showPercenti
 check("ABSTAIN tier nichePercentile is null", abstainDisplay.nichePercentile, null);
 check("ABSTAIN tier overallAppPercentile is null", abstainDisplay.overallAppPercentile, null);
 check("ABSTAIN tier personal is null", abstainDisplay.personal, null);
-checkTrue("ABSTAIN tier includes the honest line", abstainDisplay.honestLine === "Reliable scoring for this niche is still in progress.");
+checkTrue("ABSTAIN tier (real objective) includes the objective-phrased honest line",
+  abstainDisplay.honestLine === "Reliable scoring for this objective is still in progress.");
+
+// No-objective case is distinct from a real-objective ABSTAIN -- "in
+// progress" would be misleading when there's nothing selected to progress on.
+invalidatePoolCache();
+const noObjectiveDisplay = await getScoreDisplay("", 0, "user-1", {
+  fetchShadowRows: async () => [],
+});
+checkTrue("no-objective submission also suppresses percentile flag", noObjectiveDisplay.showPercentile === false);
+checkTrue("no-objective submission gets the distinct no-objective line",
+  noObjectiveDisplay.honestLine === "No objective selected, so no reliable scoring is available.");
 
 // ── PREDICT tier: pool wiring, integer percentiles, selfKey exclusion ──────
 invalidatePoolCache();
@@ -111,7 +122,7 @@ const ordinalCase = await getScoreDisplay(predictObjective, 0.5, "user-2", {
   fetchPersonalPredictions: async () => personalRows([[0.1], [0.2], [0.3], [0.4], [0.5]]), // 5 videos, this one included
 });
 check("5-19-video user gets an ordinal payload", ordinalCase.personal.type, "ordinal");
-checkTrue("ordinal headline mentions rank", ordinalCase.personalHeadline.includes("rank"));
+checkTrue("ordinal headline mentions rank", ordinalCase.personalHeadline.toLowerCase().includes("rank"));
 
 invalidatePoolCache();
 const percentileCase = await getScoreDisplay(predictObjective, 0.5, "user-3", {
