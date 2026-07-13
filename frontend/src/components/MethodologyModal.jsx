@@ -128,9 +128,9 @@ function ValidationDetail({ onClose }) {
         The model was tested only on creators it had never seen during training. Before
         testing began, we set aside a sealed group of {STUDY_STATS.lockboxCreators}{" "}
         creators — a "lockbox" — and opened it exactly once. Every analysis choice was
-        written down and dated before we saw its result, not after ({STUDY_STATS.preregAmendments}{" "}
-        logged amendments). Every video is scored against its own creator's typical
-        performance, not the whole platform's.
+        written down and dated before we saw its result, not after — a log that now
+        stands at {STUDY_STATS.preregAmendments} entries. Every video is scored
+        against its own creator's typical performance, not the whole platform's.
       </Section>
 
       <Section title="What we found">
