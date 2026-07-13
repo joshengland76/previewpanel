@@ -3370,46 +3370,6 @@ app.post("/api/research/submit-eval", requireResearchAuth, (req, res, next) => {
 // (see recordSubmissionForJob / runShadowScoringForJob). Reuses
 // requireResearchAuth -- this is a trusted, Josh-controlled script, not a
 // public-facing endpoint, same trust boundary as the research API.
-// TEMP -- radar/links prompt, Part B0 feasibility spike. Tests whether
-// yt-dlp can fetch metadata for public TikTok/YouTube Shorts URLs FROM
-// RENDER'S OWN ENVIRONMENT specifically (not a local machine, which isn't
-// subject to whatever IP-range blocking a cloud host might hit) before any
-// Part B UI/backend work is built. yt-dlp is not part of this service's
-// normal dependencies (validation/requirements.txt has no yt-dlp -- that
-// module's own yt-dlp calls are a Mac-side script, never deployed here);
-// installed on the fly into the existing fingerprinting venv for this one
-// throwaway check. requireResearchAuth reused as the trust boundary (same
-// as /api/validation/ingest below -- a Josh-controlled call, not public).
-// REMOVE this route once the B0 spike is read (see RADAR_LINKS_READOUT.md).
-app.post("/api/_debug/ytdlp-spike", requireResearchAuth, async (req, res) => {
-  const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
-  const pipBin = PYTHON_BIN.replace(/python3$/, "pip");
-
-  const install = await new Promise((resolve) => {
-    const p = spawn(pipBin, ["install", "--quiet", "yt-dlp"], { stdio: ["ignore", "pipe", "pipe"] });
-    let err = "";
-    p.stderr.on("data", (d) => { err += d.toString().slice(-1000); });
-    p.on("close", (code) => resolve({ code, err }));
-    p.on("error", (e) => resolve({ code: -1, err: e.message }));
-  });
-
-  const results = [];
-  for (const url of urls) {
-    const result = await new Promise((resolve) => {
-      const proc = spawn(PYTHON_BIN, ["-m", "yt_dlp", "--dump-json", "--no-warnings", "--skip-download", url],
-        { stdio: ["ignore", "pipe", "pipe"] });
-      let out = "", err = "";
-      const timer = setTimeout(() => proc.kill("SIGKILL"), 30000);
-      proc.stdout.on("data", (d) => { out += d.toString(); });
-      proc.stderr.on("data", (d) => { err += d.toString().slice(-2000); });
-      proc.on("close", (code) => { clearTimeout(timer); resolve({ url, code, outLen: out.length, err }); });
-      proc.on("error", (e) => { clearTimeout(timer); resolve({ url, code: -1, err: e.message }); });
-    });
-    results.push(result);
-  }
-  res.json({ pipInstall: install, results });
-});
-
 app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
   upload.single("video")(req, res, (err) => {
     if (err) {
