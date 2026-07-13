@@ -91,8 +91,20 @@ function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 // per-judge polygon reads the SAME value there (see header comment: these
 // are single scalars per video, not per-judge readings), so `data` (the
 // per-judge payload) is simply irrelevant for those two axes.
-function judgeAxisValue(data, axis, contentReadAxes) {
+// groupMeanBigPicture (flattened {judge}_big_{dim}/{judge}_objective_fit_score
+// keys, from the API response's job.groupMeanBigPicture) smooths the other 6
+// judge-scored axes across repeat runs of the same video, same rationale as
+// contentReadAxes above -- preferred when present, falling back to this run's
+// own per-judge data otherwise (ungrouped submissions, or fields predating
+// this feature).
+function judgeAxisValue(data, axis, contentReadAxes, groupMeanBigPicture, judgeId) {
   if (axis.contentRead) return num(contentReadAxes?.[axis.key]);
+  // groupMeanBigPicture's keys come from the backend's BIG_PICTURE_COLUMNS,
+  // which prefixes with "trendsetter" (the submissions-table/DB judge id) --
+  // JUDGES' frontend id for that judge is "cool" (see brand.js), so remap.
+  const dbJudgeId = judgeId === "cool" ? "trendsetter" : judgeId;
+  const groupKey = axis.key === "__objfit" ? `${dbJudgeId}_objective_fit_score` : `${dbJudgeId}_big_${axis.key}`;
+  if (groupMeanBigPicture && groupMeanBigPicture[groupKey] != null) return num(groupMeanBigPicture[groupKey]);
   if (axis.key === "__objfit") return num(data?.objective_fit?.score);
   return num(data?.dimensions?.big_picture?.[axis.key]);
 }
@@ -157,7 +169,7 @@ function computeLabelPlacements(vals, n, pt, ang) {
   });
 }
 
-export function PerformanceRadar({ results, contentReadAxes }) {
+export function PerformanceRadar({ results, contentReadAxes, groupMeanBigPicture }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
 
@@ -169,7 +181,7 @@ export function PerformanceRadar({ results, contentReadAxes }) {
 
   const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }, ...CONTENT_READ_AXES];
 
-  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, contentReadAxes) != null))) return null;
+  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, contentReadAxes, groupMeanBigPicture, x.judge.id) != null))) return null;
 
   const ang = (i) => (-90 + i * (360 / axes.length)) * Math.PI / 180;
   const pt = (i, v) => {
@@ -178,7 +190,7 @@ export function PerformanceRadar({ results, contentReadAxes }) {
   };
   const polyPoints = (vals) => vals.map((v, i) => pt(i, v ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
 
-  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, contentReadAxes)) }));
+  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, contentReadAxes, groupMeanBigPicture, x.judge.id)) }));
   const avgVals = axes.map((_, i) => {
     const xs = judgeVals.map((jv) => jv.vals[i]).filter((v) => v != null);
     return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : 0;

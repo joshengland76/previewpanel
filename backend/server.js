@@ -841,6 +841,16 @@ async function initDb() {
     // prediction already does for the score, rather than showing whatever one
     // particular run's own read happened to be.
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_mean_content_read_axes JSONB`);
+    // Same treatment for the other 6 spider-chart axes (the 3 judges' own
+    // big-picture dimension scores + objective fit) -- the Scoring Model
+    // Report's repeat-run variability analysis found this same run-to-run
+    // noise in the judge consensus/dispersion scores, not just C_dims, so a
+    // repeat submission should smooth these the same way too. Raw per-judge
+    // values are already durably stored as columns on `submissions`
+    // (critic_big_compelling etc.) -- this column caches the fold as of THIS
+    // row's insert, mirroring group_mean_prediction/content_read_axes exactly
+    // rather than re-querying+re-joining submissions at every read.
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_mean_big_picture JSONB`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_fp_group_key ON shadow_scores(fp_group_key)`);
     await client.query("COMMIT");
 
@@ -1749,16 +1759,27 @@ async function fingerprintPreviewForJob(jobId, filePath, { userId, platform }) {
   }
 }
 
+// The 3 judges' own big-picture dimension scores + objective fit, as columns
+// on `submissions` (matches runShadowScoringForJob's `dimensions` object,
+// built the same way recordSubmissionForJob's own insert loop does). Shared
+// between resolveFingerprintGroup's SELECT list below and the flattened
+// object shape passed into recordShadowScore's `bigPicture` param.
+const BIG_PICTURE_COLUMNS = ["critic", "trendsetter", "connector"].flatMap((j) => [
+  `${j}_big_compelling`, `${j}_big_novel`, `${j}_big_emotionally_resonant`,
+  `${j}_big_emotion_intensity`, `${j}_big_funny`, `${j}_objective_fit_score`,
+]);
+
 // Pre-launch fix, pool hygiene Task 2 -- fingerprint-group score
 // consistency. At shadow-scoring time, looks up Tier-1 fingerprint matches
 // among the SAME user's own OTHER previews from the trailing 30 days. No
 // ffmpeg/frame-decoding involved here (fp_json is already computed for every
 // candidate) so this never touches the ffmpeg semaphore, unlike
 // fingerprintPreviewForJob above. Returns null (no group forming yet) or
-// { fpGroupKey, existingPredictions } for shadowScore.js to fold into this
-// row's group_k/group_mean_prediction. Never throws -- every failure mode
-// (no fingerprint yet, no user_id, matcher spawn failure) degrades to "skip
-// grouping for this submission," never to blocking or delaying scoring.
+// { fpGroupKey, existingPredictions, existingContentReadAxes,
+// existingBigPicture } for shadowScore.js to fold into this row's group_k/
+// group_mean_* columns. Never throws -- every failure mode (no fingerprint
+// yet, no user_id, matcher spawn failure) degrades to "skip grouping for
+// this submission," never to blocking or delaying scoring.
 async function resolveFingerprintGroup(job) {
   // Wait for the fire-and-forget fingerprinting IIFE to settle before reading
   // job.fingerprintId -- by this point in the pipeline (after judging/C_dims),
@@ -1775,9 +1796,10 @@ async function resolveFingerprintGroup(job) {
 
     const { rows: candidates } = await pgPool.query(
       `SELECT pf.id AS fingerprint_id, pf.fp_json, ss.id AS shadow_id, ss.fp_group_key, ss.prediction,
-              ss.input_features, ss.created_at
+              ss.input_features, ss.created_at, ${BIG_PICTURE_COLUMNS.map((c) => `s.${c}`).join(", ")}
        FROM preview_fingerprints pf
        JOIN shadow_scores ss ON ss.submission_id = pf.submission_id
+       LEFT JOIN submissions s ON s.id = ss.submission_id
        WHERE pf.user_id = $1 AND pf.id != $2 AND pf.submission_id IS NOT NULL
          AND pf.created_at >= now() - interval '30 days'
          AND ss.prediction IS NOT NULL
@@ -1828,7 +1850,16 @@ async function resolveFingerprintGroup(job) {
     // treatment as prediction below -- recomputed from each matched row's
     // own stored input_features (already JSON on every row; no new storage).
     const existingContentReadAxes = matched.map((c) => computeContentReadAxes(c.input_features));
-    return { fpGroupKey: groupKey, existingPredictions: matched.map((c) => c.prediction), existingContentReadAxes };
+    // Same for the other 6 spider-chart axes -- each matched row's own
+    // big-picture columns, already joined in above (no recomputation needed,
+    // these are stored verbatim on `submissions`, not derived).
+    const existingBigPicture = matched.map((c) => Object.fromEntries(BIG_PICTURE_COLUMNS.map((k) => [k, c[k]])));
+    return {
+      fpGroupKey: groupKey,
+      existingPredictions: matched.map((c) => c.prediction),
+      existingContentReadAxes,
+      existingBigPicture,
+    };
   } catch (e) {
     console.error(`[fingerprint_group] resolve failed (non-fatal, scoring unaffected): ${e.message}`);
     return null;
@@ -2533,6 +2564,16 @@ async function runShadowScoringForJob(jobId) {
     const ownContentReadAxes = computeContentReadAxes(features);
     job.contentReadAxes = ownContentReadAxes;
 
+    // Spider chart's other 6 judge-scored axes (Compelling, Novel,
+    // Emotionally Resonant, Emotion Intensity, Funny, Objective Fit) --
+    // `dimensions` above is already flattened into the exact
+    // {judge}_big_{dim}/{judge}_objective_fit_score keys BIG_PICTURE_COLUMNS
+    // names, same shape as the `submissions` columns. This run's own value;
+    // job.groupMeanBigPicture is set below once shadowResult's group-mean (if
+    // any) is known, mirroring contentReadAxes above.
+    const ownBigPicture = Object.fromEntries(BIG_PICTURE_COLUMNS.map((k) => [k, dimensions[k] ?? null]));
+    job.groupMeanBigPicture = ownBigPicture;
+
     // Pool hygiene Task 2 -- fingerprint-group score consistency. A no-op
     // (returns null immediately) for validation rescores, research traffic,
     // and any submission without a ready fingerprint/user_id -- see
@@ -2550,6 +2591,7 @@ async function runShadowScoringForJob(jobId) {
       platform: job.platform ?? null, // Phase C, Task 0b
       userId: job.userId ?? null, // Phase C, Task 1
       contentReadAxes: ownContentReadAxes, // Sweep C -- folded into group_mean_content_read_axes below when grouped
+      bigPicture: ownBigPicture, // folded into group_mean_big_picture below when grouped
       // Phase C, Task 3 -- posted-video validation rescores are tagged
       // distinctly so percentilePools/personal-history queries can exclude
       // them (see idx_shadow_scores_is_posted_video's call sites below).
@@ -2567,6 +2609,10 @@ async function runShadowScoringForJob(jobId) {
     // than showing whatever one particular run's own read happened to be.
     if (shadowResult && shadowResult.groupK >= 2 && shadowResult.groupMeanContentReadAxes) {
       job.contentReadAxes = shadowResult.groupMeanContentReadAxes;
+    }
+    // Same swap for the other 6 judge-scored spider-chart axes.
+    if (shadowResult && shadowResult.groupK >= 2 && shadowResult.groupMeanBigPicture) {
+      job.groupMeanBigPicture = shadowResult.groupMeanBigPicture;
     }
 
     // Phase C, Task 3 -- posted_videos gets the scoring result written back
@@ -4053,6 +4099,29 @@ app.get("/api/status/:jobId", async (req, res) => {
     }
   }
 
+  // Same durable-recovery shape for the spider chart's other 6 judge-scored
+  // axes -- computed from the `submissions` columns already durably stored
+  // for every past submission (BIG_PICTURE_COLUMNS), so a job whose
+  // in-memory groupMeanBigPicture never got set recovers identically.
+  if (job.groupMeanBigPicture == null && jobDoneForRecovery && job.submissionId != null && pgPool) {
+    try {
+      const { rows } = await pgPool.query(
+        `SELECT group_k, group_mean_big_picture, ${BIG_PICTURE_COLUMNS.map((c) => `s.${c}`).join(", ")}
+         FROM shadow_scores ss JOIN submissions s ON s.id = ss.submission_id
+         WHERE ss.submission_id = $1 LIMIT 1`,
+        [job.submissionId]
+      );
+      const row = rows[0];
+      if (row) {
+        job.groupMeanBigPicture = (row.group_k >= 2 && row.group_mean_big_picture)
+          ? row.group_mean_big_picture
+          : Object.fromEntries(BIG_PICTURE_COLUMNS.map((k) => [k, row[k] ?? null]));
+      }
+    } catch (e) {
+      console.error(`[${req.params.jobId}] groupMeanBigPicture DB fallback failed (non-fatal): ${e.message}`);
+    }
+  }
+
   res.json({
     status: job.status,
     results: job.results,
@@ -4069,6 +4138,9 @@ app.get("/api/status/:jobId", async (req, res) => {
     // present once C_dims extraction has run (EXTRACT_CDIMS="true"); null
     // otherwise, same as every other C_dims-derived field.
     contentReadAxes: job.contentReadAxes ?? null,
+    // Group-mean (or own, if ungrouped) values for the spider chart's other 6
+    // judge-scored axes -- {judge}_big_{dim}/{judge}_objective_fit_score keyed.
+    groupMeanBigPicture: job.groupMeanBigPicture ?? null,
   });
 });
 
