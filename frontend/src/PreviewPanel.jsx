@@ -344,6 +344,7 @@ export default function PreviewPanel() {
   const [trendAxes, setTrendAxes] = useState(null); // Spider v3 -- Trend Alignment/Trending Topic, the panel-only radar axes that replaced Curiosity/Inspiration
   const [signalFields, setSignalFields] = useState(null); // Spider v3.1 -- backs the full "Detected signals" positive/negative chip row
   const [groupMeanBigPicture, setGroupMeanBigPicture] = useState(null); // group-mean (or own) values for the spider chart's other 6 judge-scored axes
+  const [axisDeciles, setAxisDeciles] = useState(null); // radar rolling-decile normalization -- deciles 1-10 (or null) per axis, vs the rolling 1,000-row windows
   const [trimAvailable, setTrimAvailable] = useState(false);
   const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
   const [statusMessage, setStatusMessage] = useState("");
@@ -478,6 +479,7 @@ export default function PreviewPanel() {
         setTrendAxes(data.trendAxes ?? null);
         setSignalFields(data.signalFields ?? null);
         setGroupMeanBigPicture(data.groupMeanBigPicture ?? null);
+        setAxisDeciles(data.axisDeciles ?? null);
         setTrimAvailable(!!data.trimAvailable);
 
         const jobDone = data.status === "done" || data.status === "partial";
@@ -1333,7 +1335,7 @@ export default function PreviewPanel() {
                   </div>
                 )}
                 <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture}
-                  contentReadAxes={contentReadAxes} signalFields={signalFields} />
+                  contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles} />
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
@@ -1346,7 +1348,7 @@ export default function PreviewPanel() {
             {isFinished && synthesisStatus !== "ready" && synthesisStatus !== "pending" && (
               <>
                 <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture}
-                  contentReadAxes={contentReadAxes} signalFields={signalFields} />
+                  contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>

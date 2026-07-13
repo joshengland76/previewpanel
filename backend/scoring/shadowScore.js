@@ -12,6 +12,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { scoreFeatures, calibratedYhat, percentileFromGrid, loadSpec } from "./scorer.js";
 import { invalidatePoolCache } from "./percentilePools.js";
+import { invalidateAxisPoolCache } from "./axisPools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REF_PATH = path.join(__dirname, "reference_distributions_v2.json");
@@ -159,6 +160,9 @@ export async function recordShadowScore({
     // percentiles from a live, windowed pool over shadow_scores -- invalidate
     // so the very next read picks up this row rather than waiting out the TTL.
     invalidatePoolCache();
+    // Same invalidation for the radar rolling-decile axis pools (axisPools.js)
+    // -- separate cache, same "next read picks up this row" contract.
+    invalidateAxisPoolCache();
     // Returned so a caller (e.g. the score-display module) can build a
     // display without recomputing scoreFeatures a second time, and so it can
     // exclude this row's own id from the niche/overall pools it just joined.

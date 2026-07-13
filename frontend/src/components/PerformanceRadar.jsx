@@ -47,6 +47,19 @@ import { DetectedSignals } from "./DetectedSignals.jsx";
 // beyond Curiosity/Inspiration/Save-CTA -- see DetectedSignals.jsx's own
 // header comment for the full list and the model coefficients behind them.
 //
+// Radar rolling-decile normalization (radar/links prompt, Part A): every
+// vertex is now plotted at its DECILE (1-10) against a rolling 1,000-row
+// window of recent corpus+shadow rows, not the raw 0-10 judge/C_dims value
+// directly -- axisDeciles (prop, job.axisDeciles, computed server-side in
+// axisPools.js) supplies this per axis. Fixes a real distortion the raw
+// scale had: a raw Trend Alignment of 3 LOOKED weak on a flat 0-10 axis,
+// but that axis's whole population clusters low (p50 ~3), so 3 is actually
+// solidly average-to-above-average -- see RADAR_LINKS_READOUT.md's A6
+// verification table. Falls back to the pre-decile raw value wherever
+// axisDeciles lacks an entry (history rows scored before this feature, or
+// an empty pool) -- same graceful-degradation contract as everywhere else
+// in this file. See axisDeciles/judgeAxisValue/axisAvgValue below.
+//
 // Field names read from .results[id].data.dimensions.big_picture[key] (the
 // REAL judge output shape). Works identically for v1 rows and v2 rows: v1's
 // big_picture object has 10 keys (including "authentic"), v2 has 9 — this
@@ -85,40 +98,69 @@ const TREND_AXES = [
 // framing only ("videos that... tend to..."), never an absolute or causal
 // claim; no duration/length advice anywhere.
 const DIMENSION_INFO = {
-  compelling: `Whether the video commands attention without the viewer having to work for it — no slow ramp-up, no wasted setup before something happens. In our data, videos judged more compelling tend to hold viewers further in and tend to get shared more.`,
-  emotionally_resonant: `Whether the video actually moves the viewer — makes them feel something, not just observe it. Videos that create a genuine emotional reaction tend to be shared and saved more than videos that only inform or entertain passively.`,
-  emotion_intensity: `How intense or "loud" the emotions depicted in the video are, regardless of which emotion — calm and neutral videos score low, dramatic or ecstatic ones score high. This describes the content itself, not a judgment that either end of the scale is better.`,
-  funny: `Whether the video produces genuine humor, not just an attempt at it. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
-  novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
-  objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
-  trend_alignment: `How many recognizable trending-format patterns — sounds, edits, structural beats — this video picks up on. Videos that align with more of these patterns tend to perform better than those that don't.`,
-  trending_topic: `How likely this video's subject matter is to be currently trending, independent of format or execution. Videos on trending topics tend to outperform ones that aren't.`,
+  compelling: `Whether the video commands attention without the viewer having to work for it — no slow ramp-up, no wasted setup before something happens. Shown here compared with recent videos we've scored. In our data, videos judged more compelling tend to hold viewers further in and tend to get shared more.`,
+  emotionally_resonant: `Whether the video actually moves the viewer — makes them feel something, not just observe it. Shown here compared with recent videos we've scored. Videos that create a genuine emotional reaction tend to be shared and saved more than videos that only inform or entertain passively.`,
+  emotion_intensity: `How intense or "loud" the emotions depicted in the video are, regardless of which emotion — calm and neutral videos score low, dramatic or ecstatic ones score high. Shown here compared with recent videos we've scored. This describes the content itself, not a judgment that either end of the scale is better.`,
+  funny: `Whether the video produces genuine humor, not just an attempt at it. Shown here compared with recent videos we've scored. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
+  novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Shown here compared with recent videos we've scored. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
+  objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Shown here compared with recent videos we've scored. Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
+  trend_alignment: `How many recognizable trending-format patterns — sounds, edits, structural beats — this video picks up on. Shown here compared with recent videos we've scored. Videos that align with more of these patterns tend to perform better than those that don't.`,
+  trending_topic: `How likely this video's subject matter is to be currently trending, independent of format or execution. Shown here compared with recent videos we've scored. Videos on trending topics tend to outperform ones that aren't.`,
 };
 
 const CX = 160, CY = 150, R = 88;
 const AVG = "#1F1B16"; // bold near-black for the panel average
 
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
-// trendAxes is only consulted for axis.contentRead entries -- every
-// per-judge polygon reads the SAME value there (see header comment: these
-// are single scalars per video, not per-judge readings), so `data` (the
-// per-judge payload) is simply irrelevant for those two axes.
-// groupMeanBigPicture (flattened {judge}_big_{dim}/{judge}_objective_fit_score
-// keys, from the API response's job.groupMeanBigPicture) smooths the other 6
-// judge-scored axes across repeat runs of the same video -- preferred when
-// present, falling back to this run's own per-judge data otherwise
-// (ungrouped submissions, or fields predating this feature). trendAxes gets
-// NO such smoothing (Spider v3, point 4): always this run's own value.
-function judgeAxisValue(data, axis, trendAxes, groupMeanBigPicture, judgeId) {
-  if (axis.contentRead) return num(trendAxes?.[axis.key]);
+
+// Radar rolling-decile normalization (radar/links prompt, Part A). Both the
+// bold average AND every judge's own raw score map through the SAME
+// per-axis grid (axisDeciles from the API response's job.axisDeciles,
+// computed server-side in axisPools.js/computeAxisDeciles against the
+// rolling 1,000-row corpus+shadow windows) -- deliberate, so a stricter
+// judge's raw score visibly lands on a lower decile than a lenient judge's,
+// rather than each judge getting normalized onto their own curve. Falls
+// back to the pre-decile raw-value behavior when axisDeciles lacks an
+// entry for this axis (history rows scored before this feature existed, or
+// C_dims never having run for the trend axes) -- graceful, matches every
+// other degrade-to-raw-value pattern in this file.
+function decileKeyFor(axis) { return axis.key === "__objfit" ? "objective_fit" : axis.key; }
+
+// Per-judge ghost-line value: this judge's own raw dimension score's decile
+// within the shared grid, or (fallback) the pre-decile raw-value logic.
+// trendAxes is only consulted in the fallback for axis.contentRead entries
+// -- every per-judge polygon reads the SAME value there (these are single
+// scalars per video, not per-judge readings), so `data` (the per-judge
+// payload) is simply irrelevant for those two axes in the fallback too.
+function judgeAxisValue(data, axis, trendAxes, groupMeanBigPicture, judgeId, axisDeciles) {
+  const dbJudgeId = judgeId === "cool" ? "trendsetter" : judgeId;
+  const decileEntry = axisDeciles?.[decileKeyFor(axis)];
+  if (axis.contentRead) {
+    if (decileEntry?.avg != null) return decileEntry.avg;
+    return num(trendAxes?.[axis.key]);
+  }
+  if (decileEntry?.[dbJudgeId] != null) return decileEntry[dbJudgeId];
   // groupMeanBigPicture's keys come from the backend's BIG_PICTURE_COLUMNS,
   // which prefixes with "trendsetter" (the submissions-table/DB judge id) --
   // JUDGES' frontend id for that judge is "cool" (see brand.js), so remap.
-  const dbJudgeId = judgeId === "cool" ? "trendsetter" : judgeId;
   const groupKey = axis.key === "__objfit" ? `${dbJudgeId}_objective_fit_score` : `${dbJudgeId}_big_${axis.key}`;
   if (groupMeanBigPicture && groupMeanBigPicture[groupKey] != null) return num(groupMeanBigPicture[groupKey]);
   if (axis.key === "__objfit") return num(data?.objective_fit?.score);
   return num(data?.dimensions?.big_picture?.[axis.key]);
+}
+
+// Bold-polygon value: the DECILE OF THE AVERAGE (a value already computed
+// server-side), not the average of the per-judge deciles above -- those are
+// two different numbers, and the grid is meant to answer "where does this
+// video's panel-average score rank," not "what's the mean rank of three
+// already-individually-ranked judges." Falls back to averaging whatever
+// judgeAxisValue returned (raw values, in that case) when no server-computed
+// average decile exists for this axis.
+function axisAvgValue(axis, axisDeciles, judgeVals, axisIndex) {
+  const avgDecile = axisDeciles?.[decileKeyFor(axis)]?.avg;
+  if (avgDecile != null) return avgDecile;
+  const xs = judgeVals.map((jv) => jv.vals[axisIndex]).filter((v) => v != null);
+  return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : 0;
 }
 
 // Dynamic inside/outside placement for each vertex's numeric label. Inside
@@ -181,7 +223,7 @@ function computeLabelPlacements(vals, n, pt, ang) {
   });
 }
 
-export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, contentReadAxes, signalFields }) {
+export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, contentReadAxes, signalFields, axisDeciles }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
 
@@ -193,7 +235,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
 
   const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }, ...TREND_AXES];
 
-  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id) != null))) return null;
+  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles) != null))) return null;
 
   const ang = (i) => (-90 + i * (360 / axes.length)) * Math.PI / 180;
   const pt = (i, v) => {
@@ -202,11 +244,8 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
   };
   const polyPoints = (vals) => vals.map((v, i) => pt(i, v ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
 
-  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id)) }));
-  const avgVals = axes.map((_, i) => {
-    const xs = judgeVals.map((jv) => jv.vals[i]).filter((v) => v != null);
-    return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : 0;
-  });
+  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles)) }));
+  const avgVals = axes.map((a, i) => axisAvgValue(a, axisDeciles, judgeVals, i));
 
   return (
     <section style={{ marginTop: 26 }}>
@@ -214,7 +253,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
 
       <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: 20,
         boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)", padding: "12px 16px 12px" }}>
-        <div style={{ fontSize: 11, color: B.grey }}>Each judge across the factors our scoring model weighs, 0–10.</div>
+        <div style={{ fontSize: 11, color: B.grey }}>On each axis, 5 = the median of the last 1,000 videos we've scored.</div>
 
         {/* viewBox tightened to the actual drawn extent (label text tops out
             around y=30, bottoms out around y=272) -- the old 8-294 window
