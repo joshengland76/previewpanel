@@ -854,6 +854,25 @@ async function initDb() {
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_fp_group_key ON shadow_scores(fp_group_key)`);
     await client.query("COMMIT");
 
+    // One-time backfill: a handful of rows written before the "generate key
+    // up front" fix (14ba90a) -- and one written in the few minutes between
+    // that commit and its deploy finishing -- have fp_group_key literally
+    // NULL. Left alone, a null-keyed row that happens to be the EARLIEST
+    // member of a real tier-1 group gets adopted verbatim by
+    // resolveFingerprintGroup() and propagates NULL to every later group
+    // member forever (group_k/group_mean_* are unaffected -- those come from
+    // live fingerprint matching, not this column -- but the column itself
+    // never self-heals without this). Idempotent: a no-op once every row has
+    // a key. Each null row gets its OWN fresh key rather than an attempt to
+    // reconstruct which ones used to share a group -- the very next
+    // submission of that video re-derives the true group via tier-1
+    // fingerprint matching regardless of what's stored here.
+    const { rows: nullKeyRows } = await pgPool.query(`SELECT id FROM shadow_scores WHERE fp_group_key IS NULL`);
+    for (const { id } of nullKeyRows) {
+      await pgPool.query(`UPDATE shadow_scores SET fp_group_key = $1 WHERE id = $2`, [`fp:${crypto.randomUUID()}`, id]);
+    }
+    if (nullKeyRows.length > 0) console.log(`[db] backfilled fp_group_key for ${nullKeyRows.length} row(s)`);
+
     console.log("[db] PostgreSQL connected — submissions table ready");
   } catch (err) {
     console.error("[db] Failed to connect to PostgreSQL:", err.message);
@@ -1845,7 +1864,17 @@ async function resolveFingerprintGroup(job) {
     // every time, capping every group at k=2 regardless of true history
     // length. Every tier-1 match IS a real group member; take them all.
     matched.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-    const groupKey = matched[0].fp_group_key;
+    // Bug fix: a handful of rows predating the "generate key up front" fix
+    // (14ba90a) were written with fp_group_key literally NULL (either the
+    // even-older two-step INSERT-then-UPDATE bug, or a row inserted between
+    // that fix's commit and its deploy finishing). If one of those is the
+    // earliest tier-1 match, adopting matched[0].fp_group_key verbatim
+    // propagates NULL to every row in the group forever, since this same
+    // code path runs again on the next submission and finds the same
+    // null-keyed earliest member. Falls back to minting a fresh key so the
+    // group self-heals on the very next submission instead of staying
+    // permanently keyless.
+    const groupKey = matched[0].fp_group_key || `fp:${crypto.randomUUID()}`;
     // Content-read axes (Curiosity/Inspiration) get the same group-mean
     // treatment as prediction below -- recomputed from each matched row's
     // own stored input_features (already JSON on every row; no new storage).
