@@ -216,7 +216,12 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
         boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)", padding: "12px 16px 12px" }}>
         <div style={{ fontSize: 11, color: B.grey }}>Each judge across the factors our scoring model weighs, 0–10.</div>
 
-        <svg viewBox="-6 8 332 286" style={{ width: "100%", maxWidth: 330, height: "auto", display: "block", margin: "0 auto" }}>
+        {/* viewBox tightened to the actual drawn extent (label text tops out
+            around y=30, bottoms out around y=272) -- the old 8-294 window
+            baked in ~35px of empty margin above and below the octagon on
+            every render, since height:auto locks the rendered SVG height to
+            this viewBox's own aspect ratio. */}
+        <svg viewBox="-6 24 332 252" style={{ width: "100%", maxWidth: 330, height: "auto", display: "block", margin: "0 auto" }}>
           {[2, 4, 6, 8, 10].map((g) => (
             <polygon key={g} points={axes.map((_, i) => pt(i, g).map((n) => n.toFixed(1)).join(",")).join(" ")}
               fill="none" stroke={B.border} strokeWidth={g === 10 ? 1.4 : 1} />
