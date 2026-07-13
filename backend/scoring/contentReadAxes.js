@@ -2,7 +2,7 @@
 // spider-chart axes. These are NOT judge-scored (no per-judge ghost lines,
 // no averaging across judges) -- they're a single deterministic scalar per
 // video, derived entirely from the already-stored C_dims extraction fields
-// (buildFeatures.js's emotion_primary/emotion_targeted/emotion_combination/
+// (buildFeatures.js's emotion_primary/emotion_secondary/emotion_combination/
 // emotion_primary_intensity/emotion_secondary_intensity). Computable for
 // every past shadow row, since all of those fields are already part of the
 // 116-feature JSON every submission has always written to
@@ -18,50 +18,49 @@
 // captures. Every OTHER emotion_primary/emotion_targeted/emotion_combination
 // level has a zero coefficient (regularized out).
 //
-// live cdims.js's extraction schema has no separate "emotion_targeted" field
-// -- buildFeatures.js's own comment confirms emotion_targeted is a back-compat
-// mirror of emotion_primary (parser.py populates it the same way), so in
-// practice "primary vs targeted" is one signal, not two, for a live
-// submission's features object.
+// Bug fix (post-launch): buildFeatures.js mapped emotion_secondary_intensity
+// from the Claude extraction but never mapped emotion_secondary itself (the
+// emotion name) -- every submission silently lost that field, so a video
+// whose real secondary emotion was e.g. "inspiration" read 0 here unless
+// "inspir" also happened to appear in emotion_combination's text. Fixed in
+// buildFeatures.js; this file now checks emotion_secondary directly instead
+// of only reaching its intensity through a combination-text guess.
 
 // 0-10 scale, matching every other radar axis. cdims.js's intensity fields
 // are 1-5 (Claude's own extraction scale); this rescales to 0-10 by simple
-// doubling, keeping "1-5 minimal->dominant" mapped onto "2-10 minimal->dominant"
-// (0-2 is reserved for "detected in combination/targeted only, no direct
-// intensity reading" -- see NO_INTENSITY_FALLBACK below).
+// doubling, keeping "1-5 minimal->dominant" mapped onto "2-10 minimal->dominant".
 function toTenScale(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
   return Math.max(0, Math.min(10, n * 2));
 }
 
-// Emotion detected via emotion_combination or emotion_targeted alone (no
-// matching direct intensity field -- emotion_secondary's own NAME isn't
-// stored, only emotion_secondary_intensity, so a combination-only match
-// can't be definitively tied to primary vs. secondary intensity). Rather
-// than claim a precision the data doesn't support, or read 0 (which would
-// misrepresent "detected, unmeasured" as "absent"), this fixed floor marks
-// "present, but only backed by a categorical mention, not the specific
-// primary/secondary intensity scale."
+// Emotion detected via emotion_combination text alone -- neither
+// emotion_primary nor emotion_secondary is literally this emotion, but the
+// combination label mentions it (e.g. combo="curiosity_delight" while
+// primary="joy" and secondary is something else or null). No specific 1-5
+// intensity field maps to a combination-only mention, so rather than claim
+// a precision the data doesn't support, or read 0 (which would misrepresent
+// "detected, unmeasured" as "absent"), this fixed floor marks "present, but
+// only backed by a categorical mention, not a direct intensity reading."
 const CATEGORICAL_ONLY_FALLBACK = 4;
 
 function emotionAxisValue(emotionName, matchSubstring, features) {
   if (!features) return 0;
   const primary = features.emotion_primary ?? null;
-  const targeted = features.emotion_targeted ?? null; // mirrors primary live, kept distinct for research-repo-shaped payloads
+  const secondary = features.emotion_secondary ?? null;
   const combo = (features.emotion_combination ?? "").toLowerCase();
 
-  const inPrimary = primary === emotionName;
-  const inTargeted = targeted === emotionName;
-  const inCombo = combo.includes(matchSubstring);
-
-  if (!inPrimary && !inTargeted && !inCombo) return 0;
-  if (inPrimary) return toTenScale(features.emotion_primary_intensity) ?? CATEGORICAL_ONLY_FALLBACK;
-  // Present via targeted (mirror of primary) or combination only, without a
-  // direct primary-intensity match (e.g. it's the SECONDARY half of a
-  // combination label) -- fall back to secondary intensity if the extraction
-  // recorded one, else the fixed categorical-only floor.
-  return toTenScale(features.emotion_secondary_intensity) ?? CATEGORICAL_ONLY_FALLBACK;
+  if (primary === emotionName) {
+    return toTenScale(features.emotion_primary_intensity) ?? CATEGORICAL_ONLY_FALLBACK;
+  }
+  if (secondary === emotionName) {
+    return toTenScale(features.emotion_secondary_intensity) ?? CATEGORICAL_ONLY_FALLBACK;
+  }
+  if (combo.includes(matchSubstring)) {
+    return CATEGORICAL_ONLY_FALLBACK;
+  }
+  return 0;
 }
 
 // features: the buildFeatures.js-shaped object (or the equivalent fields

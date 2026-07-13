@@ -111,6 +111,7 @@ export function buildScoringFeatures({ dimensions = {}, scores = {}, contentRisk
     // emotion_targeted field, so this mirrors that exactly, not a guess.
     f.emotion_targeted = cdimsDims.emotion_primary ?? null;
     f.emotion_primary = cdimsDims.emotion_primary ?? null;
+    f.emotion_secondary = cdimsDims.emotion_secondary ?? null;
     f.text_overlay_density = cdimsDims.text_overlay_density ?? null;
     f.text_overlay_role = cdimsDims.text_overlay_role ?? null;
     f.specificity = cdimsDims.specificity ?? null;

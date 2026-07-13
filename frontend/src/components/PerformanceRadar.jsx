@@ -206,7 +206,7 @@ export function PerformanceRadar({ results, contentReadAxes }) {
                 <line x1={CX} y1={CY} x2={sp[0]} y2={sp[1]} stroke={B.border} strokeWidth="1" />
                 <text x={lp[0].toFixed(1)} y={(lp[1] + dy).toFixed(1)} fontFamily="Montserrat, sans-serif"
                   fontSize="8.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>
-                  {a.label}{a.contentRead ? " †" : ""}
+                  {a.label}
                 </text>
               </g>
             );
@@ -249,11 +249,6 @@ export function PerformanceRadar({ results, contentReadAxes }) {
         </svg>
 
         <div style={{ textAlign: "center", fontSize: 10, color: B.grey, margin: "4px 0 7px" }}>Tap a judge to isolate their line</div>
-        {CONTENT_READ_AXES.some((a) => judgeAxisValue(null, a, contentReadAxes) != null) && (
-          <div style={{ textAlign: "center", fontSize: 9.5, color: B.grey, margin: "-3px 0 7px" }}>
-            † content read, not a judge score — same for every judge
-          </div>
-        )}
 
         {/* legend — one row, all chips equal height; Avg restores the default view, a judge isolates its line */}
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 4, flexWrap: "nowrap" }}>
