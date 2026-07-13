@@ -25,6 +25,12 @@
 // "inspir" also happened to appear in emotion_combination's text. Fixed in
 // buildFeatures.js; this file now checks emotion_secondary directly instead
 // of only reaching its intensity through a combination-text guess.
+//
+// Spider v3: also home to computeTrendAxes() (trend_alignment/trending_topic,
+// a direct field read, not emotion-name matching) -- the two axes that now
+// occupy the radar's panel-only "content read" slots. See that function's
+// own comment for why curiosity/inspiration were demoted to presence chips
+// instead.
 
 // 0-10 scale, matching every other radar axis. cdims.js's intensity fields
 // are 1-5 (Claude's own extraction scale); this rescales to 0-10 by simple
@@ -69,9 +75,41 @@ function emotionAxisValue(emotionName, matchSubstring, features) {
 // chart always has a number to plot -- 0 genuinely means "no trace of this
 // emotion in any of the three C_dims fields," which is a real, meaningful
 // reading, not a missing-data placeholder.
+//
+// Spider v3: no longer plotted as radar AXES (a near-certain 0 vertex on
+// ~99% of videos looked broken even though it was an accurate reading --
+// see SPIDER_V3_READOUT.md's zero-rate analysis). Still computed here and
+// used to derive the "Detected signals" presence CHIPS instead -- the same
+// underlying 0-10 read, just displayed as "detected: yes/no" (value > 0)
+// rather than as a vertex that spends almost all its life at the origin.
 export function computeContentReadAxes(features) {
   return {
     curiosity: emotionAxisValue("curiosity", "curiosity", features),
     inspiration: emotionAxisValue("inspiration", "inspir", features), // matches "inspiration" and "inspiring_*" combination labels
+  };
+}
+
+// Spider v3 -- replaces the Curiosity/Inspiration vertices on the radar
+// itself. Direct 0-10 reads of two C_dims fields (NOT emotion-name
+// matching like computeContentReadAxes above): trending_alignment_signals
+// (cdims.js: "count of pattern signals you noticed", already 0-10) and
+// trending_topic_likelihood (cdims.js: 1-10). Both carry real but modest
+// positive model coefficients (scoring_spec_v2.json: +0.0209 and +0.0138
+// respectively -- an order of magnitude smaller than e.g. jc_novel's
+// +0.0277 or emotion_combination_curiosity_inspiration's +0.1394), which is
+// exactly why their tooltips must say "modest positive association," not
+// imply a strong lever. Same "0 = no signal, including cdims never having
+// run" convention as computeContentReadAxes -- see that function's comment.
+function clampTo10(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(10, n));
+}
+
+export function computeTrendAxes(features) {
+  if (!features) return { trend_alignment: 0, trending_topic: 0 };
+  return {
+    trend_alignment: clampTo10(features.trending_alignment_signals),
+    trending_topic: clampTo10(features.trending_topic_likelihood),
   };
 }

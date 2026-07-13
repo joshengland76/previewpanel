@@ -36,7 +36,7 @@ import "dotenv/config";
 // enabled. See scoring/README (PHASEB2_READOUT.md in the research repo) for
 // the full design.
 import { extractCdims } from "./scoring/cdims.js";
-import { computeContentReadAxes } from "./scoring/contentReadAxes.js";
+import { computeContentReadAxes, computeTrendAxes } from "./scoring/contentReadAxes.js";
 import { buildScoringFeatures } from "./scoring/buildFeatures.js";
 import { recordShadowScore } from "./scoring/shadowScore.js";
 import { getScoreDisplay } from "./scoring/scoreDisplay.js";
@@ -2586,12 +2586,26 @@ async function runShadowScoringForJob(jobId) {
       clampDuration: process.env.CLAMP_DURATION !== "false",
     });
 
-    // Sweep C -- spider chart's Curiosity/Inspiration axes, derived from the
-    // same C_dims fields already in `features` (no new extraction). This
-    // run's own value; job.contentReadAxes is set below once shadowResult's
-    // group-mean (if any) is known, mirroring displayPrediction further down.
+    // Sweep C / Spider v3 -- Curiosity/Inspiration, derived from the same
+    // C_dims fields already in `features` (no new extraction). No longer
+    // radar axes as of Spider v3 (see contentReadAxes.js) -- now used only
+    // to derive the "Detected signals" presence chips. Spider v3, point 4:
+    // this is ALWAYS this run's own value, computed purely from `features`
+    // (this submission's own stored input) -- never averaged across other
+    // submissions of the same video (unlike groupMeanBigPicture below) or
+    // read from any pool/corpus query. A chip is either earned by THIS
+    // analysis or it isn't.
     const ownContentReadAxes = computeContentReadAxes(features);
     job.contentReadAxes = ownContentReadAxes;
+
+    // Spider v3 -- Trend Alignment / Trending Topic, the two axes that
+    // replace Curiosity/Inspiration on the radar itself. Same "current
+    // submission only" contract as ownContentReadAxes above.
+    const ownTrendAxes = computeTrendAxes(features);
+    job.trendAxes = ownTrendAxes;
+    // Spider v3 -- backs the "Save-prompt CTA" chip (cta_type === "save").
+    // Direct passthrough of this run's own C_dims read, same contract.
+    job.ctaType = cdimsDims?.cta_type ?? null;
 
     // Spider chart's other 6 judge-scored axes (Compelling, Novel,
     // Emotionally Resonant, Emotion Intensity, Funny, Objective Fit) --
@@ -2630,15 +2644,15 @@ async function runShadowScoringForJob(jobId) {
       fpGroup, // pool hygiene Task 2
     });
 
-    // Sweep C (extended) -- same group-mean swap as displayPrediction below:
-    // once this run matched a Tier-1 fingerprint (k>=2), the DISPLAYED
-    // content-read axes are the group's mean across all matched runs,
-    // smoothing over this video's own run-to-run C_dims extraction noise
-    // (see the Scoring Model Report's repeat-run variability section) rather
-    // than showing whatever one particular run's own read happened to be.
-    if (shadowResult && shadowResult.groupK >= 2 && shadowResult.groupMeanContentReadAxes) {
-      job.contentReadAxes = shadowResult.groupMeanContentReadAxes;
-    }
+    // Spider v3, point 4: deliberately NO group-mean swap for
+    // job.contentReadAxes here (removed -- it previously mirrored the
+    // groupMeanBigPicture swap below). Curiosity/Inspiration now only back
+    // presence chips, and a chip means "detected in THIS analysis," not "on
+    // average across your past runs of a fingerprint-matched video." The
+    // group_mean_content_read_axes column/fold in shadowScore.js is left
+    // alone (still recorded for backend/research use) -- this just stops
+    // consuming it for the user-facing payload. shadowResult.groupMeanContentReadAxes
+    // is intentionally unused past this point.
     // Same swap for the other 6 judge-scored spider-chart axes.
     if (shadowResult && shadowResult.groupK >= 2 && shadowResult.groupMeanBigPicture) {
       job.groupMeanBigPicture = shadowResult.groupMeanBigPicture;
@@ -4103,28 +4117,28 @@ app.get("/api/status/:jobId", async (req, res) => {
     }
   }
 
-  // Sweep C -- same durable-recovery shape as scoreDisplay above: the
-  // Curiosity/Inspiration axes are computable from input_features (already
-  // stored on every shadow_scores row for every past submission), so a job
-  // whose in-memory contentReadAxes never got set (reload, restart, or a
-  // job predating this feature) recovers identically rather than showing
-  // nothing. Mirrors displayPrediction's group-mean preference (group_k>=2)
-  // so a recovered job shows the identical payload the original computation
-  // would have, same as the scoreDisplay fallback above.
+  // Sweep C / Spider v3 -- same durable-recovery shape as scoreDisplay above:
+  // Curiosity/Inspiration and Trend Alignment/Trending Topic are all
+  // computable from input_features (already stored on every shadow_scores
+  // row for every past submission), so a job whose in-memory fields never
+  // got set (reload, restart, or a job predating these features) recovers
+  // identically rather than showing nothing. Spider v3, point 4: always this
+  // row's own recomputed value -- no group_k/group-mean preference (unlike
+  // groupMeanBigPicture's fallback below), matching the no-swap contract above.
   if (job.contentReadAxes == null && jobDoneForRecovery && job.submissionId != null && pgPool) {
     try {
       const { rows } = await pgPool.query(
-        `SELECT input_features, group_k, group_mean_content_read_axes FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
+        `SELECT input_features FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
         [job.submissionId]
       );
       const row = rows[0];
       if (row && row.input_features) {
-        job.contentReadAxes = (row.group_k >= 2 && row.group_mean_content_read_axes)
-          ? row.group_mean_content_read_axes
-          : computeContentReadAxes(row.input_features);
+        job.contentReadAxes = computeContentReadAxes(row.input_features);
+        if (job.trendAxes == null) job.trendAxes = computeTrendAxes(row.input_features);
+        if (job.ctaType == null) job.ctaType = row.input_features.cta_type ?? null;
       }
     } catch (e) {
-      console.error(`[${req.params.jobId}] contentReadAxes DB fallback failed (non-fatal): ${e.message}`);
+      console.error(`[${req.params.jobId}] contentReadAxes/trendAxes DB fallback failed (non-fatal): ${e.message}`);
     }
   }
 
@@ -4163,10 +4177,16 @@ app.get("/api/status/:jobId", async (req, res) => {
     trimAvailable: retainedTrims.has(req.params.jobId),
     // Dark-launched (Phase B3, Task 5) -- always null unless DISPLAY_SCORE="true".
     scoreDisplay: job.scoreDisplay ?? null,
-    // Sweep C -- panel-only spider axes (Curiosity, Inspiration), always
-    // present once C_dims extraction has run (EXTRACT_CDIMS="true"); null
-    // otherwise, same as every other C_dims-derived field.
+    // Sweep C / Spider v3 -- Curiosity/Inspiration, no longer radar axes,
+    // now consumed only to derive the "Detected signals" presence chips.
+    // Always this submission's own value (see the no-group-mean-swap note
+    // above runShadowScoringForJob's contentReadAxes computation).
     contentReadAxes: job.contentReadAxes ?? null,
+    // Spider v3 -- Trend Alignment / Trending Topic, the two panel-only
+    // radar axes that replace Curiosity/Inspiration. Own value only.
+    trendAxes: job.trendAxes ?? null,
+    // Spider v3 -- backs the "Save-prompt CTA" chip.
+    ctaType: job.ctaType ?? null,
     // Group-mean (or own, if ungrouped) values for the spider chart's other 6
     // judge-scored axes -- {judge}_big_{dim}/{judge}_objective_fit_score keyed.
     groupMeanBigPicture: job.groupMeanBigPicture ?? null,

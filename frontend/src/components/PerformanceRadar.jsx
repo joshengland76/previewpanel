@@ -22,18 +22,27 @@ import { B, JUDGES } from "../brand.js";
 // objective_fit is judge-scored but lives outside big_picture (its own
 // per-judge column) -- kept, unaffected by any of the above.
 //
-// Sweep C also adds two PANEL-ONLY "content read" axes -- Curiosity and
-// Inspiration -- backed by contentReadAxes (prop, from the API response's
-// job.contentReadAxes, computed server-side in
-// backend/scoring/contentReadAxes.js from the C_dims emotion_primary/
-// emotion_targeted/emotion_combination/emotion_*_intensity fields, NOT from
-// judge output). These are the only two emotions with nonzero model
-// coefficients anywhere in emotion_targeted/emotion_primary/
-// emotion_combination (emotion_combination_curiosity_inspiration is the
-// single largest categorical coefficient in the whole model, +0.1394).
-// There is no per-judge breakdown for these -- a single scalar per video, no
-// ghost lines, marked with a subtle "content read" legend note rather than a
-// judge chip. Final: 8 axes (6 judge-scored + 2 content-read).
+// Spider v3 adds two PANEL-ONLY "content read" axes -- Trend Alignment and
+// Trending Topic -- backed by trendAxes (prop, from the API response's
+// job.trendAxes, computed server-side in backend/scoring/contentReadAxes.js
+// via computeTrendAxes(), a direct 0-10 read of the C_dims
+// trending_alignment_signals/trending_topic_likelihood fields, NOT from
+// judge output). Both carry real but modest positive model coefficients
+// (+0.0209 and +0.0138 in scoring_spec_v2.json) -- their tooltips say so
+// explicitly rather than overselling them. There is no per-judge breakdown
+// for these -- a single scalar per video, no ghost lines, marked with a
+// subtle "content read" legend note rather than a judge chip. Final: 8 axes
+// (6 judge-scored + 2 content-read).
+//
+// Spider v3 REMOVED the earlier Curiosity/Inspiration axes (Sweep C): a
+// zero-rate analysis found they sat at a near-certain 0 vertex on ~99% of
+// videos (mostly because C_dims simply never ran on most historical rows --
+// see SPIDER_V3_READOUT.md), which read as "broken" even on rows where it
+// was an accurate reading. Their underlying 0-10 values still exist
+// (computeContentReadAxes(), job.contentReadAxes) but are now surfaced only
+// as "Detected signals" presence chips (DetectedSignals.jsx) rendered below
+// this component, not as a radar vertex that spends nearly all its life at
+// the origin.
 //
 // Field names read from .results[id].data.dimensions.big_picture[key] (the
 // REAL judge output shape). Works identically for v1 rows and v2 rows: v1's
@@ -61,11 +70,11 @@ const BIG_PICTURE_AXES = [
   { key: "funny", label: "Funny" },
 ];
 
-// Panel-only, no ghost lines -- see header comment. contentReadAxes is
-// {curiosity, inspiration}, each 0-10, from computeContentReadAxes().
-const CONTENT_READ_AXES = [
-  { key: "curiosity", label: "Curiosity", contentRead: true },
-  { key: "inspiration", label: "Inspiration", contentRead: true },
+// Panel-only, no ghost lines -- see header comment. trendAxes is
+// {trend_alignment, trending_topic}, each 0-10, from computeTrendAxes().
+const TREND_AXES = [
+  { key: "trend_alignment", label: "Trend Align", contentRead: true },
+  { key: "trending_topic", label: "Trending Topic", contentRead: true },
 ];
 
 // Dimension explanations. Every entry obeys the same two hard rules as the
@@ -79,26 +88,26 @@ const DIMENSION_INFO = {
   funny: `Whether the video produces genuine humor, not just an attempt at it. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
   novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
   objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
-  curiosity: `A content read (not a judge score) of how much this video leans on open questions, reveals, or "wait, what?" moments to pull viewers in. In our data, curiosity paired with a payoff is one of the strongest patterns behind above-average performance.`,
-  inspiration: `A content read (not a judge score) of how much this video leans on aspiration, transformation, or "you can do this too" framing. In our data, inspiration is one of the more consistently positive signals across niches.`,
+  trend_alignment: `A content read (not a judge score) of how many recognizable trending-format patterns — sounds, edits, structures — this video's content matches. In our data this carries a modest positive association with performance, a real but small signal rather than a strong lever.`,
+  trending_topic: `A content read (not a judge score) of how likely this video's subject matter is to be currently trending, independent of format. Also a modest positive association in our data — worth having, but one of the smaller factors in the model.`,
 };
 
 const CX = 160, CY = 150, R = 88;
 const AVG = "#1F1B16"; // bold near-black for the panel average
 
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
-// contentReadAxes is only consulted for axis.contentRead entries -- every
+// trendAxes is only consulted for axis.contentRead entries -- every
 // per-judge polygon reads the SAME value there (see header comment: these
 // are single scalars per video, not per-judge readings), so `data` (the
 // per-judge payload) is simply irrelevant for those two axes.
 // groupMeanBigPicture (flattened {judge}_big_{dim}/{judge}_objective_fit_score
 // keys, from the API response's job.groupMeanBigPicture) smooths the other 6
-// judge-scored axes across repeat runs of the same video, same rationale as
-// contentReadAxes above -- preferred when present, falling back to this run's
-// own per-judge data otherwise (ungrouped submissions, or fields predating
-// this feature).
-function judgeAxisValue(data, axis, contentReadAxes, groupMeanBigPicture, judgeId) {
-  if (axis.contentRead) return num(contentReadAxes?.[axis.key]);
+// judge-scored axes across repeat runs of the same video -- preferred when
+// present, falling back to this run's own per-judge data otherwise
+// (ungrouped submissions, or fields predating this feature). trendAxes gets
+// NO such smoothing (Spider v3, point 4): always this run's own value.
+function judgeAxisValue(data, axis, trendAxes, groupMeanBigPicture, judgeId) {
+  if (axis.contentRead) return num(trendAxes?.[axis.key]);
   // groupMeanBigPicture's keys come from the backend's BIG_PICTURE_COLUMNS,
   // which prefixes with "trendsetter" (the submissions-table/DB judge id) --
   // JUDGES' frontend id for that judge is "cool" (see brand.js), so remap.
@@ -169,7 +178,7 @@ function computeLabelPlacements(vals, n, pt, ang) {
   });
 }
 
-export function PerformanceRadar({ results, contentReadAxes, groupMeanBigPicture }) {
+export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
 
@@ -179,9 +188,9 @@ export function PerformanceRadar({ results, contentReadAxes, groupMeanBigPicture
   const presentIds = new Set(present.map((x) => x.judge.id));
   if (present.length === 0) return null;
 
-  const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }, ...CONTENT_READ_AXES];
+  const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }, ...TREND_AXES];
 
-  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, contentReadAxes, groupMeanBigPicture, x.judge.id) != null))) return null;
+  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id) != null))) return null;
 
   const ang = (i) => (-90 + i * (360 / axes.length)) * Math.PI / 180;
   const pt = (i, v) => {
@@ -190,7 +199,7 @@ export function PerformanceRadar({ results, contentReadAxes, groupMeanBigPicture
   };
   const polyPoints = (vals) => vals.map((v, i) => pt(i, v ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
 
-  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, contentReadAxes, groupMeanBigPicture, x.judge.id)) }));
+  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id)) }));
   const avgVals = axes.map((_, i) => {
     const xs = judgeVals.map((jv) => jv.vals[i]).filter((v) => v != null);
     return xs.length ? xs.reduce((s, v) => s + v, 0) / xs.length : 0;

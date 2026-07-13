@@ -7,6 +7,7 @@ import { VerdictPanel } from "./components/VerdictHero.jsx";
 import { WhatsWorkingFixes } from "./components/WhatsWorkingFixes.jsx";
 import { DisagreementCard } from "./components/DisagreementCard.jsx";
 import { PerformanceRadar } from "./components/PerformanceRadar.jsx";
+import { DetectedSignals } from "./components/DetectedSignals.jsx";
 import { ToolkitSection } from "./components/ToolkitSection.jsx";
 import { JudgeDeepDives } from "./components/JudgeDeepDives.jsx";
 import { AccountSettingsTrigger } from "./components/AccountSettings.jsx";
@@ -340,7 +341,9 @@ export default function PreviewPanel() {
   const [synthesis, setSynthesis] = useState(null);
   const [synthesisStatus, setSynthesisStatus] = useState(null);
   const [scoreDisplay, setScoreDisplay] = useState(null); // populated when the server's DISPLAY_SCORE flag is on
-  const [contentReadAxes, setContentReadAxes] = useState(null); // Sweep C -- Curiosity/Inspiration spider axes, populated when EXTRACT_CDIMS is on
+  const [contentReadAxes, setContentReadAxes] = useState(null); // Curiosity/Inspiration -- Spider v3: no longer radar axes, now backs DetectedSignals chips only
+  const [trendAxes, setTrendAxes] = useState(null); // Spider v3 -- Trend Alignment/Trending Topic, the panel-only radar axes that replaced Curiosity/Inspiration
+  const [ctaType, setCtaType] = useState(null); // Spider v3 -- backs the "Save-prompt CTA" chip
   const [groupMeanBigPicture, setGroupMeanBigPicture] = useState(null); // group-mean (or own) values for the spider chart's other 6 judge-scored axes
   const [trimAvailable, setTrimAvailable] = useState(false);
   const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
@@ -473,6 +476,8 @@ export default function PreviewPanel() {
         setSynthesisStatus(data.synthesisStatus ?? null);
         setScoreDisplay(data.scoreDisplay ?? null);
         setContentReadAxes(data.contentReadAxes ?? null);
+        setTrendAxes(data.trendAxes ?? null);
+        setCtaType(data.ctaType ?? null);
         setGroupMeanBigPicture(data.groupMeanBigPicture ?? null);
         setTrimAvailable(!!data.trimAvailable);
 
@@ -1330,7 +1335,8 @@ export default function PreviewPanel() {
                 )}
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
-                <PerformanceRadar results={judgeResults} contentReadAxes={contentReadAxes} groupMeanBigPicture={groupMeanBigPicture} />
+                <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture} />
+                <DetectedSignals contentReadAxes={contentReadAxes} ctaType={ctaType} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
@@ -1340,7 +1346,8 @@ export default function PreviewPanel() {
                 still produced via the new components (no synthesis overview). */}
             {isFinished && synthesisStatus !== "ready" && synthesisStatus !== "pending" && (
               <>
-                <PerformanceRadar results={judgeResults} contentReadAxes={contentReadAxes} groupMeanBigPicture={groupMeanBigPicture} />
+                <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture} />
+                <DetectedSignals contentReadAxes={contentReadAxes} ctaType={ctaType} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
