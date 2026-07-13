@@ -584,8 +584,13 @@ export default function PreviewPanel() {
               // Readout-screen polish, point 1 -- link runs show the cleaned
               // URL in place of the internal downloaded-file name; sourceUrl
               // preserved separately so a restored entry can still link out.
-              fileName: linkDisplayUrl || videoFile?.name || "video",
-              sourceUrl: linkSourceUrl || null,
+              // Read straight off `data`, not the linkDisplayUrl/linkSourceUrl
+              // state: this poll() closure was created once when the effect
+              // started (before any tick had set that state), so the state
+              // variables here are permanently stale -- `data` is this tick's
+              // fresh response and is what actually reflects the link.
+              fileName: data.linkDisplayUrl || videoFile?.name || "video",
+              sourceUrl: data.sourceUrl || null,
               savedAt: Date.now(),
               scores,
               results: data.results,
