@@ -58,8 +58,14 @@ function specHash() {
  * (unchanged, separately-stored) prediction into the group, and the row is
  * inserted pool_eligible=false (only a group's first member stays eligible).
  * When null, this row is a fresh singleton -- pool_eligible=true, and its
- * fp_group_key is self-assigned ('fp:'+its own id) right after insert, so any
- * FUTURE row that matches it always finds a non-null key to adopt.
+ * fp_group_key is a fresh UUID generated BEFORE the insert (bug fix: an
+ * earlier version derived this from the row's own id via a two-step
+ * INSERT-then-UPDATE, which raced against any concurrent submission's match
+ * lookup reading this row's fp_group_key in the gap between the two queries
+ * -- group_k/group_mean_prediction would compute correctly since those don't
+ * depend on it, but the match would adopt a null key and self-assign its own
+ * instead, so grouped rows never actually shared one key). Computing the key
+ * up front and writing it in the single INSERT removes that gap entirely.
  */
 export async function recordShadowScore({
   queryRW, submissionId, features, objective, pegasusModel, promptVersion, cdimsStatus, platform, userId,
@@ -86,7 +92,10 @@ export async function recordShadowScore({
       ? (fpGroup.existingPredictions.reduce((a, b) => a + b, 0) + prediction) / groupK
       : prediction;
     const poolEligible = !fpGroup; // only a group's first row stays eligible
-    const fpGroupKey = fpGroup ? fpGroup.fpGroupKey : null; // null -> self-assigned below
+    // Bug fix: generated up front (not derived from this row's own id after
+    // insert) so there is no INSERT-then-UPDATE gap for a concurrent match
+    // lookup to read as null -- see the fpGroup doc comment above.
+    const fpGroupKey = fpGroup ? fpGroup.fpGroupKey : `fp:${crypto.randomUUID()}`;
 
     const { rows } = await queryRW(
       `INSERT INTO shadow_scores
@@ -105,14 +114,9 @@ export async function recordShadowScore({
       ]
     );
     const id = rows[0]?.id ?? null;
-    let finalGroupKey = fpGroupKey;
-    if (id != null && !fpGroupKey) {
-      finalGroupKey = `fp:${id}`;
-      await queryRW(`UPDATE shadow_scores SET fp_group_key = $1 WHERE id = $2`, [finalGroupKey, id]);
-    }
     console.log(`[shadow_score] id=${id} submission_id=${submissionId} pred=${prediction.toFixed(4)} `
       + `pctile=${calibratedPercentile != null ? calibratedPercentile.toFixed(1) : "n/a"} tier=${tierAtScoreTime} `
-      + `group_key=${finalGroupKey} group_k=${groupK}`);
+      + `group_key=${fpGroupKey} group_k=${groupK}`);
     // Pool-based percentile engine (Phase B3b, Task 2) sources niche/overall
     // percentiles from a live, windowed pool over shadow_scores -- invalidate
     // so the very next read picks up this row rather than waiting out the TTL.
