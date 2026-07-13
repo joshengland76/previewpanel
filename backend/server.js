@@ -1752,6 +1752,13 @@ async function fingerprintPreviewForJob(jobId, filePath, { userId, platform }) {
 // (no fingerprint yet, no user_id, matcher spawn failure) degrades to "skip
 // grouping for this submission," never to blocking or delaying scoring.
 async function resolveFingerprintGroup(job) {
+  // Wait for the fire-and-forget fingerprinting IIFE to settle before reading
+  // job.fingerprintId -- by this point in the pipeline (after judging/C_dims),
+  // fingerprinting has virtually always already finished, so this is normally
+  // an instant no-op; it only matters under contention (e.g. the ffmpeg
+  // concurrency semaphore backed up), which is exactly when the race used to
+  // bite and silently skip grouping for good.
+  if (job.fingerprintReady) await job.fingerprintReady.catch(() => {});
   if (!job.fingerprintId || !job.userId || !pgPool) return null;
   try {
     const ownRes = await pgPool.query(`SELECT fp_json FROM preview_fingerprints WHERE id = $1`, [job.fingerprintId]);
@@ -3361,7 +3368,17 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     // contains only real previews).
     const isRealPreviewSubmission = !jobs[jobId].source;
     const fingerprintTarget = isRealPreviewSubmission && activeConvertedPath !== retainPath ? activeConvertedPath : null;
-    (async () => {
+    // Bug fix: this IIFE was previously fire-and-forget with no handle kept
+    // anywhere, so jobs[jobId].fingerprintId's assignment (below) raced
+    // against every later reader of it (resolveFingerprintGroup, the
+    // submission_id backfill) with no guaranteed ordering -- if fingerprinting
+    // hadn't resolved yet by the time those ran, they silently saw
+    // fingerprintId as undefined forever (nothing ever re-checked), so
+    // fingerprint-group matching never fired and preview_fingerprints.
+    // submission_id stayed NULL permanently. Storing the promise on the job
+    // lets those later readers await it first -- task creation right below
+    // still isn't slowed down, since nothing here awaits it either.
+    jobs[jobId].fingerprintReady = (async () => {
       if (fingerprintTarget) {
         jobs[jobId].fingerprintId = await fingerprintPreviewForJob(jobId, fingerprintTarget, {
           userId: jobs[jobId].userId, platform: jobs[jobId].platform,
@@ -3613,6 +3630,10 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   // it's known (fingerprinting ran much earlier, at upload time, before any
   // submission row existed). fingerprintId is only ever set for app
   // submissions with FINGERPRINT_PREVIEWS on; a no-op otherwise.
+  // Await fingerprintReady defensively -- resolveFingerprintGroup already
+  // does this earlier in the same job's execution, so this is normally an
+  // instant no-op, but it removes any dependence on that ordering holding.
+  if (job.fingerprintReady) await job.fingerprintReady.catch(() => {});
   if (submissionId != null && job.fingerprintId != null && pgPool) {
     queryRW(`UPDATE preview_fingerprints SET submission_id = $1 WHERE id = $2`, [submissionId, job.fingerprintId])
       .catch((e) => console.error(`[${jobId}] [fingerprint] submission_id backfill failed: ${e.message}`));
