@@ -3019,12 +3019,20 @@ function checkLinkFetchRateLimit(key) {
   return true;
 }
 
-// Runs a yt-dlp subprocess, resolving { code, stdout, stderr } rather than
-// rejecting -- callers distinguish failure reasons from stderr text (same
-// approach validation/collect_day30.py already uses for this same command).
+// Runs yt-dlp via `${PYTHON_BIN} -m yt_dlp <args>` rather than a bare
+// "yt-dlp" command -- pip installs the console-script entry point into the
+// venv's own bin/ (validation/requirements.txt), which isn't necessarily on
+// PATH the way PYTHON_BIN's fully-qualified path is. This exact invocation
+// (python3 -m yt_dlp) is what the B0 feasibility spike verified working
+// live on Render; a bare "yt-dlp" command was tried first here and failed
+// silently into the generic fetch-error message until B3's live check
+// caught it (see RADAR_LINKS_READOUT.md). Resolves { code, stdout, stderr }
+// rather than rejecting -- callers distinguish failure reasons from stderr
+// text (same approach validation/collect_day30.py uses for this command,
+// there via a real "yt-dlp" PATH command since that script runs Mac-side).
 function runYtDlp(args, timeoutMs) {
   return new Promise((resolve) => {
-    const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(PYTHON_BIN, ["-m", "yt_dlp", ...args], { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "", stderr = "";
     const timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
     proc.stdout.on("data", (d) => { stdout += d.toString(); });
