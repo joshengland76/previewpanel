@@ -361,6 +361,14 @@ export default function PreviewPanel() {
   const [largeFileWarning, setLargeFileWarning] = useState(null);
   const [largeSizeRiskWarning, setLargeSizeRiskWarning] = useState(false);
   const [uploadZoneError, setUploadZoneError] = useState(null);
+  // Paste-a-link submissions (radar/links prompt, Part B) -- lives inside
+  // the same upload box as a secondary affordance, not a new field elsewhere
+  // on the screen. showLinkInput swaps the box from file-picker mode to a
+  // plain URL input + Go (no <label>/hidden-file-input association while in
+  // this mode, so typing/clicking the input never opens the file picker).
+  const [showLinkInput, setShowLinkInput] = useState(false);
+  const [videoLinkUrl, setVideoLinkUrl] = useState("");
+  const [linkFetchError, setLinkFetchError] = useState(null);
   const pollRef = useRef(null);
   const synthWaitRef = useRef(0);
   // Pre-launch fix, Task 2 -- chains a second capped wait onto the same
@@ -776,6 +784,53 @@ export default function PreviewPanel() {
     xhr.send(formData);
   };
 
+  // Paste-a-link submissions (radar/links prompt, Part B) -- server does the
+  // "uploading" (yt-dlp fetch) instead of the browser, so there's no byte
+  // progress to show; reuses the SAME indeterminate-progress visual the file
+  // path already falls back to when no progress event fires in time. Once
+  // /api/fetch-video returns a jobId, this is 100% the same downstream flow
+  // as a file upload (same useEffect([jobId]) polling loop, same rendering).
+  const handleLinkFetch = async () => {
+    const url = videoLinkUrl.trim();
+    if (!url) return;
+    setLinkFetchError(null);
+    setShowNotifPrimer(false);
+    notifiedRef.current = false;
+    savedRef.current = false;
+    setStep(2);
+    setJudgeResults({});
+    setSynthesis(null); setSynthesisStatus(null); setTrimAvailable(false); setOpenJudgeIds(new Set());
+    setScoreDisplay(null); synthWaitRef.current = 0; scoreWaitRef.current = 0;
+    setRestoredFileName(null);
+    setJobStatus("uploading");
+    setUploadProgress(0);
+    setUploadProgressIndeterminate(true);
+    setUploadedMB(0);
+    setUploadSpeedMBps(0);
+    setStatusMessage("Fetching your video…");
+    const pending = {};
+    selectedJudges.forEach(id => { pending[id] = { status: "pending" }; });
+    setJudgeResults(pending);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/fetch-video`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, objective, judges: JSON.stringify(selectedJudges), userId: userId || null }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "Couldn't fetch that link — download the file and upload it instead.");
+      setUploadProgress(100);
+      setUploadProgressIndeterminate(false);
+      setJobStatus("uploading");
+      setJobId(data.jobId);
+    } catch (err) {
+      setStep(1);
+      setJobStatus(null);
+      setLinkFetchError(err.message);
+    }
+  };
+
   const handleAllowNotifications = async () => {
     await Notification.requestPermission();
     startAnalysis();
@@ -921,41 +976,79 @@ export default function PreviewPanel() {
             {/* 1 — Video upload */}
             <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
-              <label className="drop-zone"
-                onDragOver={e => e.preventDefault()}
-                onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f); }}
-                style={{
-                  border: `2px dashed ${videoFile ? B.brown : B.border}`,
-                  borderRadius: "12px", textAlign: "center",
-                  cursor: "pointer", background: videoFile ? B.lightBrown : "#fff",
-                  transition: "all 0.2s ease",
-                  minHeight: "110px", display: "flex", alignItems: "center", justifyContent: "center",
-                  position: "relative",
+              {(!videoFile && showLinkInput) ? (
+                // Paste-a-link mode -- a plain div, deliberately NOT the
+                // <label>/hidden-file-input pairing below, so typing or
+                // clicking the URL input/Go button can never accidentally
+                // pop the file picker.
+                <div style={{
+                  border: `2px dashed ${B.border}`, borderRadius: "12px", textAlign: "center",
+                  background: "#fff", minHeight: "110px", display: "flex", flexDirection: "column",
+                  alignItems: "center", justifyContent: "center", padding: "14px 16px",
                 }}>
-                <input ref={fileInputRef} type="file" accept="video/*"
-                  onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
-                  style={videoFile
-                    ? { position: "absolute", opacity: 0, width: 0, height: 0 }
-                    : { position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }
-                  }/>
-                {videoFile ? (
-                  <div style={{ padding: "12px 20px" }}>
-                    <div style={{ fontSize: "20px", marginBottom: "4px" }}>🎬</div>
-                    <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
-                    <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
-                      {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                      <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setDetectedFileDurationSecs(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
-                        style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
+                  <div style={{ fontWeight: "700", fontSize: "13px", color: "#888", marginBottom: "8px" }}>Paste a TikTok or YouTube Shorts link</div>
+                  <div style={{ display: "flex", gap: "6px", width: "100%", maxWidth: "320px" }}>
+                    <input type="url" inputMode="url" placeholder="https://…" value={videoLinkUrl}
+                      onChange={e => setVideoLinkUrl(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") handleLinkFetch(); }}
+                      style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "12px", fontFamily: "inherit" }} />
+                    <button onClick={handleLinkFetch} disabled={!videoLinkUrl.trim()} style={{
+                      padding: "8px 14px", borderRadius: "8px", border: "none",
+                      background: videoLinkUrl.trim() ? B.brown : B.border, color: "#fff",
+                      fontWeight: "700", fontSize: "12px", cursor: videoLinkUrl.trim() ? "pointer" : "default", fontFamily: "inherit",
+                    }}>Go</button>
+                  </div>
+                  <span onClick={() => { setShowLinkInput(false); setVideoLinkUrl(""); setLinkFetchError(null); }}
+                    style={{ marginTop: "10px", fontSize: "11px", color: "#aaa", textDecoration: "underline", cursor: "pointer" }}>
+                    ← Upload a file instead
+                  </span>
+                </div>
+              ) : (
+                <label className="drop-zone"
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFileSelect(f); }}
+                  style={{
+                    border: `2px dashed ${videoFile ? B.brown : B.border}`,
+                    borderRadius: "12px", textAlign: "center",
+                    cursor: "pointer", background: videoFile ? B.lightBrown : "#fff",
+                    transition: "all 0.2s ease",
+                    minHeight: "110px", display: "flex", alignItems: "center", justifyContent: "center",
+                    position: "relative",
+                  }}>
+                  <input ref={fileInputRef} type="file" accept="video/*"
+                    onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
+                    style={videoFile
+                      ? { position: "absolute", opacity: 0, width: 0, height: 0 }
+                      : { position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }
+                    }/>
+                  {videoFile ? (
+                    <div style={{ padding: "12px 20px" }}>
+                      <div style={{ fontSize: "20px", marginBottom: "4px" }}>🎬</div>
+                      <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
+                      <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
+                        {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
+                        <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setDetectedFileDurationSecs(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
+                          style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div style={{ padding: "12px 20px" }}>
-                    <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
-                    <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                    <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 5 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
-                  </div>
-                )}
-              </label>
+                  ) : (
+                    <div style={{ padding: "12px 20px" }}>
+                      <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
+                      <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
+                      <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 5 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
+                      <div onClick={e => { e.preventDefault(); e.stopPropagation(); setShowLinkInput(true); }}
+                        style={{ fontSize: "11px", color: B.brown, marginTop: "6px", textDecoration: "underline", cursor: "pointer", position: "relative", zIndex: 1 }}>
+                        or paste a video link
+                      </div>
+                    </div>
+                  )}
+                </label>
+              )}
+              {linkFetchError && (
+                <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>
+                  ⛔ {linkFetchError}
+                </div>
+              )}
               {uploadZoneError && (
                 <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>
                   ⛔ {uploadZoneError}

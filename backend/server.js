@@ -2719,7 +2719,12 @@ async function runShadowScoringForJob(jobId) {
       // Phase C, Task 3 -- posted-video validation rescores are tagged
       // distinctly so percentilePools/personal-history queries can exclude
       // them (see idx_shadow_scores_is_posted_video's call sites below).
-      source: job.source === "validation" ? "validation" : "app",
+      // Paste-a-link submissions (radar/links prompt, Part B) get their own
+      // "link_fetch" provenance tag instead of falling into the generic
+      // "app" bucket -- same pipeline, same eligibility, just a distinct
+      // source so a future analysis can separate "uploaded a file" from
+      // "pasted a link" if that ever matters.
+      source: job.source === "validation" ? "validation" : job.source === "link_fetch" ? "link_fetch" : "app",
       isPostedVideo: job.source === "validation",
       postedVideoId: job.postedVideoId ?? null,
       fpGroup, // pool hygiene Task 2
@@ -2986,6 +2991,151 @@ app.get("/api/user/:userId", async (req, res) => {
     console.error(`[user] fetch failed for user_id=${req.params.userId}: ${err.message}`);
     res.status(500).json({ error: "Failed to fetch account" });
   }
+});
+
+// Paste-a-link submissions (radar/links prompt, Part B). Feasibility
+// confirmed live from Render's own environment first (B0 -- see
+// RADAR_LINKS_READOUT.md): yt-dlp fetched all 3 test TikTok URLs cleanly;
+// both test YouTube Shorts URLs hit YouTube's own bot-detection wall
+// ("Sign in to confirm you're not a bot") -- a known limitation of running
+// yt-dlp from a datacenter IP, not something this endpoint can work around.
+// Shorts links are still accepted here (allowlisted, per spec) but will
+// currently always fall through to the generic fetch-failure message below.
+const LINK_FETCH_TIMEOUT_MS = 25_000; // metadata probe -- quick, no download yet
+const LINK_DOWNLOAD_TIMEOUT_MS = 120_000; // full download -- bounded, single video
+const LINK_FETCH_RATE_LIMIT = 10; // per user (or per IP, if no userId) per hour
+const LINK_FETCH_RATE_WINDOW_MS = 60 * 60 * 1000;
+const linkFetchAttempts = new Map(); // key (userId or ip) -> timestamp[]
+
+function checkLinkFetchRateLimit(key) {
+  const now = Date.now();
+  const attempts = (linkFetchAttempts.get(key) || []).filter((t) => now - t < LINK_FETCH_RATE_WINDOW_MS);
+  if (attempts.length >= LINK_FETCH_RATE_LIMIT) {
+    linkFetchAttempts.set(key, attempts);
+    return false;
+  }
+  attempts.push(now);
+  linkFetchAttempts.set(key, attempts);
+  return true;
+}
+
+// Runs a yt-dlp subprocess, resolving { code, stdout, stderr } rather than
+// rejecting -- callers distinguish failure reasons from stderr text (same
+// approach validation/collect_day30.py already uses for this same command).
+function runYtDlp(args, timeoutMs) {
+  return new Promise((resolve) => {
+    const proc = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    const timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
+    proc.stdout.on("data", (d) => { stdout += d.toString(); });
+    proc.stderr.on("data", (d) => { stderr += d.toString().slice(-2000); });
+    proc.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+    proc.on("error", (e) => { clearTimeout(timer); resolve({ code: -1, stdout: "", stderr: e.message }); });
+  });
+}
+
+function platformFromLinkUrl(u) {
+  if (/(^|\.)tiktok\.com$/.test(u.hostname)) return "tiktok";
+  if (/(^|\.)youtube\.com$/.test(u.hostname) || /(^|\.)youtu\.be$/.test(u.hostname)) return "youtube";
+  return null;
+}
+
+app.post("/api/fetch-video", async (req, res) => {
+  const { url: rawUrl, platform: _ignoredPlatform, objective = "", judges: judgesParam, userId = null } = req.body;
+  const ip = (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map((s) => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })();
+
+  let parsed;
+  try {
+    parsed = new URL((rawUrl || "").trim());
+  } catch {
+    return res.status(400).json({ error: "That doesn't look like a valid link." });
+  }
+
+  // Instagram gets its own specific message (per spec) -- checked before the
+  // generic allowlist rejection so it isn't lumped in with "invalid link."
+  if (/(^|\.)instagram\.com$/.test(parsed.hostname)) {
+    return res.status(400).json({ error: "Instagram blocks apps from fetching videos by link — save the video to your device and upload the file instead." });
+  }
+
+  const platform = platformFromLinkUrl(parsed);
+  if (!platform) {
+    return res.status(400).json({ error: "Links are supported from TikTok and YouTube Shorts only — download the file and upload it instead." });
+  }
+
+  if (!checkLinkFetchRateLimit(userId || ip)) {
+    return res.status(429).json({ error: "You've hit the link-fetch limit for now (10 per hour) — try again later, or upload the file directly." });
+  }
+
+  const selectedJudgeIds = judgesParam ? JSON.parse(judgesParam) : ["critic", "cool", "connector"];
+  const selectedJudges = JUDGES.filter((j) => selectedJudgeIds.includes(j.id));
+
+  // Metadata-only probe FIRST (no download yet) -- duration lives in this
+  // JSON, so a video over 5 minutes is rejected before spending any time/
+  // bandwidth on the actual fetch.
+  const probe = await runYtDlp(["--dump-json", "--no-warnings", "--skip-download", parsed.href], LINK_FETCH_TIMEOUT_MS);
+  if (probe.code !== 0) {
+    console.error(`[link-fetch] probe failed for ${parsed.href}: ${probe.stderr.slice(-500)}`);
+    return res.status(422).json({ error: "Couldn't fetch that link — download the file and upload it instead." });
+  }
+  let meta;
+  try {
+    meta = JSON.parse(probe.stdout.trim().split("\n")[0]);
+  } catch {
+    return res.status(422).json({ error: "Couldn't fetch that link — download the file and upload it instead." });
+  }
+  if (meta.duration && meta.duration > MAX_VIDEO_DURATION_SECS) {
+    const mins = Math.floor(meta.duration / 60), secs = Math.round(meta.duration % 60);
+    return res.status(422).json({ error: `Video is ${mins}:${String(secs).padStart(2, "0")} long. PreviewPanel currently supports videos up to 5:00. Please link a shorter video.` });
+  }
+
+  const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const destPath = path.join(__dirname, "uploads", `${jobId}_linkfetch.mp4`);
+
+  // Actual download -- shares the SAME ffmpeg concurrency slot as
+  // conversions/trims (per spec: "under the global ffmpeg semaphore"). This
+  // is a network-bound yt-dlp process, not ffmpeg itself, but the slot still
+  // caps how many heavy video-fetch/convert operations run at once on this
+  // one instance.
+  await acquireFfmpegSlot();
+  let download;
+  try {
+    download = await runYtDlp(["--no-warnings", "-f", "mp4/best", "-o", destPath, parsed.href], LINK_DOWNLOAD_TIMEOUT_MS);
+  } finally {
+    releaseFfmpegSlot();
+  }
+  if (download.code !== 0 || !fs.existsSync(destPath)) {
+    console.error(`[link-fetch] download failed for ${parsed.href}: ${download.stderr.slice(-500)}`);
+    return res.status(422).json({ error: "Couldn't fetch that link — download the file and upload it instead." });
+  }
+
+  const queuePosition = jobQueue.length + (activeJob !== null ? 1 : 0);
+  jobs[jobId] = {
+    status: queuePosition > 0 ? "queued" : "uploading",
+    queuePosition,
+    platform,
+    objective,
+    userId: userId || null,
+    source: "link_fetch", // Provenance -- see the source-tagging comment in runShadowScoringForJob.
+    results: {},
+    error: null,
+    createdAt: Date.now(),
+    startedAt: null,
+    timings: { conversionMs: null, uploadMs: null, browserUploadMs: null, judges: {} },
+    ip,
+    fileSizeMB: parseFloat((fs.statSync(destPath).size / 1024 / 1024).toFixed(2)),
+    fileName: `${platform}_link_fetch.mp4`,
+    browserUploadMs: null,
+  };
+
+  console.log(`[${jobId}] Link-fetch job created — platform=${platform} url=${parsed.href} queue position: ${queuePosition}`);
+  res.json({ jobId, queuePosition });
+
+  // Same preprocess -> enqueue -> runPipeline sequence /api/analyze uses for
+  // an uploaded file -- from here on, a link-fetch submission is completely
+  // indistinguishable from a file upload to the rest of the pipeline.
+  const pre = await preprocessUploadedVideo(jobId, destPath);
+  if (!pre.ok) return;
+  enqueueJob(jobId, () => runPipeline(jobId, null, platform, objective, selectedJudges));
 });
 
 app.post("/api/analyze", (req, res, next) => {
