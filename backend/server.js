@@ -3048,6 +3048,25 @@ function platformFromLinkUrl(u) {
   return null;
 }
 
+// Readout-screen polish, point 1 -- the cleaned canonical URL shown in the
+// file-name slot for link-fetch runs: strips query/tracking params (every
+// platform's share links carry these -- TikTok's `_t`/`_r`, YouTube's `si`,
+// etc.) and the fragment, keeping only hostname+pathname, then middle-
+// truncates so a long path never blows out the pill's layout. The RAW url
+// (job.sourceUrl) is kept separately, unmodified, for the "tap to open the
+// original post" link -- this cleaned string is display-only.
+const LINK_DISPLAY_MAX_CHARS = 46;
+function cleanDisplayUrl(href) {
+  let u;
+  try { u = new URL(href); } catch { return href; }
+  let clean = `${u.hostname}${u.pathname}`.replace(/\/$/, "");
+  if (clean.length > LINK_DISPLAY_MAX_CHARS) {
+    const keep = Math.floor((LINK_DISPLAY_MAX_CHARS - 1) / 2);
+    clean = `${clean.slice(0, keep)}…${clean.slice(-keep)}`;
+  }
+  return clean;
+}
+
 app.post("/api/fetch-video", async (req, res) => {
   const { url: rawUrl, platform: _ignoredPlatform, objective = "", judges: judgesParam, userId = null } = req.body;
   const ip = (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map((s) => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })();
@@ -3133,6 +3152,10 @@ app.post("/api/fetch-video", async (req, res) => {
     fileSizeMB: parseFloat((fs.statSync(destPath).size / 1024 / 1024).toFixed(2)),
     fileName: `${platform}_link_fetch.mp4`,
     browserUploadMs: null,
+    // Readout-screen polish, point 1 -- display metadata for the readout
+    // header + History (see cleanDisplayUrl's own comment above).
+    sourceUrl: parsed.href,
+    linkDisplayUrl: cleanDisplayUrl(parsed.href),
   };
 
   console.log(`[${jobId}] Link-fetch job created — platform=${platform} url=${parsed.href} queue position: ${queuePosition}`);
@@ -4449,6 +4472,12 @@ app.get("/api/status/:jobId", async (req, res) => {
     // 1-10 or null (falls back to the raw 0-10 value) per the pool/grid this
     // run's window fell in. See axisPools.js for the two windows' definitions.
     axisDeciles: job.axisDeciles ?? null,
+    // Readout-screen polish, point 1 -- link-fetch runs only; both null for
+    // a file upload. sourceUrl is the raw original link (the "tap to open
+    // the original post" target); linkDisplayUrl is the cleaned/truncated
+    // string for the file-name slot itself.
+    sourceUrl: job.sourceUrl ?? null,
+    linkDisplayUrl: job.linkDisplayUrl ?? null,
   });
 });
 

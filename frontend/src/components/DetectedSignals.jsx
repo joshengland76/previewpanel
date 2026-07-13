@@ -127,7 +127,7 @@ export function DetectedSignals({ contentReadAxes, signalFields }) {
   const toggle = (id) => setOpen((cur) => (cur === id ? null : id));
 
   return (
-    <div style={{ marginTop: 14, borderTop: `1px solid ${B.border}`, paddingTop: 12,
+    <div style={{ marginTop: 6, marginBottom: 10,
       display: "flex", flexDirection: "column", gap: 10 }}>
       <SignalRow title="Other positive signals" chips={positiveChips} open={open} onToggle={toggle} />
       <SignalRow title="Negative signals" chips={negativeChips} open={open} onToggle={toggle} />

@@ -180,12 +180,13 @@ const LABEL_INSIDE_OFFSET = 15;
 const LABEL_OUTSIDE_OFFSET = 14;
 const MIN_LABEL_SPACING = 20; // px between label centers below which they read as overlapping
 
-function computeLabelPlacements(vals, n, pt, ang) {
-  const base = vals.map((v, i) => {
-    const val = Number(v) || 0;
+function computeLabelPlacements(vals, activeIndices, pt, ang) {
+  const base = activeIndices.map((i) => {
+    const val = Number(vals[i]) || 0;
     const [vx, vy] = pt(i, val);
     return { i, val, vx, vy, ux: Math.cos(ang(i)), uy: Math.sin(ang(i)) };
   });
+  const n = activeIndices.length;
 
   const avgVal = base.reduce((s, p) => s + p.val, 0) / (n || 1);
   const avgR = (Math.max(0, Math.min(10, avgVal)) / 10) * R;
@@ -223,7 +224,7 @@ function computeLabelPlacements(vals, n, pt, ang) {
   });
 }
 
-export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, contentReadAxes, signalFields, axisDeciles }) {
+export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, contentReadAxes, signalFields, axisDeciles, skipObjectiveFit }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
 
@@ -235,14 +236,25 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
 
   const axes = [...BIG_PICTURE_AXES, { key: "__objfit", label: "Objective Fit" }, ...TREND_AXES];
 
-  if (!present.some((x) => axes.some((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles) != null))) return null;
+  // No canonical objective selected (blank or free-typed/custom): the panel
+  // never scored objective fit against anything real, so that vertex is
+  // excluded from every drawn polygon -- bold and ghost lines both connect
+  // Funny straight to Trend Align, skipping the spoke. The spoke line and
+  // axis label still render (muted) so the axis order stays legible; only
+  // the plotted shapes and numeric label skip it.
+  const objFitIndex = axes.findIndex((a) => a.key === "__objfit");
+  const activeIndices = skipObjectiveFit
+    ? axes.map((_, i) => i).filter((i) => i !== objFitIndex)
+    : axes.map((_, i) => i);
+
+  if (!activeIndices.some((i) => present.some((x) => judgeAxisValue(x.data, axes[i], trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles) != null))) return null;
 
   const ang = (i) => (-90 + i * (360 / axes.length)) * Math.PI / 180;
   const pt = (i, v) => {
     const rr = (Math.max(0, Math.min(10, v)) / 10) * R;
     return [CX + rr * Math.cos(ang(i)), CY + rr * Math.sin(ang(i))];
   };
-  const polyPoints = (vals) => vals.map((v, i) => pt(i, v ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
+  const polyPoints = (vals) => activeIndices.map((i) => pt(i, vals[i] ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
 
   const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles)) }));
   const avgVals = axes.map((a, i) => axisAvgValue(a, axisDeciles, judgeVals, i));
@@ -269,8 +281,10 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
             const sp = pt(i, 10), lp = pt(i, 12.6);
             const anchor = Math.abs(lp[0] - CX) < 6 ? "middle" : lp[0] > CX ? "start" : "end";
             const dy = lp[1] < CY - 10 ? -2 : lp[1] > CY + 10 ? 9 : 3;
+            const muted = skipObjectiveFit && a.key === "__objfit";
             return (
-              <g key={a.key}>
+              <g key={a.key} opacity={muted ? 0.4 : 1}>
+                {muted && <title>Select a content category to have the panel score objective fit.</title>}
                 <line x1={CX} y1={CY} x2={sp[0]} y2={sp[1]} stroke={B.border} strokeWidth="1" />
                 <text x={lp[0].toFixed(1)} y={(lp[1] + dy).toFixed(1)} fontFamily="Montserrat, sans-serif"
                   fontSize="8.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>
@@ -294,7 +308,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
           {focus === "avg" && (
             <>
               <polygon points={polyPoints(avgVals)} fill="none" stroke={AVG} strokeWidth="4" strokeLinejoin="round" />
-              {avgVals.map((v, i) => { const [x, y] = pt(i, v); return (
+              {activeIndices.map((i) => { const [x, y] = pt(i, avgVals[i]); return (
                 <circle key={i} cx={x.toFixed(1)} cy={y.toFixed(1)} r="4.5" fill={AVG} stroke="#fff" strokeWidth="1.8" />
               ); })}
             </>
@@ -306,7 +320,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
             const fj = focus === "avg" ? null : judgeVals.find((jv) => jv.judge.id === focus);
             const vals = fj ? fj.vals.map((v) => Number(v) || 0) : avgVals;
             const col = fj ? fj.judge.color : AVG;
-            const placements = computeLabelPlacements(vals, axes.length, pt, ang);
+            const placements = computeLabelPlacements(vals, activeIndices, pt, ang);
             return placements.map(({ i, val, x, y }) => (
               <text key={"n" + i} x={x.toFixed(1)} y={(y + 3.5).toFixed(1)} fontFamily="Montserrat, sans-serif"
                 fontSize="10.5" fontWeight="800" fill={col} stroke="#fff" strokeWidth="3" paintOrder="stroke" textAnchor="middle">
@@ -362,14 +376,20 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
         </button>
         {showInfo && (
           <div style={{ marginTop: 11, display: "flex", flexDirection: "column", gap: 10, borderTop: `1px solid ${B.lightBrown}`, paddingTop: 12 }}>
-            {axes.map((a) => (
-              <div key={a.key}>
-                <div style={{ fontSize: 11.5, fontWeight: 800, color: B.body }}>{a.label}</div>
-                <div style={{ fontSize: 11, lineHeight: 1.45, color: "#5c544a", marginTop: 2 }}>
-                  {DIMENSION_INFO[a.key === "__objfit" ? "objective_fit" : a.key] || ""}
+            {axes.map((a) => {
+              const isSkippedObjFit = skipObjectiveFit && a.key === "__objfit";
+              const text = isSkippedObjFit
+                ? "Select a content category to have the panel score objective fit."
+                : DIMENSION_INFO[a.key === "__objfit" ? "objective_fit" : a.key] || "";
+              return (
+                <div key={a.key}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: B.body }}>{a.label}</div>
+                  <div style={{ fontSize: 11, lineHeight: 1.45, color: "#5c544a", marginTop: 2 }}>
+                    {text}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

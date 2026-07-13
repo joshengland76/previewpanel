@@ -329,6 +329,14 @@ export default function PreviewPanel() {
   const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
   const [objective, setObjective] = useState("");
   const [restoredFileName, setRestoredFileName] = useState(null);
+  // Readout-screen polish, point 1 -- link-fetch runs only; null for a file
+  // upload. linkDisplayUrl/linkSourceUrl populate during a live run (from
+  // /api/status polling); restoredSourceUrl is the equivalent for a
+  // restored History entry (restoredFileName already holds the cleaned URL
+  // string in that case -- see restoreFromHistory).
+  const [linkDisplayUrl, setLinkDisplayUrl] = useState(null);
+  const [linkSourceUrl, setLinkSourceUrl] = useState(null);
+  const [restoredSourceUrl, setRestoredSourceUrl] = useState(null);
   const [objDropOpen, setObjDropOpen] = useState(false);
   const [objFilter, setObjFilter] = useState("");
   const [objDropAbove, setObjDropAbove] = useState(false);
@@ -488,6 +496,8 @@ export default function PreviewPanel() {
         setSignalFields(data.signalFields ?? null);
         setGroupMeanBigPicture(data.groupMeanBigPicture ?? null);
         setAxisDeciles(data.axisDeciles ?? null);
+        setLinkDisplayUrl(data.linkDisplayUrl ?? null);
+        setLinkSourceUrl(data.sourceUrl ?? null);
         setTrimAvailable(!!data.trimAvailable);
 
         const jobDone = data.status === "done" || data.status === "partial";
@@ -571,7 +581,11 @@ export default function PreviewPanel() {
               jobId,
               platform,
               objective,
-              fileName: videoFile?.name || "video",
+              // Readout-screen polish, point 1 -- link runs show the cleaned
+              // URL in place of the internal downloaded-file name; sourceUrl
+              // preserved separately so a restored entry can still link out.
+              fileName: linkDisplayUrl || videoFile?.name || "video",
+              sourceUrl: linkSourceUrl || null,
               savedAt: Date.now(),
               scores,
               results: data.results,
@@ -850,14 +864,31 @@ export default function PreviewPanel() {
     setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
     notifiedRef.current = false; savedRef.current = false;
     setObjective("");
+    // Readout-screen polish, point 2 -- the upload box must never return in
+    // "paste a link" mode; every path back to the submit screen goes through
+    // this one reset(), so clearing it here covers all of them.
+    setShowLinkInput(false); setVideoLinkUrl(""); setLinkFetchError(null);
+    // Readout-screen polish, point 1 -- clear link display metadata too, so
+    // a stale URL from the previous run can never bleed into the next one.
+    setLinkDisplayUrl(null); setLinkSourceUrl(null); setRestoredSourceUrl(null);
   };
 
   // Issue #9: Restore from history
   const restoreFromHistory = (entry) => {
     setShowHistory(false);
+    // Readout-screen polish, point 2 -- defensive, same as reset() above:
+    // the upload box (not visible at step 2, but state persists across the
+    // SPA's step transitions) must never carry link-mode into whatever
+    // submit-screen view comes next.
+    setShowLinkInput(false); setVideoLinkUrl(""); setLinkFetchError(null);
     setPlatform(entry.platform);
     setObjective(entry.objective || "");
     setRestoredFileName(entry.fileName || null);
+    // Readout-screen polish, point 1 -- entry.fileName already holds the
+    // cleaned display URL for a link run (see saveToHistory); this is the
+    // raw original, for the "tap to open" link on the restored view.
+    setRestoredSourceUrl(entry.sourceUrl || null);
+    setLinkDisplayUrl(null); setLinkSourceUrl(null); // this is a restored view, not a live link-fetch run
     setSelectedJudges(entry.selectedJudges || ["critic","cool","connector"]);
     setJudgeResults(entry.results || {});
     // Older entries predate synthesis → no synthesis means the fallback view.
@@ -1380,11 +1411,24 @@ export default function PreviewPanel() {
                     🎯 {objective}
                   </div>
                 )}
-                {(videoFile?.name || restoredFileName) && (
-                  <div style={{ padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: "#888", fontFamily: "'Courier New', monospace" }}>
-                    {videoFile?.name || restoredFileName}
-                  </div>
-                )}
+                {/* Readout-screen polish, point 1 -- same slot a file's name
+                    occupies; a link run instead shows the cleaned URL,
+                    tappable to open the original post in a new tab. */}
+                {(() => {
+                  const displayName = linkDisplayUrl || videoFile?.name || restoredFileName;
+                  const displayUrl = linkSourceUrl || restoredSourceUrl || null;
+                  if (!displayName) return null;
+                  return displayUrl ? (
+                    <a href={displayUrl} target="_blank" rel="noopener noreferrer"
+                      style={{ display: "flex", alignItems: "center", gap: "4px", padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: B.brown, fontFamily: "'Courier New', monospace", textDecoration: "underline", cursor: "pointer" }}>
+                      🔗 {displayName}
+                    </a>
+                  ) : (
+                    <div style={{ padding: "5px 13px", background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "99px", fontSize: "11px", color: "#888", fontFamily: "'Courier New', monospace" }}>
+                      {displayName}
+                    </div>
+                  );
+                })()}
                 <span style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}>{statusMessage}</span>
               </div>
             )}
@@ -1428,7 +1472,8 @@ export default function PreviewPanel() {
                   </div>
                 )}
                 <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture}
-                  contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles} />
+                  contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles}
+                  skipObjectiveFit={!OBJECTIVE_OPTIONS.includes(objective)} />
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
                 <DisagreementCard synthesis={synthesis} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
@@ -1441,7 +1486,8 @@ export default function PreviewPanel() {
             {isFinished && synthesisStatus !== "ready" && synthesisStatus !== "pending" && (
               <>
                 <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture}
-                  contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles} />
+                  contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles}
+                  skipObjectiveFit={!OBJECTIVE_OPTIONS.includes(objective)} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
