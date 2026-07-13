@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { B, JUDGES } from "../brand.js";
+import { DetectedSignals } from "./DetectedSignals.jsx";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Part B — Performance radar. Phase B4, Task 4 originally set the axes to
@@ -40,9 +41,12 @@ import { B, JUDGES } from "../brand.js";
 // see SPIDER_V3_READOUT.md), which read as "broken" even on rows where it
 // was an accurate reading. Their underlying 0-10 values still exist
 // (computeContentReadAxes(), job.contentReadAxes) but are now surfaced only
-// as "Detected signals" presence chips (DetectedSignals.jsx) rendered below
-// this component, not as a radar vertex that spends nearly all its life at
-// the origin.
+// as "Detected signals" presence chips (DetectedSignals.jsx). Spider v3.1
+// moved that chip block ONTO this card (rendered at the end of the same
+// white card div, below the radar/legend/explainer), and split it into two
+// labeled sub-rows (positive/negative) covering six more presence signals
+// beyond Curiosity/Inspiration/Save-CTA -- see DetectedSignals.jsx's own
+// header comment for the full list and the model coefficients behind them.
 //
 // Field names read from .results[id].data.dimensions.big_picture[key] (the
 // REAL judge output shape). Works identically for v1 rows and v2 rows: v1's
@@ -88,8 +92,8 @@ const DIMENSION_INFO = {
   funny: `Whether the video produces genuine humor, not just an attempt at it. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
   novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
   objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
-  trend_alignment: `A content read (not a judge score) of how many recognizable trending-format patterns — sounds, edits, structures — this video's content matches. In our data this carries a modest positive association with performance, a real but small signal rather than a strong lever.`,
-  trending_topic: `A content read (not a judge score) of how likely this video's subject matter is to be currently trending, independent of format. Also a modest positive association in our data — worth having, but one of the smaller factors in the model.`,
+  trend_alignment: `How many recognizable trending-format patterns — sounds, edits, structural beats — this video picks up on. Videos that align with more of these patterns tend to perform better than those that don't.`,
+  trending_topic: `How likely this video's subject matter is to be currently trending, independent of format or execution. Videos on trending topics tend to outperform ones that aren't.`,
 };
 
 const CX = 160, CY = 150, R = 88;
@@ -178,7 +182,7 @@ function computeLabelPlacements(vals, n, pt, ang) {
   });
 }
 
-export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture }) {
+export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, contentReadAxes, signalFields }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
 
@@ -320,6 +324,12 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture }) {
             ))}
           </div>
         )}
+
+        {/* Spider v3.1 -- on-card, below everything else in this same white
+            card div (still "directly below the radar" in the sense of
+            belonging to this card, not a new one). Renders nothing at all
+            when no signal is earned -- see DetectedSignals.jsx. */}
+        <DetectedSignals contentReadAxes={contentReadAxes} signalFields={signalFields} />
       </div>
     </section>
   );

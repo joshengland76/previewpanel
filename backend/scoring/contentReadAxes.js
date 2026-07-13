@@ -113,3 +113,30 @@ export function computeTrendAxes(features) {
     trending_topic: clampTo10(features.trending_topic_likelihood),
   };
 }
+
+// Spider v3.1 -- raw categorical/boolean inputs behind the "Detected
+// signals" positive/negative chip row (DetectedSignals.jsx), bundled into
+// one object so server.js has a single source of truth shared between the
+// live path (this run's own `features`) and the /api/status DB-fallback
+// recovery path (a past row's stored input_features) -- identical shape
+// either way, same "current submission only" contract as the two functions
+// above. Each field is a direct passthrough of an already-computed
+// buildFeatures.js key; scoring_spec_v2.json coefficients (for reference):
+// cta_type_follow +0.0368, caption_tone_educational +0.0293 (positive);
+// is_sponsored_int -0.0746, caption_tone_promotional -0.0911,
+// hook_style_question -0.0906, cta_type_buy -0.0572, cta_type_link -0.0362,
+// text_overlay_density_heavy -0.0257 (negative). cta_type_save (+0.0541,
+// positive) is read from the same ctaType field, checked separately in
+// DetectedSignals.jsx.
+export function buildSignalFields(features) {
+  if (!features) {
+    return { ctaType: null, captionTone: null, hookStyle: null, textOverlayDensity: null, isSponsored: null };
+  }
+  return {
+    ctaType: features.cta_type ?? null,
+    captionTone: features.caption_tone ?? null,
+    hookStyle: features.hook_style ?? null,
+    textOverlayDensity: features.text_overlay_density ?? null,
+    isSponsored: features.is_sponsored_int === 1,
+  };
+}

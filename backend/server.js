@@ -36,7 +36,7 @@ import "dotenv/config";
 // enabled. See scoring/README (PHASEB2_READOUT.md in the research repo) for
 // the full design.
 import { extractCdims } from "./scoring/cdims.js";
-import { computeContentReadAxes, computeTrendAxes } from "./scoring/contentReadAxes.js";
+import { computeContentReadAxes, computeTrendAxes, buildSignalFields } from "./scoring/contentReadAxes.js";
 import { buildScoringFeatures } from "./scoring/buildFeatures.js";
 import { recordShadowScore } from "./scoring/shadowScore.js";
 import { getScoreDisplay } from "./scoring/scoreDisplay.js";
@@ -2603,9 +2603,10 @@ async function runShadowScoringForJob(jobId) {
     // submission only" contract as ownContentReadAxes above.
     const ownTrendAxes = computeTrendAxes(features);
     job.trendAxes = ownTrendAxes;
-    // Spider v3 -- backs the "Save-prompt CTA" chip (cta_type === "save").
-    // Direct passthrough of this run's own C_dims read, same contract.
-    job.ctaType = cdimsDims?.cta_type ?? null;
+    // Spider v3.1 -- backs the full "Detected signals" positive/negative
+    // chip row (beyond Curiosity/Inspiration above). Direct passthrough of
+    // this run's own C_dims-derived features, same contract.
+    job.signalFields = buildSignalFields(features);
 
     // Spider chart's other 6 judge-scored axes (Compelling, Novel,
     // Emotionally Resonant, Emotion Intensity, Funny, Objective Fit) --
@@ -4135,7 +4136,7 @@ app.get("/api/status/:jobId", async (req, res) => {
       if (row && row.input_features) {
         job.contentReadAxes = computeContentReadAxes(row.input_features);
         if (job.trendAxes == null) job.trendAxes = computeTrendAxes(row.input_features);
-        if (job.ctaType == null) job.ctaType = row.input_features.cta_type ?? null;
+        if (job.signalFields == null) job.signalFields = buildSignalFields(row.input_features);
       }
     } catch (e) {
       console.error(`[${req.params.jobId}] contentReadAxes/trendAxes DB fallback failed (non-fatal): ${e.message}`);
@@ -4185,8 +4186,10 @@ app.get("/api/status/:jobId", async (req, res) => {
     // Spider v3 -- Trend Alignment / Trending Topic, the two panel-only
     // radar axes that replace Curiosity/Inspiration. Own value only.
     trendAxes: job.trendAxes ?? null,
-    // Spider v3 -- backs the "Save-prompt CTA" chip.
-    ctaType: job.ctaType ?? null,
+    // Spider v3.1 -- backs the full "Detected signals" positive/negative
+    // chip row (Save/Follow CTA, caption tone, hook style, text overlays,
+    // sponsored). Own value only.
+    signalFields: job.signalFields ?? null,
     // Group-mean (or own, if ungrouped) values for the spider chart's other 6
     // judge-scored axes -- {judge}_big_{dim}/{judge}_objective_fit_score keyed.
     groupMeanBigPicture: job.groupMeanBigPicture ?? null,
