@@ -42,9 +42,8 @@ import { DetectedSignals } from "./DetectedSignals.jsx";
 // was an accurate reading. Their underlying 0-10 values still exist
 // (computeContentReadAxes(), job.contentReadAxes) but are now surfaced only
 // as "Detected signals" presence chips (DetectedSignals.jsx). Spider v3.1
-// moved that chip block ONTO this card (rendered at the end of the same
-// white card div, below the radar/legend/explainer), and split it into two
-// labeled sub-rows (positive/negative) covering six more presence signals
+// moved that chip block ONTO this card, and split it into two labeled
+// sub-rows (positive/negative) covering six more presence signals
 // beyond Curiosity/Inspiration/Save-CTA -- see DetectedSignals.jsx's own
 // header comment for the full list and the model coefficients behind them.
 //
@@ -273,6 +272,11 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
           })()}
         </svg>
 
+        {/* Spider v3.2 -- directly below the radar, above "Tap a judge to
+            isolate their line." Renders nothing at all when no signal is
+            earned -- see DetectedSignals.jsx. */}
+        <DetectedSignals contentReadAxes={contentReadAxes} signalFields={signalFields} />
+
         <div style={{ textAlign: "center", fontSize: 10, color: B.grey, margin: "4px 0 7px" }}>Tap a judge to isolate their line</div>
 
         {/* legend — one row, all chips equal height; Avg restores the default view, a judge isolates its line */}
@@ -324,12 +328,6 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
             ))}
           </div>
         )}
-
-        {/* Spider v3.1 -- on-card, below everything else in this same white
-            card div (still "directly below the radar" in the sense of
-            belonging to this card, not a new one). Renders nothing at all
-            when no signal is earned -- see DetectedSignals.jsx. */}
-        <DetectedSignals contentReadAxes={contentReadAxes} signalFields={signalFields} />
       </div>
     </section>
   );

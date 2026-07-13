@@ -1332,10 +1332,10 @@ export default function PreviewPanel() {
                     </button>
                   </div>
                 )}
-                <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
-                <DisagreementCard synthesis={synthesis} />
                 <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture}
                   contentReadAxes={contentReadAxes} signalFields={signalFields} />
+                <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
+                <DisagreementCard synthesis={synthesis} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />
                 <JudgeDeepDives results={judgeResults} duration={videoDurationSecs} openIds={openJudgeIds} onToggle={toggleJudgeCard} />
               </>
