@@ -833,6 +833,14 @@ async function initDb() {
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS fp_group_key TEXT`);
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_k INTEGER DEFAULT 1`);
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_mean_prediction DOUBLE PRECISION`);
+    // Extends the same group-mean treatment to the Sweep C content-read axes
+    // (Curiosity/Inspiration) -- these come from a single video's own Claude
+    // extraction, which is itself noisy run-to-run (see the Scoring Model
+    // Report's repeat-run variability section), so a repeat submission of the
+    // same video should smooth over that noise the same way group_mean_
+    // prediction already does for the score, rather than showing whatever one
+    // particular run's own read happened to be.
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_mean_content_read_axes JSONB`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_fp_group_key ON shadow_scores(fp_group_key)`);
     await client.query("COMMIT");
 
@@ -1766,7 +1774,8 @@ async function resolveFingerprintGroup(job) {
     if (!ownFp) return null;
 
     const { rows: candidates } = await pgPool.query(
-      `SELECT pf.id AS fingerprint_id, pf.fp_json, ss.id AS shadow_id, ss.fp_group_key, ss.prediction, ss.created_at
+      `SELECT pf.id AS fingerprint_id, pf.fp_json, ss.id AS shadow_id, ss.fp_group_key, ss.prediction,
+              ss.input_features, ss.created_at
        FROM preview_fingerprints pf
        JOIN shadow_scores ss ON ss.submission_id = pf.submission_id
        WHERE pf.user_id = $1 AND pf.id != $2 AND pf.submission_id IS NOT NULL
@@ -1802,13 +1811,24 @@ async function resolveFingerprintGroup(job) {
     if (tier1Ids.size === 0) return null;
     const matched = candidates.filter((c) => tier1Ids.has(c.fingerprint_id));
 
-    // Every past row already got a fp_group_key at its own insert time (see
-    // shadowScore.js) -- adopt the earliest matched member's key so a match
-    // against ANY member of an existing group joins that same group.
+    // Bug fix: this used to additionally filter `matched` down to only
+    // candidates that ALREADY shared matched[0]'s own stored fp_group_key --
+    // but tier-1 (this function's own match signal) is already the trusted,
+    // validated "same video" test (per the threshold stress test: 100% tier
+    // 3 across 5,995 cross-pairs of genuinely distinct videos). Requiring a
+    // stored key match ON TOP of a verified tier-1 match meant a long real
+    // history of same-video submissions -- each holding its own independently
+    // self-assigned key from whenever it was inserted -- almost never
+    // actually consolidated: the filter degenerated to just [matched[0]]
+    // every time, capping every group at k=2 regardless of true history
+    // length. Every tier-1 match IS a real group member; take them all.
     matched.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     const groupKey = matched[0].fp_group_key;
-    const groupMembers = groupKey ? matched.filter((c) => c.fp_group_key === groupKey) : [matched[0]];
-    return { fpGroupKey: groupKey, existingPredictions: groupMembers.map((c) => c.prediction) };
+    // Content-read axes (Curiosity/Inspiration) get the same group-mean
+    // treatment as prediction below -- recomputed from each matched row's
+    // own stored input_features (already JSON on every row; no new storage).
+    const existingContentReadAxes = matched.map((c) => computeContentReadAxes(c.input_features));
+    return { fpGroupKey: groupKey, existingPredictions: matched.map((c) => c.prediction), existingContentReadAxes };
   } catch (e) {
     console.error(`[fingerprint_group] resolve failed (non-fatal, scoring unaffected): ${e.message}`);
     return null;
@@ -2507,10 +2527,11 @@ async function runShadowScoringForJob(jobId) {
     });
 
     // Sweep C -- spider chart's Curiosity/Inspiration axes, derived from the
-    // same C_dims fields already in `features` (no new extraction). Attached
-    // to `job` (not just returned locally) so it survives for the /api/status
-    // response the same way job.scoreDisplay does.
-    job.contentReadAxes = computeContentReadAxes(features);
+    // same C_dims fields already in `features` (no new extraction). This
+    // run's own value; job.contentReadAxes is set below once shadowResult's
+    // group-mean (if any) is known, mirroring displayPrediction further down.
+    const ownContentReadAxes = computeContentReadAxes(features);
+    job.contentReadAxes = ownContentReadAxes;
 
     // Pool hygiene Task 2 -- fingerprint-group score consistency. A no-op
     // (returns null immediately) for validation rescores, research traffic,
@@ -2528,6 +2549,7 @@ async function runShadowScoringForJob(jobId) {
       cdimsStatus,
       platform: job.platform ?? null, // Phase C, Task 0b
       userId: job.userId ?? null, // Phase C, Task 1
+      contentReadAxes: ownContentReadAxes, // Sweep C -- folded into group_mean_content_read_axes below when grouped
       // Phase C, Task 3 -- posted-video validation rescores are tagged
       // distinctly so percentilePools/personal-history queries can exclude
       // them (see idx_shadow_scores_is_posted_video's call sites below).
@@ -2536,6 +2558,16 @@ async function runShadowScoringForJob(jobId) {
       postedVideoId: job.postedVideoId ?? null,
       fpGroup, // pool hygiene Task 2
     });
+
+    // Sweep C (extended) -- same group-mean swap as displayPrediction below:
+    // once this run matched a Tier-1 fingerprint (k>=2), the DISPLAYED
+    // content-read axes are the group's mean across all matched runs,
+    // smoothing over this video's own run-to-run C_dims extraction noise
+    // (see the Scoring Model Report's repeat-run variability section) rather
+    // than showing whatever one particular run's own read happened to be.
+    if (shadowResult && shadowResult.groupK >= 2 && shadowResult.groupMeanContentReadAxes) {
+      job.contentReadAxes = shadowResult.groupMeanContentReadAxes;
+    }
 
     // Phase C, Task 3 -- posted_videos gets the scoring result written back
     // directly (y_pred/avg_score/prompt_version/pegasus_model), and its
@@ -4001,16 +4033,20 @@ app.get("/api/status/:jobId", async (req, res) => {
   // stored on every shadow_scores row for every past submission), so a job
   // whose in-memory contentReadAxes never got set (reload, restart, or a
   // job predating this feature) recovers identically rather than showing
-  // nothing.
+  // nothing. Mirrors displayPrediction's group-mean preference (group_k>=2)
+  // so a recovered job shows the identical payload the original computation
+  // would have, same as the scoreDisplay fallback above.
   if (job.contentReadAxes == null && jobDoneForRecovery && job.submissionId != null && pgPool) {
     try {
       const { rows } = await pgPool.query(
-        `SELECT input_features FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
+        `SELECT input_features, group_k, group_mean_content_read_axes FROM shadow_scores WHERE submission_id = $1 LIMIT 1`,
         [job.submissionId]
       );
       const row = rows[0];
       if (row && row.input_features) {
-        job.contentReadAxes = computeContentReadAxes(row.input_features);
+        job.contentReadAxes = (row.group_k >= 2 && row.group_mean_content_read_axes)
+          ? row.group_mean_content_read_axes
+          : computeContentReadAxes(row.input_features);
       }
     } catch (e) {
       console.error(`[${req.params.jobId}] contentReadAxes DB fallback failed (non-fatal): ${e.message}`);
