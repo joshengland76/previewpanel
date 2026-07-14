@@ -947,6 +947,7 @@ export default function PreviewPanel() {
         @media (max-width: 480px) {
           .pp-main { padding: 0 14px 0 !important; }
           .pp-section-gap { margin-bottom: 6px !important; }
+          .pp-section-gap.pp-judge-section-gap { margin-bottom: 16px !important; }
           .pp-judge-list { gap: 4px !important; }
           .pp-content-pad { padding-bottom: 100px; }
           .pp-sticky-wrap {
@@ -1264,7 +1265,7 @@ export default function PreviewPanel() {
             </div>
 
             {/* 4 — Judge selector */}
-            <div className="pp-section-gap" style={{ marginBottom: "8px" }}>
+            <div className="pp-section-gap pp-judge-section-gap" style={{ marginBottom: "16px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Panel</div>
               <div className="pp-judge-list" style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                 {JUDGES.map(j => {
