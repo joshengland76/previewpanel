@@ -1084,10 +1084,10 @@ export default function PreviewPanel() {
                       </div>
                     </div>
                   ) : (
-                    <div style={{ padding: "12px 20px" }}>
-                      <div style={{ fontSize: "26px", marginBottom: "4px" }}>⬆</div>
+                    <div style={{ padding: "8px 20px" }}>
+                      <div style={{ fontSize: "20px", marginBottom: "2px" }}>⬆</div>
                       <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
-                      <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 5 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
+                      <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.3" }}>Max 5 min · TwelveLabs watches your full video</div>
                       <div onClick={e => { e.preventDefault(); e.stopPropagation(); setShowLinkInput(true); }}
                         style={{ fontSize: "11px", color: B.brown, textDecoration: "underline", cursor: "pointer",
                           position: "relative", zIndex: 1,
