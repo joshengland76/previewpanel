@@ -1301,11 +1301,16 @@ export default function PreviewPanel() {
                 style={{ width: "100%", height: "56px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "16px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
                 Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
               </button>
-              {videoFile && (
-                <div style={{ textAlign: "center", marginTop: "8px", fontSize: "11px", color: "#aaa" }}>
-                  ⏱ Analysis usually takes {timeEstimate} for a file this size — we'll notify you when it's ready
-                </div>
-              )}
+              {/* Always rendered (never conditional on videoFile) so this row's
+                  height is constant -- on mobile .pp-sticky-wrap is
+                  position:fixed/bottom:0, so a row that only appears after a
+                  file is picked grows the wrap's total height and shoves the
+                  button above it upward. visibility (not display) keeps the
+                  box's height reserved even when there's nothing to show. */}
+              <div style={{ textAlign: "center", marginTop: "8px", fontSize: "11px", color: "#aaa",
+                visibility: videoFile ? "visible" : "hidden", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                ⏱ Analysis usually takes {timeEstimate} for a file this size
+              </div>
             </div>
 
             {/* Add to Home Screen prompt */}
