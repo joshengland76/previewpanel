@@ -1081,7 +1081,9 @@ export default function PreviewPanel() {
                       <div style={{ fontWeight: "700", fontSize: "13px", color: "#888" }}>Tap to upload · MP4, MOV, WebM</div>
                       <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 5 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
                       <div onClick={e => { e.preventDefault(); e.stopPropagation(); setShowLinkInput(true); }}
-                        style={{ fontSize: "11px", color: B.brown, marginTop: "6px", textDecoration: "underline", cursor: "pointer", position: "relative", zIndex: 1 }}>
+                        style={{ fontSize: "11px", color: B.brown, textDecoration: "underline", cursor: "pointer",
+                          position: "relative", zIndex: 1, minHeight: "44px", padding: "10px 16px",
+                          display: "flex", alignItems: "center", justifyContent: "center" }}>
                         or paste a video link
                       </div>
                     </div>
