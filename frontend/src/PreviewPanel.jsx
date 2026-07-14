@@ -951,7 +951,7 @@ export default function PreviewPanel() {
           .pp-content-pad { padding-bottom: 100px; }
           .pp-sticky-wrap {
             position: fixed; bottom: 0; left: 0; right: 0;
-            padding: 10px 14px max(20px, env(safe-area-inset-bottom));
+            padding: 10px 14px max(34px, calc(14px + env(safe-area-inset-bottom)));
             background: linear-gradient(to bottom, rgba(250,250,250,0) 0%, rgba(250,250,250,1) 38%);
             z-index: 50;
             margin-top: 0;
@@ -1296,26 +1296,28 @@ export default function PreviewPanel() {
 
             {/* 5 — CTA */}
             <div className="pp-sticky-wrap">
-              <button className="pp-btn" onClick={handleSubmit}
-                disabled={(!videoFile && !(showLinkInput && videoLinkUrl.trim())) || selectedJudges.length === 0 || !!uploadZoneError}
-                style={{ width: "100%", height: "56px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "16px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
-                Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
-              </button>
-              {/* Always rendered (never conditional on videoFile) so this row's
-                  height is constant -- on mobile .pp-sticky-wrap is
-                  position:fixed/bottom:0, so a row that only appears after a
-                  file is picked grows the wrap's total height and shoves the
-                  button above it upward. visibility (not display) keeps the
-                  box's height reserved even when there's nothing to show. */}
-              <div style={{ textAlign: "center", marginTop: "8px", fontSize: "11px", color: "#aaa",
-                visibility: videoFile ? "visible" : "hidden", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                ⏱ Analysis usually takes {timeEstimate} for a file this size
+              {/* Text is absolutely positioned so it never adds flow height to
+                  this wrapper -- on mobile .pp-sticky-wrap is position:fixed/
+                  bottom:0, so any flow-height change here shoves the button
+                  above it up or down. Anchoring the text to the button via an
+                  absolute overlay keeps the button glued to its original spot
+                  in every state (no file, file selected, text hidden/shown). */}
+              <div style={{ position: "relative" }}>
+                <button className="pp-btn" onClick={handleSubmit}
+                  disabled={(!videoFile && !(showLinkInput && videoLinkUrl.trim())) || selectedJudges.length === 0 || !!uploadZoneError}
+                  style={{ width: "100%", height: "56px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "16px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
+                  Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
+                </button>
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: "8px", textAlign: "center", fontSize: "11px", color: "#aaa",
+                  visibility: videoFile ? "visible" : "hidden", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", pointerEvents: "none" }}>
+                  ⏱ Analysis usually takes {timeEstimate} for a file this size
+                </div>
               </div>
             </div>
 
             {/* Add to Home Screen prompt */}
             {deferredPrompt && (
-              <div style={{ marginTop: "12px", padding: "10px 14px", background: "#fff", border: `1px solid ${B.border}`, borderRadius: "10px", display: "flex", alignItems: "center", gap: "10px" }}>
+              <div style={{ marginTop: "36px", padding: "10px 14px", background: "#fff", border: `1px solid ${B.border}`, borderRadius: "10px", display: "flex", alignItems: "center", gap: "10px" }}>
                 <span style={{ fontSize: "18px" }}>📱</span>
                 <span style={{ fontSize: "12px", color: B.body, flex: 1 }}>Add PreviewPanel to your home screen for quick access.</span>
                 <button onClick={async () => {
