@@ -110,48 +110,58 @@ export async function getAxisPools(fetchShadowAxisRows) {
 }
 
 /**
- * Strict-dominance fraction of `value` within `pool` (array of {key, value}),
- * as a FRACTION in [0, 1]: the share of the window this value beat OUTRIGHT
- * (strictly less than -- ties earn NO credit). Replaces the original midrank
- * formula ((below + 0.5*equal)/n), which gave a tied value half-credit for
- * every row sharing its exact score. That was fine for smooth, mostly-unique
- * continuous data, but several axes here are coarse/discrete enough (a judge
- * consensus that lands on a common whole number, a trend signal that's
- * really just a small integer count) that one common raw value can be tied
- * by 15-25% of the entire window -- enough half-credit from that single tie
- * block to round a big chunk of "merely common" videos up into the NEXT
- * decile, well past what they actually beat. Radar decile fix (DECILE_FIX
- * prompt): dropping tie credit entirely means a displayed decile d always
- * asserts the honest, defensible claim "strictly better than >= (d-1)*10%
- * of the window" -- a tie block can never inflate itself past that. excludeKey
- * mirrors percentilePools.js's own parameter: drop the row being scored
- * itself before computing (relevant when re-scoring a row already sitting in
- * the historical window).
+ * Midrank fraction of `value` within `pool` (array of {key, value}) --
+ * DECILE_V2: returns { pctMid, sb, sa }, where sb/sa are the fractions of the
+ * window strictly BELOW / strictly ABOVE `value` and
+ * pctMid = (sb + (1 - sa)) / 2. That's algebraically the exact same number as
+ * the classic midrank statistic (below + 0.5*equal)/n -- ties split their
+ * credit evenly between the two sides rather than earning none (the prior
+ * DECILE_FIX pass) or full retroactive credit (the original pre-fix
+ * formula). sb/sa are returned alongside pctMid because decileFor's
+ * earned-endpoint rule below needs them directly, not just the midpoint.
+ * excludeKey mirrors percentilePools.js's own parameter: drop the row being
+ * scored itself before computing (relevant when re-scoring a row already
+ * sitting in the historical window).
  */
-export function axisStrictBelowFraction(value, pool, { excludeKey } = {}) {
+export function axisMidrankFraction(value, pool, { excludeKey } = {}) {
   const filtered = excludeKey ? pool.filter((p) => p.key !== excludeKey) : pool;
   const n = filtered.length;
   if (n === 0) return null;
-  let below = 0;
+  let below = 0, above = 0;
   for (const p of filtered) {
     if (p.value < value) below++;
+    else if (p.value > value) above++;
   }
-  return below / n;
+  const sb = below / n, sa = above / n;
+  return { pctMid: (sb + (1 - sa)) / 2, sb, sa };
 }
 
 /**
- * decile = clamp(1 + floor(frac * 10), 1, 10), frac = axisStrictBelowFraction
- * above. Floor (not ceil) pairs with the strict-below fraction so a decile of
- * d reads as "beat >= (d-1)*10% of the window outright" -- e.g. beating
- * exactly 83% strictly lands at decile 9 (1 + floor(8.3) = 9), not 10; only
- * beating >=90% strictly earns the 10. Returns null when the pool is empty
- * (no data yet for this axis/window -- caller falls back to the raw 0-10
- * value, same graceful-degradation contract as every other C_dims-derived
- * field in this codebase).
+ * decile = clamp(1 + floor(pctMid * 10), 1, 10), THEN earned-endpoint
+ * overrides: DECILE_V2 amends the pure strict-dominance mapping (DECILE_FIX)
+ * back to classic midrank -- coarse/discrete axes were landing whole tie
+ * blocks at decile 1 whenever nothing beat them outright, even though
+ * midrank's "split the tie" logic is the textbook-correct way to rank a
+ * value tied with a large chunk of the population. But midrank alone
+ * reintroduces DECILE_FIX's original problem at the two endpoints: a tie
+ * block occupying, say, percentile 83-98 has pctMid=0.905 -- squarely a
+ * midrank "10" -- despite only 83% of the window actually sitting below it.
+ * The earned-endpoint rule keeps midrank everywhere in the middle (deciles
+ * 2-9), but requires a computed 10 to ALSO have beaten >=90% of the window
+ * outright (sb>=0.90) or it displays 9 instead; symmetrically a computed 1
+ * requires losing to >=90% outright (sa>=0.90) or it displays 2. The two
+ * endpoints are the only deciles that assert "better/worse than nearly
+ * everyone," so they're the only ones that need an outright-beat guarantee,
+ * not just a midrank one. Returns null when the pool is empty (no data yet
+ * for this axis/window -- caller falls back to the raw 0-10 value, same
+ * graceful-degradation contract as every other C_dims-derived field here).
  */
 export function decileFor(value, pool, opts) {
   if (value == null) return null;
-  const frac = axisStrictBelowFraction(value, pool, opts);
-  if (frac == null) return null;
-  return Math.max(1, Math.min(10, 1 + Math.floor(frac * 10)));
+  const m = axisMidrankFraction(value, pool, opts);
+  if (m == null) return null;
+  let decile = Math.max(1, Math.min(10, 1 + Math.floor(m.pctMid * 10)));
+  if (decile === 10 && m.sb < 0.90) decile = 9;
+  if (decile === 1 && m.sa < 0.90) decile = 2;
+  return decile;
 }

@@ -1,88 +1,103 @@
 // scoring/axisPoolsTest.mjs — unit tests for axisPools.js (radar rolling-
-// decile normalization, radar/links prompt Part A; strict-dominance mapping,
-// DECILE_FIX prompt).
+// decile normalization, radar/links prompt Part A; midrank with earned
+// endpoints, DECILE_V2 prompt -- amends DECILE_FIX's pure strict-dominance
+// mapping back to classic midrank in the middle, keeping strict-dominance
+// only at the two endpoints).
 // Run: node backend/scoring/axisPoolsTest.mjs
 
-import { axisStrictBelowFraction, decileFor } from "./axisPools.js";
+import { axisMidrankFraction, decileFor } from "./axisPools.js";
 
 let failures = [];
 function check(name, got, expected) {
   if (JSON.stringify(got) !== JSON.stringify(expected)) failures.push(`${name}: got ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`);
+}
+// Floating-point tolerance for direct pctMid comparisons (below/n arithmetic
+// isn't always exactly representable, e.g. 0.9/... artifacts).
+function checkClose(name, got, expected) {
+  if (Math.abs(got - expected) > 1e-9) failures.push(`${name}: got ${got}, expected ~${expected}`);
 }
 
 function pool(values) {
   return values.map((v, i) => ({ key: `p${i}`, value: v }));
 }
 
-// ── 1. axisStrictBelowFraction: ties earn NO credit, unlike the old midrank
-// formula this replaced ((below + 0.5*equal)/n). ──────────────────────────
+// ── 1. axisMidrankFraction: pctMid is algebraically identical to the classic
+// midrank statistic (below + 0.5*equal)/n -- ties split their credit evenly
+// between the two sides, unlike DECILE_FIX's strict-below-only fraction. ──
 const pool10 = pool([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-check("strict-below fraction of the max in a 10-pool", axisStrictBelowFraction(10, pool10), 0.9);
-check("strict-below fraction of the min in a 10-pool", axisStrictBelowFraction(1, pool10), 0);
-check("strict-below fraction of a mid-value with no ties", axisStrictBelowFraction(5.5, pool10), 0.5);
+checkClose("midrank pctMid of the max in a 10-pool (sb=0.9, sa=0)", axisMidrankFraction(10, pool10).pctMid, 0.95);
+checkClose("midrank pctMid of the min in a 10-pool (sb=0, sa=0.9)", axisMidrankFraction(1, pool10).pctMid, 0.05);
+checkClose("midrank pctMid of a mid-value with no ties", axisMidrankFraction(5.5, pool10).pctMid, 0.5);
 
 const tiedPool = pool([1, 2, 2, 2, 3]);
-check("ties earn no credit -- only strictly-less rows count", axisStrictBelowFraction(2, tiedPool), 0.2);
+checkClose("ties split credit evenly (sb=0.2, sa=0.2 -> pctMid=0.5)", axisMidrankFraction(2, tiedPool).pctMid, 0.5);
 
 const poolWithSelf = pool([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).concat([{ key: "self", value: 10 }]);
-check("excludeKey drops the self row before computing", axisStrictBelowFraction(10, poolWithSelf, { excludeKey: "self" }), 0.9);
+checkClose("excludeKey drops the self row before computing", axisMidrankFraction(10, poolWithSelf, { excludeKey: "self" }).pctMid, 0.95);
 
-check("empty pool returns null", axisStrictBelowFraction(5, []), null);
+check("empty pool returns null", axisMidrankFraction(5, []), null);
 
-// ── 2. decileFor: clamp(1 + floor(frac * 10), 1, 10) ────────────────────────
-// DECILE_FIX prompt's five required cases, built on a 100-row window so
-// percentile bands land on clean, checkable boundaries.
+// ── 2. decileFor: clamp(1+floor(pctMid*10),1,10), then earned-endpoint
+// overrides (computed 10 needs sb>=0.90 or displays 9; computed 1 needs
+// sa>=0.90 or displays 2). DECILE_V2 prompt's required cases, on 100-row
+// windows so percentile bands land on clean, checkable boundaries. ────────
 
-// (a) a tie block spanning percentile 83-98 (83 rows below it, the block
-// itself is 15 rows wide, 2 rows above) -> decile 9, not 10.
-// frac = 83/100 = 0.83 -> 1 + floor(8.3) = 9.
-const poolA = pool([
-  ...Array(83).fill(1),   // below the tie block
-  ...Array(15).fill(5),   // the tie block itself (pct 83-98)
-  ...Array(2).fill(9),    // above it (pct 98-100)
-]);
-check("(a) tie block spanning pct 83-98 lands at decile 9, not 10", decileFor(5, poolA), 9);
+// (a) top tie blocks.
+// 83-98 (83 below, 15-wide tie, 2 above): pctMid=(0.83+(1-0.02))/2=0.905 ->
+// computed decile 10, but sb=0.83<0.90 -> override to 9.
+const poolA1 = pool([...Array(83).fill(1), ...Array(15).fill(5), ...Array(2).fill(9)]);
+check("(a) tie block spanning pct 83-98 lands at decile 9 (earned-endpoint override)", decileFor(5, poolA1), 9);
+// 92-100 (92 below, 8-wide tie, 0 above): pctMid=(0.92+(1-0))/2=0.96 ->
+// computed decile 10, sb=0.92>=0.90 -> stays 10.
+const poolA2 = pool([...Array(92).fill(1), ...Array(8).fill(9)]);
+check("(a) tie block spanning pct 92-100 lands at decile 10 (earned)", decileFor(9, poolA2), 10);
 
-// (b) a value with 98% strictly below it -> decile 10.
-// frac = 98/100 = 0.98 -> 1 + floor(9.8) = 10.
-const poolB = pool([...Array(98).fill(1), ...Array(2).fill(9)]);
-check("(b) value with 98% strictly below lands at decile 10", decileFor(9, poolB), 10);
+// (b) bottom tie blocks.
+// 0-25 (0 below, 25-wide tie, 75 above): pctMid=(0+(1-0.75))/2=0.125 ->
+// decile 1+floor(1.25)=2 (not an endpoint case at all).
+const poolB1 = pool([...Array(25).fill(1), ...Array(75).fill(9)]);
+check("(b) bottom block spanning pct 0-25 lands at decile 2", decileFor(1, poolB1), 2);
+// 0-8 (0 below, 8-wide tie, 92 above): pctMid=(0+(1-0.92))/2=0.04 ->
+// computed decile 1, sa=0.92>=0.90 -> stays 1.
+const poolB2 = pool([...Array(8).fill(1), ...Array(92).fill(9)]);
+check("(b) bottom block spanning pct 0-8 lands at decile 1 (earned)", decileFor(1, poolB2), 1);
+// 0-15 (0 below, 15-wide tie, 85 above): pctMid=(0+(1-0.85))/2=0.075 ->
+// computed decile 1, but sa=0.85<0.90 -> override to 2.
+const poolB3 = pool([...Array(15).fill(1), ...Array(85).fill(9)]);
+check("(b) bottom block spanning pct 0-15 lands at decile 2 (earned-endpoint override)", decileFor(1, poolB3), 2);
 
-// (c) median tie blocks: one spanning pct 40-60, one spanning pct 50-70.
-const poolC1 = pool([...Array(40).fill(1), ...Array(20).fill(5), ...Array(40).fill(9)]);
-check("(c) median tie block spanning pct 40-60 lands at decile 5", decileFor(5, poolC1), 5);
-const poolC2 = pool([...Array(50).fill(1), ...Array(20).fill(5), ...Array(30).fill(9)]);
-check("(c) tie block spanning pct 50-70 lands at decile 6", decileFor(5, poolC2), 6);
+// (c) middle/median tie blocks -- classic midrank, no endpoint involved.
+// 20-60 (20 below, 40-wide tie, 40 above): pctMid=(0.20+(1-0.60))/2=0.40 -> decile 5.
+const poolC1 = pool([...Array(20).fill(1), ...Array(40).fill(5), ...Array(40).fill(9)]);
+check("(c) middle tie block spanning pct 20-60 lands at decile 5", decileFor(5, poolC1), 5);
+// 40-60 (40 below, 20-wide tie, 40 above): pctMid=(0.40+(1-0.60))/2=0.50 -> decile 6.
+const poolC2 = pool([...Array(40).fill(1), ...Array(20).fill(5), ...Array(40).fill(9)]);
+check("(c) median tie block spanning pct 40-60 lands at decile 5 or 6", [5, 6].includes(decileFor(5, poolC2)), true);
 
-// (d) thin-tie, near-continuous values match the old midrank formula within
-// +/-1, never ABOVE it -- a small tie (2 rows out of 7) pulls the new
-// strict-dominance decile down relative to the old formula's tie credit; it
-// never pushes it up. (Old midrank, reconstructed here only for this one
-// comparison -- it's no longer part of the module.)
-function oldMidrankDecile(value, poolArr) {
+// (d) thin-tie, near-continuous values match classic midrank EXACTLY
+// (pctMid is algebraically the same number as (below+0.5*equal)/n, so away
+// from the two endpoints there's no approximation -- they're identical).
+function classicMidrankDecile(value, poolArr) {
   const n = poolArr.length;
   let below = 0, equal = 0;
   for (const p of poolArr) { if (p.value < value) below++; else if (p.value === value) equal++; }
   const pct = (below + 0.5 * equal) / n;
-  return Math.max(1, Math.min(10, Math.ceil(pct * 10)));
+  return Math.max(1, Math.min(10, 1 + Math.floor(pct * 10)));
 }
 const poolD = pool([1, 2, 3, 4, 4, 6, 7]); // n=7, a thin tie of 2 at value=4
-const oldD = oldMidrankDecile(4, poolD); // (3 below + 1.0)/7 = 0.5714 -> ceil(5.714) = 6
-const newD = decileFor(4, poolD);        // 3/7 = 0.4286 -> 1+floor(4.286) = 5
-check("(d) old midrank decile for the thin-tie case (reference value)", oldD, 6);
-check("(d) new strict-dominance decile is <= old, within 1", newD <= oldD && oldD - newD <= 1, true);
-check("(d) new strict-dominance decile for the thin-tie case", newD, 5);
-// A non-tied value in the same near-continuous pool matches old exactly
-// (no tie credit was ever in play, so nothing to strip out).
+check("(d) thin-tie value matches classic midrank exactly", decileFor(4, poolD), classicMidrankDecile(4, poolD));
 const poolD2 = pool([1, 2, 3, 4, 5, 6, 7]); // n=7, fully distinct
-check("(d) non-tied continuous value: new matches old exactly", decileFor(4.5, poolD2), oldMidrankDecile(4.5, poolD2));
+check("(d) non-tied continuous value matches classic midrank exactly", decileFor(4.5, poolD2), classicMidrankDecile(4.5, poolD2));
 
-// (e) all-identical-window degenerate case -> decile 1, no error.
+// (e) all-identical-window degenerate case -> pctMid=0.5 -> decile 5 or 6
+// (midrank is the truthful answer when everyone ties -- replaces DECILE_FIX's
+// decile-1 expectation for this same case), no error.
 const allTiedPool = pool([5, 5, 5, 5, 5]);
-check("(e) all-identical window lands at decile 1 without error", decileFor(5, allTiedPool), 1);
+check("(e) all-identical window lands at decile 5 or 6, no error", [5, 6].includes(decileFor(5, allTiedPool)), true);
 
-// Floor/ceiling clamp retained: a fraction of 0 must still floor to decile 1
-// (never decile 0), and beating the entire window caps at decile 10 (never 11).
+// Floor/ceiling clamp retained: a value below the entire pool still floors at
+// decile 1 (sa=1>=0.90, earned), and a value above the entire pool still caps
+// at decile 10 (sb=1>=0.90, earned) -- never 0 or 11.
 const allAbovePool = pool([10, 10, 10, 10, 10]);
 check("a value below the entire pool floors at decile 1, never 0", decileFor(1, allAbovePool), 1);
 const allBelowPool = pool([1, 1, 1, 1, 1]);
