@@ -268,7 +268,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
 
       <div style={{ background: "#fff", border: `1px solid ${B.border}`, borderRadius: 20,
         boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)", padding: "12px 16px 12px" }}>
-        <div style={{ fontSize: 11, color: B.grey }}>On each axis, 5 = the median of the last 1,000 videos we've scored.</div>
+        <div style={{ fontSize: 11, color: B.grey }}>On each axis, 5-6 ≈ typical — the median of the last 1,000 videos we've scored.</div>
 
         {/* viewBox tightened to the actual drawn extent (label text tops out
             around y=30, bottoms out around y=272) -- the old 8-294 window

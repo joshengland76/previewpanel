@@ -110,38 +110,48 @@ export async function getAxisPools(fetchShadowAxisRows) {
 }
 
 /**
- * Midrank percentile of `value` within `pool` (array of {key, value}), as a
- * FRACTION in [0, 1] -- not the 0-100 rounded percentage
- * percentilePools.js's own midrankPercentile returns, since decileFor below
- * needs the unrounded fraction (radar/links prompt point A3: decile =
- * clamp(ceil(pct*10), 1, 10) -- pct*10 only makes sense as a 0-10 range if
- * pct is a 0-1 fraction). excludeKey mirrors percentilePools.js's own
- * parameter: drop the row being scored itself before computing, same
- * rationale as that file's niche/overall pools (a cross-population
- * comparison excludes self; personal history wouldn't, but there is no
- * "personal" axis pool here).
+ * Strict-dominance fraction of `value` within `pool` (array of {key, value}),
+ * as a FRACTION in [0, 1]: the share of the window this value beat OUTRIGHT
+ * (strictly less than -- ties earn NO credit). Replaces the original midrank
+ * formula ((below + 0.5*equal)/n), which gave a tied value half-credit for
+ * every row sharing its exact score. That was fine for smooth, mostly-unique
+ * continuous data, but several axes here are coarse/discrete enough (a judge
+ * consensus that lands on a common whole number, a trend signal that's
+ * really just a small integer count) that one common raw value can be tied
+ * by 15-25% of the entire window -- enough half-credit from that single tie
+ * block to round a big chunk of "merely common" videos up into the NEXT
+ * decile, well past what they actually beat. Radar decile fix (DECILE_FIX
+ * prompt): dropping tie credit entirely means a displayed decile d always
+ * asserts the honest, defensible claim "strictly better than >= (d-1)*10%
+ * of the window" -- a tie block can never inflate itself past that. excludeKey
+ * mirrors percentilePools.js's own parameter: drop the row being scored
+ * itself before computing (relevant when re-scoring a row already sitting in
+ * the historical window).
  */
-export function axisMidrankFraction(value, pool, { excludeKey } = {}) {
+export function axisStrictBelowFraction(value, pool, { excludeKey } = {}) {
   const filtered = excludeKey ? pool.filter((p) => p.key !== excludeKey) : pool;
   const n = filtered.length;
   if (n === 0) return null;
-  let below = 0, equal = 0;
+  let below = 0;
   for (const p of filtered) {
     if (p.value < value) below++;
-    else if (p.value === value) equal++;
   }
-  return (below + 0.5 * equal) / n;
+  return below / n;
 }
 
 /**
- * decile = clamp(ceil(pct * 10), 1, 10), pct = axisMidrankFraction above.
- * Returns null when the pool is empty (no data yet for this axis/window --
- * caller falls back to the raw 0-10 value, same graceful-degradation
- * contract as every other C_dims-derived field in this codebase).
+ * decile = clamp(1 + floor(frac * 10), 1, 10), frac = axisStrictBelowFraction
+ * above. Floor (not ceil) pairs with the strict-below fraction so a decile of
+ * d reads as "beat >= (d-1)*10% of the window outright" -- e.g. beating
+ * exactly 83% strictly lands at decile 9 (1 + floor(8.3) = 9), not 10; only
+ * beating >=90% strictly earns the 10. Returns null when the pool is empty
+ * (no data yet for this axis/window -- caller falls back to the raw 0-10
+ * value, same graceful-degradation contract as every other C_dims-derived
+ * field in this codebase).
  */
 export function decileFor(value, pool, opts) {
   if (value == null) return null;
-  const pct = axisMidrankFraction(value, pool, opts);
-  if (pct == null) return null;
-  return Math.max(1, Math.min(10, Math.ceil(pct * 10)));
+  const frac = axisStrictBelowFraction(value, pool, opts);
+  if (frac == null) return null;
+  return Math.max(1, Math.min(10, 1 + Math.floor(frac * 10)));
 }
