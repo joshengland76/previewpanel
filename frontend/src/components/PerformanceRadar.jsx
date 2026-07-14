@@ -98,14 +98,14 @@ const TREND_AXES = [
 // framing only ("videos that... tend to..."), never an absolute or causal
 // claim; no duration/length advice anywhere.
 const DIMENSION_INFO = {
-  compelling: `Whether the video commands attention without the viewer having to work for it — no slow ramp-up, no wasted setup before something happens. Shown here compared with recent videos we've scored. In our data, videos judged more compelling tend to hold viewers further in and tend to get shared more.`,
-  emotionally_resonant: `Whether the video actually moves the viewer — makes them feel something, not just observe it. Shown here compared with recent videos we've scored. Videos that create a genuine emotional reaction tend to be shared and saved more than videos that only inform or entertain passively.`,
-  emotion_intensity: `How intense or "loud" the emotions depicted in the video are, regardless of which emotion — calm and neutral videos score low, dramatic or ecstatic ones score high. Shown here compared with recent videos we've scored. This describes the content itself, not a judgment that either end of the scale is better.`,
-  funny: `Whether the video produces genuine humor, not just an attempt at it. Shown here compared with recent videos we've scored. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
-  novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Shown here compared with recent videos we've scored. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
-  objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Shown here compared with recent videos we've scored. Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
-  trend_alignment: `How many recognizable trending-format patterns — sounds, edits, structural beats — this video picks up on. Shown here compared with recent videos we've scored. Videos that align with more of these patterns tend to perform better than those that don't.`,
-  trending_topic: `How likely this video's subject matter is to be currently trending, independent of format or execution. Shown here compared with recent videos we've scored. Videos on trending topics tend to outperform ones that aren't.`,
+  compelling: `Whether the video commands attention without the viewer having to work for it — no slow ramp-up, no wasted setup before something happens. In our data, videos judged more compelling tend to hold viewers further in and tend to get shared more.`,
+  emotionally_resonant: `Whether the video actually moves the viewer — makes them feel something, not just observe it. Videos that create a genuine emotional reaction tend to be shared and saved more than videos that only inform or entertain passively.`,
+  emotion_intensity: `How intense or "loud" the emotions depicted in the video are, regardless of which emotion — calm and neutral videos score low, dramatic or ecstatic ones score high. This describes the content itself, not a judgment that either end of the scale is better.`,
+  funny: `Whether the video produces genuine humor, not just an attempt at it. Videos that land real humor tend to be highly shared — comedy is one of the most DM-shared content categories in our data.`,
+  novel: `Whether the video shows the viewer something they haven't seen before — a new angle, format, or idea. Novel content tends to interrupt the scroll and stand out in a crowded feed.`,
+  objective_fit: `Objective Fit measures how well this video succeeds at the specific goal you selected (e.g., comedy, education, brand awareness). Each judge evaluates this through their own lens — The Editor on craft execution, The Trendsetter on platform-native delivery, The Connector on emotional resonance.`,
+  trend_alignment: `How many recognizable trending-format patterns — sounds, edits, structural beats — this video picks up on. Videos that align with more of these patterns tend to perform better than those that don't.`,
+  trending_topic: `How likely this video's subject matter is to be currently trending, independent of format or execution. Videos on trending topics tend to outperform ones that aren't.`,
 };
 
 const CX = 160, CY = 150, R = 88;
@@ -257,6 +257,17 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
     const rr = (Math.max(0, Math.min(10, v)) / 10) * R;
     return [CX + rr * Math.cos(ang(i)), CY + rr * Math.sin(ang(i))];
   };
+  // Axis-name label placement, deliberately NOT routed through pt() -- pt()
+  // clamps its input to the valid 0-10 data range, so a value like 12.6
+  // (intended to push the label past the r=10 rim) was silently clamped
+  // back to exactly r=10, landing the label on top of the rim itself. Any
+  // vertex plotted at or near 10 then sat at that same point, so its dot
+  // covered the label's first character. labelPt applies the >1 radius
+  // factor directly, unclamped, so the label is genuinely pushed outward.
+  const labelPt = (i, factor) => {
+    const rr = factor * R;
+    return [CX + rr * Math.cos(ang(i)), CY + rr * Math.sin(ang(i))];
+  };
   const polyPoints = (vals) => activeIndices.map((i) => pt(i, vals[i] ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
 
   const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles)) }));
@@ -281,7 +292,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
               fill="none" stroke={B.border} strokeWidth={g === 10 ? 1.4 : 1} />
           ))}
           {axes.map((a, i) => {
-            const sp = pt(i, 10), lp = pt(i, 12.6);
+            const sp = pt(i, 10), lp = labelPt(i, 1.15);
             const anchor = Math.abs(lp[0] - CX) < 6 ? "middle" : lp[0] > CX ? "start" : "end";
             const dy = lp[1] < CY - 10 ? -2 : lp[1] > CY + 10 ? 9 : 3;
             const muted = skipObjectiveFit && a.key === "__objfit";

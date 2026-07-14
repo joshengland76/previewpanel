@@ -387,6 +387,7 @@ export default function PreviewPanel() {
   const objDropRef = useRef(null);
   const objInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const linkInputRef = useRef(null);
   const xhrRef = useRef(null);
   const notifiedRef = useRef(false);
   const savedRef = useRef(false);
@@ -813,6 +814,20 @@ export default function PreviewPanel() {
     xhr.send(formData);
   };
 
+  // One-tap paste via the Clipboard API -- reading directly on the button's
+  // own click handler means the input never needs focus, so the on-screen
+  // keyboard never appears and there's no native tap-then-tap-again dance to
+  // surface the OS paste suggestion. Falls back to focusing the field (the
+  // old tap-to-paste flow) only if the API is unavailable or permission is
+  // denied, so manual/long-press paste still works everywhere.
+  const handlePasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) { setVideoLinkUrl(text.trim()); return; }
+    } catch {}
+    linkInputRef.current?.focus();
+  };
+
   // Paste-a-link submissions (radar/links prompt, Part B) -- server does the
   // "uploading" (yt-dlp fetch) instead of the browser, so there's no byte
   // progress to show; reuses the SAME indeterminate-progress visual the file
@@ -1039,10 +1054,16 @@ export default function PreviewPanel() {
                   alignItems: "center", justifyContent: "center", padding: "14px 16px",
                 }}>
                   <div style={{ fontWeight: "700", fontSize: "13px", color: "#888", marginBottom: "8px" }}>Paste a TikTok or YouTube Shorts link</div>
-                  <input type="url" inputMode="url" placeholder="https://…" value={videoLinkUrl}
-                    onChange={e => setVideoLinkUrl(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
-                    style={{ width: "100%", maxWidth: "320px", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "16px", fontFamily: "inherit" }} />
+                  <div style={{ display: "flex", gap: "6px", width: "100%", maxWidth: "320px" }}>
+                    <input ref={linkInputRef} type="url" inputMode="url" placeholder="https://…" value={videoLinkUrl}
+                      onChange={e => setVideoLinkUrl(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
+                      style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "16px", fontFamily: "inherit" }} />
+                    <button type="button" onClick={handlePasteFromClipboard}
+                      style={{ padding: "8px 12px", borderRadius: "8px", border: `1.5px solid ${B.brown}`, background: B.brown, color: "#fff", fontSize: "13px", fontWeight: "700", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                      Paste
+                    </button>
+                  </div>
                   <span onClick={() => { setShowLinkInput(false); setVideoLinkUrl(""); setLinkFetchError(null); }}
                     style={{ marginTop: "10px", fontSize: "11px", color: "#aaa", textDecoration: "underline", cursor: "pointer" }}>
                     ← Upload a file instead

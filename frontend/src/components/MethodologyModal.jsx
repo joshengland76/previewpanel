@@ -128,8 +128,7 @@ function ValidationDetail({ onClose }) {
         The model was tested only on creators it had never seen during training. Before
         testing began, we set aside a sealed group of {STUDY_STATS.lockboxCreators}{" "}
         creators — a "lockbox" — and opened it exactly once. Every analysis choice was
-        written down and dated before we saw its result, not after — a log that now
-        stands at {STUDY_STATS.preregAmendments} entries. Every video is scored
+        written down and dated before we saw its result, not after. Every video is scored
         against its own creator's typical performance, not the whole platform's.
       </Section>
 
@@ -155,7 +154,7 @@ function ValidationDetail({ onClose }) {
         display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10,
         background: B.bg, border: `1px solid ${B.border}`, borderRadius: 14, padding: 14, margin: "16px 0",
       }}>
-        <Stat value={`+${STUDY_STATS.heldOutRankCorrelation}`} label="held-out rank correlation (lockbox)" />
+        <Stat value={`+${STUDY_STATS.crossValidatedRankCorrelation}`} label="Cross-validated correlation" />
         <Stat value="~68%" label="top-tier precision" />
         <Stat value="~4,900" label="videos studied" />
         <Stat value={STUDY_STATS.nCreators} label="creators" />
