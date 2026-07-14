@@ -4087,6 +4087,19 @@ async function checkJobCompletion(jobId) {
     console.log(`[${jobId}] All judges failed`);
   }
 
+  // Set BEFORE the recordSubmissionForJob await, in the same synchronous turn
+  // as job.status above -- found via a live "hero card missing" report: with
+  // this line only appearing after the await (as it did originally), there's
+  // a real window where job.status is already "done" but synthesisStatus is
+  // still null. /api/status's own synthesis self-healing retry (below) reads
+  // exactly that window as "never triggered" and fires its own
+  // runSynthesisForJob call, double-firing alongside this one once the await
+  // resolves -- confirmed in production: one job got two successful
+  // pp_synthesis rows 25 seconds apart. Setting the flag here, synchronously,
+  // closes the window entirely.
+  const willSynthesize = job.source !== "research_api" && (finalStatus === "done" || finalStatus === "partial");
+  if (willSynthesize) job.synthesisStatus = "pending";
+
   const didFinalize = await recordSubmissionForJob(jobId, finalStatus);
   // A concurrent checkJobCompletion call (see recordSubmissionForJob's own
   // comment) already ran the finalize work for this job -- trim/synthesis/
@@ -4106,8 +4119,7 @@ async function checkJobCompletion(jobId) {
   // Panel synthesis — APP submissions ONLY, never research (constraint 1.3).
   // Fire-and-forget: never blocks job completion, the status response, or the
   // research path; a failure only flips synthesisStatus and degrades to judges.
-  if (job.source !== "research_api" && (finalStatus === "done" || finalStatus === "partial")) {
-    job.synthesisStatus = "pending";
+  if (willSynthesize) {
     runSynthesisForJob(jobId).catch((err) => {
       job.synthesisStatus = "failed";
       console.error(`[${jobId}] [synthesis] unexpected error: ${err.message}`);
