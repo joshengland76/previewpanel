@@ -1063,7 +1063,14 @@ export default function PreviewPanel() {
                     onChange={e => { const f = e.target.files[0]; if (f) handleFileSelect(f); }}
                     style={videoFile
                       ? { position: "absolute", opacity: 0, width: 0, height: 0 }
-                      : { position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" }
+                      // Stops 44px short of the bottom -- exactly the "or paste a
+                      // video link" row's own enlarged tap height below -- so
+                      // that row has zero spatial overlap with this file input.
+                      // Belt-and-suspenders alongside the z-index layering: with
+                      // no overlap at all, there's no ambiguity for the browser
+                      // to resolve between this <label>'s own file-input click
+                      // and the link row's onClick, regardless of browser.
+                      : { position: "absolute", top: 0, left: 0, right: 0, bottom: "44px", opacity: 0, cursor: "pointer", width: "100%" }
                     }/>
                   {videoFile ? (
                     <div style={{ padding: "12px 20px" }}>
@@ -1082,8 +1089,16 @@ export default function PreviewPanel() {
                       <div style={{ fontSize: "11px", color: "#bbb", marginTop: "2px", lineHeight: "1.4" }}>Maximum 5 minutes · TwelveLabs watches your full video, analyzing delivery, energy, pacing, and hook strength.</div>
                       <div onClick={e => { e.preventDefault(); e.stopPropagation(); setShowLinkInput(true); }}
                         style={{ fontSize: "11px", color: B.brown, textDecoration: "underline", cursor: "pointer",
-                          position: "relative", zIndex: 1, minHeight: "44px", padding: "10px 16px",
-                          display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          position: "relative", zIndex: 1,
+                          // Enlarges the tap target via padding, then cancels the
+                          // padding's document-flow growth with equal negative
+                          // margin -- the visible text (and everything below it)
+                          // lands in exactly the same place as the original
+                          // marginTop:6px/no-padding version, but the clickable
+                          // box is ~45px tall instead of ~14px. Paired with the
+                          // file input's shortened "bottom: 44px" above, so this
+                          // row has zero spatial overlap with it.
+                          marginTop: "-10px", marginBottom: "-16px", padding: "16px 8px" }}>
                         or paste a video link
                       </div>
                     </div>
