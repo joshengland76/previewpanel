@@ -176,8 +176,11 @@ function axisAvgValue(axis, axisDeciles, judgeVals, axisIndex) {
 // looking "high" or "low" in the abstract -- then resolve any leftover
 // LOCAL collision (e.g. one axis much higher than its neighbors) by flipping
 // just that one label to the opposite side, greedily, pairwise.
-const LABEL_INSIDE_OFFSET = 15;
-const LABEL_OUTSIDE_OFFSET = 14;
+// Nudged 15->17 / 14->16 (Readout polish round 2) -- a value of exactly 10.0
+// puts the vertex right on the rim, and the old offsets left its dot (r=4.5)
+// just barely clipping the label at that radius. Small bump, not a redesign.
+const LABEL_INSIDE_OFFSET = 17;
+const LABEL_OUTSIDE_OFFSET = 16;
 const MIN_LABEL_SPACING = 20; // px between label centers below which they read as overlapping
 
 function computeLabelPlacements(vals, activeIndices, pt, ang) {

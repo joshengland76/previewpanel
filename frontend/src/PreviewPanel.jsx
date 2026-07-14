@@ -619,6 +619,16 @@ export default function PreviewPanel() {
   }, [jobId]);
 
   const handleSubmit = async () => {
+    // Readout polish round 2 -- one shared CTA for both submission modes now
+    // (the link box's own "Go" button was removed). Link mode has no upload
+    // byte-progress to show, so it skips the notification-primer detour
+    // file uploads use and goes straight to handleLinkFetch, same as before.
+    if (showLinkInput && !videoFile) {
+      if (!videoLinkUrl.trim() || selectedJudges.length === 0) return;
+      handleLinkFetch();
+      return;
+    }
+
     if (!videoFile || selectedJudges.length === 0) return;
 
     // Issue #4: Show notification primer before starting
@@ -1015,25 +1025,23 @@ export default function PreviewPanel() {
               {(!videoFile && showLinkInput) ? (
                 // Paste-a-link mode -- a plain div, deliberately NOT the
                 // <label>/hidden-file-input pairing below, so typing or
-                // clicking the URL input/Go button can never accidentally
-                // pop the file picker.
+                // clicking the URL input can never accidentally pop the file
+                // picker. Readout polish round 2 -- dropped the inline "Go"
+                // button; "Convene the Panel" (the one shared CTA below) now
+                // submits either mode, so there's no second submit action to
+                // keep in sync. fontSize bumped 12->16px: anything under 16px
+                // makes iOS Safari auto-zoom the whole page on focus, which
+                // was hiding the rest of the screen the moment you tapped in.
                 <div style={{
                   border: `2px dashed ${B.border}`, borderRadius: "12px", textAlign: "center",
                   background: "#fff", minHeight: "110px", display: "flex", flexDirection: "column",
                   alignItems: "center", justifyContent: "center", padding: "14px 16px",
                 }}>
                   <div style={{ fontWeight: "700", fontSize: "13px", color: "#888", marginBottom: "8px" }}>Paste a TikTok or YouTube Shorts link</div>
-                  <div style={{ display: "flex", gap: "6px", width: "100%", maxWidth: "320px" }}>
-                    <input type="url" inputMode="url" placeholder="https://…" value={videoLinkUrl}
-                      onChange={e => setVideoLinkUrl(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter") handleLinkFetch(); }}
-                      style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "12px", fontFamily: "inherit" }} />
-                    <button onClick={handleLinkFetch} disabled={!videoLinkUrl.trim()} style={{
-                      padding: "8px 14px", borderRadius: "8px", border: "none",
-                      background: videoLinkUrl.trim() ? B.brown : B.border, color: "#fff",
-                      fontWeight: "700", fontSize: "12px", cursor: videoLinkUrl.trim() ? "pointer" : "default", fontFamily: "inherit",
-                    }}>Go</button>
-                  </div>
+                  <input type="url" inputMode="url" placeholder="https://…" value={videoLinkUrl}
+                    onChange={e => setVideoLinkUrl(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
+                    style={{ width: "100%", maxWidth: "320px", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "16px", fontFamily: "inherit" }} />
                   <span onClick={() => { setShowLinkInput(false); setVideoLinkUrl(""); setLinkFetchError(null); }}
                     style={{ marginTop: "10px", fontSize: "11px", color: "#aaa", textDecoration: "underline", cursor: "pointer" }}>
                     ← Upload a file instead
@@ -1272,7 +1280,7 @@ export default function PreviewPanel() {
             {/* 5 — CTA */}
             <div className="pp-sticky-wrap">
               <button className="pp-btn" onClick={handleSubmit}
-                disabled={!videoFile || selectedJudges.length === 0 || !!uploadZoneError}
+                disabled={(!videoFile && !(showLinkInput && videoLinkUrl.trim())) || selectedJudges.length === 0 || !!uploadZoneError}
                 style={{ width: "100%", height: "56px", background: B.action, border: "none", borderRadius: "12px", color: "#fff", fontSize: "16px", fontWeight: "800", cursor: "pointer", fontFamily: "Montserrat, sans-serif", letterSpacing: "0.02em", transition: "all 0.18s ease", boxShadow: "0 2px 10px rgba(78,52,46,0.25)" }}>
                 Convene the Panel · {selectedJudges.length} Judge{selectedJudges.length !== 1 ? "s" : ""}
               </button>
