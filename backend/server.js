@@ -3896,9 +3896,16 @@ function clampRisk(cr, jobId) {
   return out;
 }
 
+// Returns true if THIS call actually did the finalize work, false if a
+// concurrent call (see checkJobCompletion) already had. The poller can call
+// checkJobCompletion once per judge in the same batch (Promise.allSettled),
+// and once job.results happens to already show every judge done, more than
+// one of those concurrent invocations can pass that check before either
+// reaches here -- this return value lets the caller skip re-running trim/
+// synthesis/shadow-scoring a second time for the same job.
 async function recordSubmissionForJob(jobId, finalStatus) {
   const job = jobs[jobId] || {};
-  if (job.finalized) return;
+  if (job.finalized) return false;
   job.finalized = true;
   const scores = {};
   let scoreSum = 0, scoreCount = 0;
@@ -4041,6 +4048,7 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   // early rejected_* validation paths -- already funnels through).
   if (jobs[jobId]) scheduleJobEviction(jobId);
   logMemoryMB(`job completion: ${jobId}`); // App hardening, Task A3
+  return true;
 }
 
 // ── Check if all judges for a job are settled; finalize if so ─────────────────
@@ -4079,7 +4087,13 @@ async function checkJobCompletion(jobId) {
     console.log(`[${jobId}] All judges failed`);
   }
 
-  await recordSubmissionForJob(jobId, finalStatus);
+  const didFinalize = await recordSubmissionForJob(jobId, finalStatus);
+  // A concurrent checkJobCompletion call (see recordSubmissionForJob's own
+  // comment) already ran the finalize work for this job -- trim/synthesis/
+  // shadow-scoring have already been triggered once; running them again here
+  // would fire a second, redundant synthesis/shadow-scoring call for the
+  // same job.
+  if (!didFinalize) return;
 
   // Trim retention (app only): on success, re-arm the window to exactly
   // TRIM_RETAIN_MS from completion; on failure, drop the retained file now
@@ -4438,6 +4452,30 @@ app.get("/api/status/:jobId", async (req, res) => {
     } catch (e) {
       console.error(`[${req.params.jobId}] groupMeanBigPicture/axisDeciles DB fallback failed (non-fatal): ${e.message}`);
     }
+  }
+
+  // Synthesis self-healing retry -- diagnosed after a report of the hero
+  // card being absent on a finished run with no error anywhere in the logs:
+  // checkJobCompletion's fire-and-forget synthesis trigger can, in a still-
+  // unconfirmed race (candidate: concurrent checkJobCompletion invocations
+  // when multiple judges finish in the same poller batch), never actually
+  // run -- job.synthesisStatus stays permanently null even though judges
+  // finished cleanly, which drops the hero for the rest of the session AND
+  // bakes "failed" into the saved history entry, with zero diagnostic trail
+  // (see the hardening added to recordSubmissionForJob/checkJobCompletion
+  // alongside this). Since /api/status is polled every 3s while a job is in
+  // flight, this is a natural, low-risk place to detect and self-heal: only
+  // fires when synthesisStatus has literally never been set (never
+  // "pending"/"ready"/"failed" -- a job that already tried and genuinely
+  // failed is untouched), and the immediate "pending" assignment stops the
+  // next poll tick from retrying again while this attempt is in flight.
+  if (jobDoneForRecovery && job.source !== "research_api" && job.synthesisStatus == null) {
+    console.warn(`[${req.params.jobId}] [synthesis] never triggered after judges finished — retrying from /api/status`);
+    job.synthesisStatus = "pending";
+    runSynthesisForJob(req.params.jobId).catch((err) => {
+      job.synthesisStatus = "failed";
+      console.error(`[${req.params.jobId}] [synthesis] retry from /api/status failed: ${err.message}`);
+    });
   }
 
   res.json({
