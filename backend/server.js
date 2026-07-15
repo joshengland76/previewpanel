@@ -29,6 +29,7 @@ import { TwelveLabs } from "twelvelabs-js";
 import pg from "pg";
 import FormDataStream from "form-data";
 import { jsonrepair } from "jsonrepair";
+import webpush from "web-push";
 import "dotenv/config";
 
 // Capstone v2 scoring (Phase B2) -- all behind EXTRACT_CDIMS/SHADOW_SCORING
@@ -43,6 +44,26 @@ import { recordShadowScore } from "./scoring/shadowScore.js";
 import { getScoreDisplay } from "./scoring/scoreDisplay.js";
 
 const { Pool } = pg;
+
+// Real Web Push (replaces the old foreground-only Notification API call,
+// which only ever fired while the tab's own JS was still running -- mobile
+// browsers throttle/suspend setInterval polling once a tab is backgrounded
+// or the screen locks, so that notification could only ever appear once the
+// user reopened the app, well after the job actually finished. A push
+// message wakes the service worker directly (see public/sw.js's "push"
+// listener), independent of whether any tab is open or focused. VAPID_*
+// unset (e.g. a fresh local checkout before keys are provisioned) degrades
+// to a no-op -- sendPushForJob below checks vapidConfigured before sending.
+const vapidConfigured = !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+if (vapidConfigured) {
+  webpush.setVapidDetails(
+    process.env.VAPID_SUBJECT || "mailto:admin@previewpanel.app",
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  );
+} else {
+  console.warn("[push] VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY not set -- push notifications disabled");
+}
 
 const execFileAsync = promisify(execFile);
 const FFMPEG = fs.existsSync("/opt/homebrew/bin/ffmpeg")
@@ -763,6 +784,23 @@ async function initDb() {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_submission_id ON pp_synthesis(submission_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_pp_synthesis_job_id ON pp_synthesis(job_id)`);
+
+    // Real Web Push subscriptions -- one-shot, scoped to a single job_id (no
+    // user-identity system exists yet, so "notify me" is per-submission, same
+    // contract as the old foreground Notification API it replaces). Consumed
+    // and deleted by sendPushForJob once the job finishes; also fine to
+    // accumulate briefly if a job never completes since each row is small.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id         BIGSERIAL PRIMARY KEY,
+        job_id     TEXT NOT NULL,
+        endpoint   TEXT NOT NULL,
+        p256dh     TEXT NOT NULL,
+        auth       TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_push_subscriptions_job_id ON push_subscriptions(job_id)`);
 
     // Capstone v2 shadow-scoring (Phase B2, Task 4) — invisible, flags-gated
     // (SHADOW_SCORING/EXTRACT_CDIMS, both default off). Created unconditionally
@@ -4051,6 +4089,38 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   return true;
 }
 
+// Real Web Push send -- one-shot per job_id, called from checkJobCompletion
+// once a job is truly finalized (behind the same didFinalize guard as
+// trim/synthesis/shadow-scoring, so this can never double-send for one job).
+// A dead/expired subscription (410/404 from the push service) is deleted
+// rather than retried; any other error is logged but doesn't block the rest
+// of job completion, same fire-and-forget contract as synthesis/shadow-score.
+async function sendPushForJob(jobId) {
+  if (!pgPool || !vapidConfigured) return;
+  let rows;
+  try {
+    const result = await queryRW(`SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE job_id = $1`, [jobId]);
+    rows = result.rows;
+  } catch (err) {
+    console.error(`[${jobId}] [push] failed to read subscriptions: ${err.message}`);
+    return;
+  }
+  if (rows.length === 0) return;
+
+  const payload = JSON.stringify({ title: "PreviewPanel 🦉", body: "Your results are ready!" });
+  await Promise.allSettled(rows.map(async (row) => {
+    try {
+      await webpush.sendNotification({ endpoint: row.endpoint, keys: { p256dh: row.p256dh, auth: row.auth } }, payload);
+    } catch (err) {
+      console.error(`[${jobId}] [push] send failed for subscription ${row.id}: ${err.statusCode || ""} ${err.message}`);
+    }
+  }));
+
+  queryRW(`DELETE FROM push_subscriptions WHERE job_id = $1`, [jobId]).catch((err) =>
+    console.error(`[${jobId}] [push] cleanup failed: ${err.message}`)
+  );
+}
+
 // ── Check if all judges for a job are settled; finalize if so ─────────────────
 async function checkJobCompletion(jobId) {
   const job = jobs[jobId];
@@ -4137,6 +4207,15 @@ async function checkJobCompletion(jobId) {
   if (finalStatus === "done" || finalStatus === "partial") {
     job.shadowScoringPromise = runShadowScoringForJob(jobId).catch((err) => {
       console.error(`[${jobId}] [shadow_score] unexpected error: ${err.message}`);
+    });
+  }
+
+  // Real Web Push -- fires once per finalized job (didFinalize guard above
+  // already ensures this whole block runs only once), regardless of whether
+  // the user's tab is open, backgrounded, or the phone is locked.
+  if (finalStatus === "done" || finalStatus === "partial") {
+    sendPushForJob(jobId).catch((err) => {
+      console.error(`[${jobId}] [push] unexpected error: ${err.message}`);
     });
   }
 
@@ -4529,6 +4608,33 @@ app.get("/api/status/:jobId", async (req, res) => {
     sourceUrl: job.sourceUrl ?? null,
     linkDisplayUrl: job.linkDisplayUrl ?? null,
   });
+});
+
+// ── Web Push subscribe flow ────────────────────────────────────────────────
+// GET the VAPID public key so the frontend can call pushManager.subscribe()
+// without hardcoding/rebuilding the key into the bundle.
+app.get("/api/vapid-public-key", (req, res) => {
+  res.json({ publicKey: vapidConfigured ? process.env.VAPID_PUBLIC_KEY : null });
+});
+
+// Store a subscription for one specific job. Called right after the poll
+// effect learns a jobId, if notification permission is already granted.
+app.post("/api/push-subscribe", async (req, res) => {
+  const { jobId, subscription } = req.body || {};
+  if (!jobId || !subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+    return res.status(400).json({ error: "jobId and a valid subscription are required" });
+  }
+  if (!pgPool) return res.status(503).json({ error: "unavailable" });
+  try {
+    await queryRW(
+      `INSERT INTO push_subscriptions (job_id, endpoint, p256dh, auth) VALUES ($1, $2, $3, $4)`,
+      [jobId, subscription.endpoint, subscription.keys.p256dh, subscription.keys.auth]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[push-subscribe] failed for ${jobId}: ${err.message}`);
+    res.status(500).json({ error: "failed to store subscription" });
+  }
 });
 
 // ── POST /api/trim — download a trimmed clip from the retained converted file ──

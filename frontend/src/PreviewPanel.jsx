@@ -19,6 +19,47 @@ function PlatformIcon({ id, size }) {
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
+// PushManager.subscribe() wants the VAPID key as a Uint8Array, not the
+// base64url string the server hands back.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+}
+
+// Real Web Push subscribe, scoped to one job_id (see server.js's
+// push_subscriptions table comment -- there's no user-identity system yet,
+// so "notify me" is per-submission). Reuses an existing browser subscription
+// if one's already active; only hits the network for a fresh VAPID key /
+// subscribe call the first time. Silently no-ops on anything unsupported
+// (no permission, no SW, no PushManager, no VAPID key configured server-side)
+// -- this is a progressive enhancement, never a hard requirement to submit.
+async function subscribeForPush(jobId) {
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const keyRes = await fetch(`${API_BASE}/api/vapid-public-key`);
+      const { publicKey } = await keyRes.json();
+      if (!publicKey) return;
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    await fetch(`${API_BASE}/api/push-subscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, subscription: sub.toJSON() }),
+    });
+  } catch (err) {
+    console.log("[push] subscribe failed:", err.message);
+  }
+}
+
 const PLATFORMS = [
   { id: "youtube", label: "Shorts", pillLabel: "Shorts", color: "#CC0000",
     hint: "TwelveLabs watches your full video — analyzing delivery, energy, pacing, and hook strength." },
@@ -389,7 +430,6 @@ export default function PreviewPanel() {
   const fileInputRef = useRef(null);
   const linkInputRef = useRef(null);
   const xhrRef = useRef(null);
-  const notifiedRef = useRef(false);
   const savedRef = useRef(false);
   const plat = PLATFORMS.find(p => p.id === platform);
   const isFinished = jobStatus === "done" || jobStatus === "partial";
@@ -475,6 +515,7 @@ export default function PreviewPanel() {
 
   useEffect(() => {
     if (!jobId) return;
+    subscribeForPush(jobId);
     synthWaitRef.current = 0;
     scoreWaitRef.current = 0;
     const poll = async () => {
@@ -563,12 +604,6 @@ export default function PreviewPanel() {
           const succeeded = Object.values(data.results||{}).filter(r=>r.status==="done").length;
           const total = Object.keys(data.results||{}).length;
           setStatusMessage(data.status === "done" ? "Analysis complete!" : `${succeeded} of ${total} judges completed.`);
-
-          // Notification
-          if (!notifiedRef.current && Notification?.permission === "granted") {
-            notifiedRef.current = true;
-            new Notification("PreviewPanel 🦉", { body: "Your results are ready!" });
-          }
 
           // Issue #9: Auto-save to history. mainResultsReady only fires once
           // scoreDisplay has arrived or its own wait has been exhausted, so
@@ -720,7 +755,6 @@ export default function PreviewPanel() {
 
   const doStartAnalysis = () => {
     setShowNotifPrimer(false);
-    notifiedRef.current = false;
     savedRef.current = false;
     setStep(2);
     setJudgeResults({});
@@ -839,7 +873,6 @@ export default function PreviewPanel() {
     if (!url) return;
     setLinkFetchError(null);
     setShowNotifPrimer(false);
-    notifiedRef.current = false;
     savedRef.current = false;
     setStep(2);
     setJudgeResults({});
@@ -892,7 +925,7 @@ export default function PreviewPanel() {
     setVideoDurationSecs(null);
     setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
     setShowSlowConnWarning(false); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null);
-    notifiedRef.current = false; savedRef.current = false;
+    savedRef.current = false;
     setObjective("");
     // Readout-screen polish, point 2 -- the upload box must never return in
     // "paste a link" mode; every path back to the submit screen goes through

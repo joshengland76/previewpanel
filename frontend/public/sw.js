@@ -18,6 +18,37 @@ self.addEventListener("activate", e => {
   self.clients.claim();
 });
 
+// Real Web Push -- the server calls webpush.sendNotification() once a job
+// finishes (see server.js's sendPushForJob), which wakes THIS service worker
+// directly via the browser/OS push service, independent of whether any tab
+// is open or focused. Replaces the old foreground-only `new Notification()`
+// call in PreviewPanel.jsx, which only ever fired while that tab's own JS
+// was still running -- and mobile browsers throttle/suspend a backgrounded
+// tab's timers, so it could only ever notify once the user reopened the app.
+self.addEventListener("push", e => {
+  let data = { title: "PreviewPanel 🦉", body: "Your results are ready!" };
+  try { if (e.data) data = { ...data, ...e.data.json() }; } catch {}
+  e.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "/apple-touch-icon.png",
+      badge: "/apple-touch-icon.png",
+    })
+  );
+});
+
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  e.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(clientsList => {
+      for (const client of clientsList) {
+        if ("focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow("/");
+    })
+  );
+});
+
 self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
   if (e.request.url.includes("/api/")) return;
