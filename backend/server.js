@@ -2672,12 +2672,20 @@ async function runShadowScoringForJob(jobId) {
     let cdimsDims = null;
     let cdimsStatus = "not_run";
     if (process.env.EXTRACT_CDIMS === "true" && job.source !== "research_api" && retained?.path) {
+      // Chips v2 -- caption fidelity: job.caption is populated for
+      // link-fetch (yt-dlp description, set at job creation) and validation
+      // ingestion (worker-provided caption, set at job creation) rows;
+      // stays null for plain file uploads (no caption source exists there
+      // unless/until the optional "planned caption" field is used). Passing
+      // whatever's actually available matches the research pipeline's own
+      // input construction instead of always extracting against an empty
+      // caption slot -- see CHIPS_V2_READOUT.md.
       const result = await extractCdims({
         filePath: retained.path,
         durationSecs: job.videoDuration?.secs ?? null,
         platform: job.platform,
         postedAt: null,
-        caption: null,
+        caption: job.caption ?? null,
         audioTrack: null,
         source: job.source,
       });
@@ -3202,6 +3210,14 @@ app.post("/api/fetch-video", async (req, res) => {
     // header + History (see cleanDisplayUrl's own comment above).
     sourceUrl: parsed.href,
     linkDisplayUrl: cleanDisplayUrl(parsed.href),
+    // Chips v2 -- caption fidelity: yt-dlp's --dump-json probe already
+    // returns the real caption in `description` (same info-dict field
+    // parser.py reads for the research corpus); it was being parsed for
+    // `meta.duration` and then discarded. Passed through to extractCdims
+    // below so link-fetch runs see the same caption text the study did,
+    // instead of always extracting caption_tone/cta_type from an empty
+    // caption slot (see CHIPS_V2_READOUT.md's caption-path finding).
+    caption: meta.description || null,
   };
 
   console.log(`[${jobId}] Link-fetch job created — platform=${platform} url=${parsed.href} queue position: ${queuePosition}`);
@@ -3243,6 +3259,7 @@ app.post("/api/analyze", (req, res, next) => {
       objective = "",
       judges: judgesParam,
       userId = null, // Phase C, Task 1 -- client-generated persistent UUID
+      caption: rawCaption, // Chips v2, Task 3c -- optional "planned caption" field
     } = req.body;
 
     const filePath = req.file?.path;
@@ -3277,6 +3294,9 @@ app.post("/api/analyze", (req, res, next) => {
       fileSizeMB: req.file ? parseFloat((req.file.size / 1024 / 1024).toFixed(2)) : null,
       fileName: req.file?.originalname ?? null,
       browserUploadMs: req.browserUploadMs ?? null,
+      // Chips v2, Task 3c -- optional "planned caption" field. Never required;
+      // stays null (same as before this change) if the user doesn't fill it in.
+      caption: rawCaption && rawCaption.trim() ? rawCaption.trim().slice(0, 2000) : null,
     };
 
     console.log(`[${jobId}] Job created — queue position: ${queuePosition}, browser_upload_ms: ${req.browserUploadMs ?? "null"} — sending jobId to client`);
@@ -3621,6 +3641,11 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
     const audioMatch = req.body.audioMatch != null ? req.body.audioMatch === "true" : null;
     const durationDelta = req.body.durationDelta != null ? parseFloat(req.body.durationDelta) : null;
     const possiblyRelated = req.body.possiblyRelated != null ? req.body.possiblyRelated === "true" : null;
+    // Chips v2, Task 3b -- worker.py now fetches the real posted caption and
+    // sends it alongside the video; passed through to extractCdims below so
+    // validation rescores are caption-faithful, matching the study's own
+    // input construction instead of the always-empty slot used before.
+    const caption = req.body.caption ? req.body.caption.toString().trim().slice(0, 2000) || null : null;
 
     if (!pgPool) { cleanupTempFile(); return res.status(503).json({ error: "Database not available" }); }
 
@@ -3667,9 +3692,10 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
       fileSizeMB: parseFloat((req.file.size / 1024 / 1024).toFixed(2)),
       fileName: `tiktok_${tiktokVideoId}${path.extname(req.file.originalname || ".mp4")}`,
       browserUploadMs: null,
+      caption,
     };
 
-    console.log(`[${jobId}] [validation] Job created — posted_video_id=${postedVideoId} tiktok_video_id=${tiktokVideoId} objective="${objective ?? "—"}" match_tier=${matchTier ?? "—"}`);
+    console.log(`[${jobId}] [validation] Job created — posted_video_id=${postedVideoId} tiktok_video_id=${tiktokVideoId} objective="${objective ?? "—"}" match_tier=${matchTier ?? "—"} caption=${caption ? "yes" : "no"}`);
 
     const pre = await preprocessUploadedVideo(jobId, req.file.path);
     if (!pre.ok) {

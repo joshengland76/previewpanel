@@ -110,6 +110,29 @@ def list_recent_videos(handle: str):
     return videos
 
 
+def fetch_caption(video_url: str) -> str | None:
+    """Chips v2, Task 3b -- list_recent_videos()'s --flat-playlist entries
+    don't reliably carry `description`; a real per-video --dump-json probe
+    does (same info-dict field the app's own link-fetch path reads, and the
+    same field parser.py reads for the research corpus). Best-effort: a
+    failure here just means this video's caption-dependent chips stay muted,
+    same as before this change -- never blocks discovery/download/ingest."""
+    cmd = ["yt-dlp", "--dump-json", "--no-warnings", "--skip-download", video_url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=YTDLP_LIST_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        print(f"[worker] caption probe timed out: {video_url}", file=sys.stderr)
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        print(f"[worker] caption probe failed for {video_url}: {result.stderr[:200]}", file=sys.stderr)
+        return None
+    try:
+        meta = json.loads(result.stdout.strip().split("\n")[0])
+    except json.JSONDecodeError:
+        return None
+    return meta.get("description") or None
+
+
 def download_video(video_url: str, out_path: pathlib.Path) -> bool:
     cmd = ["yt-dlp", "--no-warnings", "-f", "mp4/best", "-o", str(out_path), video_url]
     try:
@@ -153,13 +176,15 @@ def fetch_candidate_fingerprints(conn, user_id):
 
 
 # ── Ingestion POST ────────────────────────────────────────────────────────
-def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match):
+def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match, caption=None):
     research_key = get_env("RESEARCH_API_KEY")
     data = {
         "tiktokVideoId": tiktok_video_id,
         "userId": user_id or "",
         "handle": handle or "",
     }
+    if caption:
+        data["caption"] = caption
     if posted_at:
         data["postedAt"] = posted_at.isoformat()
     if match:
@@ -181,7 +206,7 @@ def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match):
     return resp
 
 
-def process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_path):
+def process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_path, caption=None):
     fp_json = fp.fingerprint_video(pathlib.Path(local_path))
     candidates = fetch_candidate_fingerprints(conn, user_id) if user_id else []
     match = best_match(fp_json, candidates) if candidates else None
@@ -193,7 +218,7 @@ def process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_p
     else:
         print(f"[worker] {tiktok_video_id}: no candidate previews in trailing {TRAILING_DAYS}d window")
 
-    resp = post_ingest(local_path, tiktok_video_id, user_id, handle, posted_at, match)
+    resp = post_ingest(local_path, tiktok_video_id, user_id, handle, posted_at, match, caption=caption)
     if resp.status_code == 200:
         body = resp.json()
         print(f"[worker] {tiktok_video_id}: ingested -> status={body.get('status')} "
@@ -268,8 +293,10 @@ def run_scan_mode(args):
             conn.commit()
             cur.close()
 
+            caption = fetch_caption(v["url"])
+
             try:
-                process_one_video(conn, user_id, handle, tiktok_video_id, v["posted_at"], local_path)
+                process_one_video(conn, user_id, handle, tiktok_video_id, v["posted_at"], local_path, caption=caption)
             finally:
                 local_path.unlink(missing_ok=True)  # never accumulate downloaded videos on disk
 

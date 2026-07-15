@@ -368,6 +368,13 @@ export default function PreviewPanel() {
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
   const [detectedFileDurationSecs, setDetectedFileDurationSecs] = useState(null);
+  // Chips v2, Task 3c -- optional caption for file uploads (the only
+  // submission path with no real caption source at all). Never required,
+  // never nagged; only shown once a file is picked so the initial screen is
+  // unchanged. Passed to C_dims when present so caption-dependent chips
+  // (educational/promotional tone, save/follow/buy/link CTA, question hook)
+  // can fire the same way they would if this had been a real posted caption.
+  const [plannedCaption, setPlannedCaption] = useState("");
   const [objective, setObjective] = useState("");
   const [restoredFileName, setRestoredFileName] = useState(null);
   // Readout-screen polish, point 1 -- link-fetch runs only; null for a file
@@ -789,6 +796,7 @@ export default function PreviewPanel() {
     formData.append("objective", objective);
     formData.append("judges", JSON.stringify(selectedJudges));
     if (userId) formData.append("userId", userId); // Phase C, Task 1
+    if (plannedCaption.trim()) formData.append("caption", plannedCaption.trim()); // Chips v2, Task 3c
     formData.append("video", videoFile);
 
     const xhr = new XMLHttpRequest();
@@ -919,6 +927,7 @@ export default function PreviewPanel() {
     setSynthesis(null); setSynthesisStatus(null); setTrimAvailable(false); setOpenJudgeIds(new Set()); synthWaitRef.current = 0;
     setScoreDisplay(null); scoreWaitRef.current = 0;
     setVideoFile(null); setDetectedFileDurationSecs(null); setStatusMessage("");
+    setPlannedCaption("");
     setRestoredFileName(null);
     setVideoDurationSecs(null);
     setUploadProgress(0); setUploadProgressIndeterminate(false); setUploadedMB(0); setUploadSpeedMBps(0);
@@ -1134,7 +1143,7 @@ export default function PreviewPanel() {
                       <div style={{ fontWeight: "700", fontSize: "13px", color: B.brown }}>{videoFile.name}</div>
                       <div style={{ fontSize: "11px", color: "#aaa", marginTop: "3px" }}>
                         {(videoFile.size/1024/1024).toFixed(1)} MB ·{" "}
-                        <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setDetectedFileDurationSecs(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); }}
+                        <span onClick={e => { e.preventDefault(); e.stopPropagation(); setVideoFile(null); setDetectedFileDurationSecs(null); setLargeFileWarning(null); setLargeSizeRiskWarning(false); setUploadZoneError(null); setPlannedCaption(""); }}
                           style={{ color: B.brown, cursor: "pointer", textDecoration: "underline" }}>Remove</span>
                       </div>
                     </div>
@@ -1160,6 +1169,15 @@ export default function PreviewPanel() {
                     </div>
                   )}
                 </label>
+              )}
+              {/* Chips v2, Task 3c -- revealed only after a file is picked, so
+                  the initial screen is unchanged. A plain sibling of the
+                  <label>, not nested inside it, so typing here never bubbles
+                  into the file-input's own click/focus behavior. */}
+              {videoFile && (
+                <input type="text" value={plannedCaption} onChange={e => setPlannedCaption(e.target.value)}
+                  placeholder="Planned caption (optional)" maxLength={2000}
+                  style={{ width: "100%", marginTop: "8px", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "13px", fontFamily: "inherit", color: B.body }} />
               )}
               {linkFetchError && (
                 <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>

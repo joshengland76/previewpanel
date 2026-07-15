@@ -37,10 +37,15 @@ import { B, VALENCE } from "../brand.js";
 // renders nothing at all when empty, rather than explaining what didn't fire.
 
 const CHIP_INFO = {
-  // Pre-existing (Spider v3) -- tooltips unchanged.
-  curiosity: `A content read (not a judge score): this video leans on open questions, reveals, or "wait, what?" moments to pull viewers in. In our data, curiosity paired with a payoff is one of the strongest patterns behind above-average performance.`,
+  // Pre-existing (Spider v3) -- tooltip unchanged.
   inspiration: `A content read (not a judge score): this video leans on aspiration, transformation, or "you can do this too" framing. In our data, inspiration is one of the more consistently positive signals across niches.`,
   combo: `Curiosity and Inspiration both detected in the same video — the strongest positive pattern in our study data.`,
+  // Chips v2, Task 3 note: save/follow CTA chips are structurally caption-
+  // dependent -- the model has no reliable way to see "save this" or "follow
+  // me" language from video/audio alone, so these only fire when a caption
+  // is actually present (link-fetch, validation rescores, or an optional
+  // planned-caption file upload). Keeping them in the roster anyway since
+  // they're real, correctly-signed model features, not dead weight.
   save: `This video includes a "save"-oriented call to action. In our data, save-prompting videos show one of the stronger positive associations with performance among the signals we track.`,
   // New (Spider v3.1) -- house pattern: positives "tend to outperform the
   // creator's typical video," negatives "tend to underperform" it.
@@ -83,12 +88,29 @@ function SignalRow({ title, chips, open, onToggle }) {
   );
 }
 
+// Chips v2, Task 4 -- roster policy: every chip here is a real,
+// correctly-signed scoring_spec_v2.json coefficient with a corpus base rate
+// under ~35% (see CHIPS_V2_READOUT.md's base-rate table) and a raw feature
+// the model can structurally fire on given what's actually available at
+// scoring time (video+audio only, or video+audio+caption when one exists).
+// The generic Curiosity chip was removed entirely: its "detected" read (any
+// primary/secondary/combination-label match) is nearly a coin flip in real
+// submissions and carries no dedicated model weight of its own -- curiosity
+// only earns a badge here as half of the Curiosity+Inspiration combo, never
+// standalone. Likewise there's no chip for curiosity_delight/delight-variant
+// combination labels: +0.017 at a ~52% base rate in live app data is below
+// the bar on both signal strength and rarity.
 export function DetectedSignals({ contentReadAxes, signalFields }) {
   const [open, setOpen] = useState(null);
   const sf = signalFields || {};
 
+  // Broad definition (primary/secondary/combination-substring) -- kept ONLY
+  // to decide when the combo chip fires, matching its unchanged behavior;
+  // never rendered as its own chip (see roster-policy comment above).
   const curiosityDetected = (contentReadAxes?.curiosity ?? 0) > 0;
-  const inspirationDetected = (contentReadAxes?.inspiration ?? 0) > 0;
+  // Strict definition for the standalone chip -- emotion_primary_inspiration
+  // OR emotion_targeted_inspiration only (see buildSignalFields's comment).
+  const inspirationDetected = sf.inspirationStrict === true;
   const bothDetected = curiosityDetected && inspirationDetected;
   const saveDetected = sf.ctaType === "save";
   const followDetected = sf.ctaType === "follow";
@@ -105,9 +127,10 @@ export function DetectedSignals({ contentReadAxes, signalFields }) {
   const negativeAccent = B.grey; // muted blue-grey -- visually distinct from positives, deliberately not alarming red
 
   const positiveChips = [
-    curiosityDetected && { id: "curiosity", label: "Curiosity", icon: "✨", accent: B.brown },
-    inspirationDetected && { id: "inspiration", label: "Inspiration", icon: "💡", accent: B.brown },
+    // Combo supersedes the standalone Inspiration chip when both fire --
+    // never show both at once.
     bothDetected && { id: "combo", label: "Curiosity + Inspiration", icon: "⭐", accent: comboAccent },
+    (inspirationDetected && !bothDetected) && { id: "inspiration", label: "Inspiration", icon: "💡", accent: B.brown },
     saveDetected && { id: "save", label: "Save-prompt CTA", icon: "🔖", accent: B.brown },
     followDetected && { id: "follow", label: "Follow CTA", icon: "➕", accent: B.brown },
     educationalDetected && { id: "educational", label: "Educational tone", icon: "🎓", accent: B.brown },

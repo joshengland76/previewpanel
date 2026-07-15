@@ -130,7 +130,7 @@ export function computeTrendAxes(features) {
 // DetectedSignals.jsx.
 export function buildSignalFields(features) {
   if (!features) {
-    return { ctaType: null, captionTone: null, hookStyle: null, textOverlayDensity: null, isSponsored: null };
+    return { ctaType: null, captionTone: null, hookStyle: null, textOverlayDensity: null, isSponsored: null, inspirationStrict: false };
   }
   return {
     ctaType: features.cta_type ?? null,
@@ -138,5 +138,16 @@ export function buildSignalFields(features) {
     hookStyle: features.hook_style ?? null,
     textOverlayDensity: features.text_overlay_density ?? null,
     isSponsored: features.is_sponsored_int === 1,
+    // Chips v2, Task 4 -- the standalone Inspiration chip keys strictly to
+    // emotion_primary_inspiration OR emotion_targeted_inspiration (the two
+    // model-weighted categoricals, scoring_spec_v2.json coefficients
+    // +0.0535 each), NOT the broader computeContentReadAxes() "inspiration"
+    // read above (which also credits a secondary-emotion match or a bare
+    // combination-label substring). emotion_targeted mirrors emotion_primary
+    // 1:1 in this codebase (buildFeatures.js populates both from the same
+    // extraction field), so checking both is redundant today but matches
+    // the two real model features by name rather than assuming that never
+    // changes.
+    inspirationStrict: features.emotion_primary === "inspiration" || features.emotion_targeted === "inspiration",
   };
 }
