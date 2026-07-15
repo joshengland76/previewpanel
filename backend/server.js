@@ -3116,15 +3116,23 @@ app.post("/api/fetch-video", async (req, res) => {
     return res.status(400).json({ error: "That doesn't look like a valid link." });
   }
 
-  // Instagram gets its own specific message (per spec) -- checked before the
-  // generic allowlist rejection so it isn't lumped in with "invalid link."
+  // Instagram and YouTube both get their own specific message (checked before
+  // the generic allowlist rejection so neither is lumped in with "invalid
+  // link"). YouTube's yt-dlp probe reliably fails from Render's IP with
+  // "Sign in to confirm you're not a bot" -- confirmed via production logs on
+  // two separate real link-fetch attempts (2026-07-14/15) -- so there's no
+  // point spending a probe call on it; reject up front with the same clear,
+  // upload-instead message Instagram gets.
   if (/(^|\.)instagram\.com$/.test(parsed.hostname)) {
     return res.status(400).json({ error: "Instagram blocks apps from fetching videos by link — save the video to your device and upload the file instead." });
+  }
+  if (/(^|\.)youtube\.com$/.test(parsed.hostname) || /(^|\.)youtu\.be$/.test(parsed.hostname)) {
+    return res.status(400).json({ error: "YouTube blocks apps from fetching videos by link — save the video to your device and upload the file instead." });
   }
 
   const platform = platformFromLinkUrl(parsed);
   if (!platform) {
-    return res.status(400).json({ error: "Links are supported from TikTok and YouTube Shorts only — download the file and upload it instead." });
+    return res.status(400).json({ error: "Links are supported from TikTok only — download the file and upload it instead." });
   }
 
   if (!checkLinkFetchRateLimit(userId || ip)) {
