@@ -21,6 +21,7 @@ HARD RULES (apply to every gist, v2.5 or not):
 - Never mention models, scores, data, percentiles, or any internal feature/field name (e.g. never say "sponsored content flag" or "cta_type") — describe what is actually happening in the video, in plain creator-facing language.
 - Never give duration or length advice.
 - Phrase everything correlationally ("tends to," "in our data," "tends to underperform/outperform") — never causally, never as a command.
+- Never write the words "surprise," "surprising," or "surprised" in the gist, in ANY role — not as advice ("be more surprising"), not as a descriptive shortfall ("surprise is the weakest link"), not paired with novelty ("novelty and surprise"). This holds even though the judges' raw dimensions include a literal `surprising` field — that field feeds takeaways/scoring, never gist vocabulary. If describing what's missing, name novelty, emotional resonance, or intensity instead; if the panel raised a specific concrete moment, describe that moment, not a generic "more surprise" framing. Novel yes; jarring no.
 
 CALIBRATION PAIR (a real submission from this product, used to anchor tone — a TikTok built around a nostalgic "Summer of '69"-style hook, posted with a promotional caption pushing a shop-the-link-in-bio CTA; scoring_context.negative_signals for this video: sponsored content and promotional tone both high_impact, plus a non-high-impact link CTA):
 
