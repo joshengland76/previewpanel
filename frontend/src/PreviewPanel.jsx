@@ -992,10 +992,17 @@ export default function PreviewPanel() {
   const trimCtx = { available: trimAvailable, videoFile, jobId, apiBase: API_BASE, durationSecs: videoDurationSecs };
 
   return (
-    <div style={{ minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
+    <div className="pp-root" style={{ background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        /* iOS Safari resizes the visual viewport (address bar show/hide) as
+           scrolling starts/stops; 100vh is fixed to the largest state, so a
+           100vh-tall root combined with the fixed-position CTA footer below
+           visibly wobbles as the toolbar collapses/expands. 100dvh tracks the
+           real visible viewport instead -- second declaration wins in
+           browsers that support it, first is the fallback everywhere else. */
+        .pp-root { min-height: 100vh; min-height: 100dvh; }
         @keyframes pp-pulse { 0%,100%{opacity:.2;transform:scale(.75)} 50%{opacity:1;transform:scale(1.2)} }
         @keyframes pp-fade { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:translateY(0)} }
         @keyframes pp-slide { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
@@ -1013,7 +1020,15 @@ export default function PreviewPanel() {
           .pp-section-gap { margin-bottom: 6px !important; }
           .pp-section-gap.pp-judge-section-gap { margin-bottom: 16px !important; }
           .pp-judge-list { gap: 4px !important; }
-          .pp-content-pad { padding-bottom: 100px; }
+          /* Must clear .pp-sticky-wrap's own real height (10px top pad + 56px
+             button + its bottom pad, which grows with the home-indicator
+             safe-area inset below) or the fixed footer overlaps the last
+             scrollable item on any notched phone -- a flat 100px only ever
+             matched the zero-safe-area case exactly, with no headroom, which
+             is why the Connector row started clipping under the button the
+             moment anything upstream pushed content down (the caption field).
+             Root-caused and fixed here instead of just freeing space above. */
+          .pp-content-pad { padding-bottom: calc(82px + max(34px, 14px + env(safe-area-inset-bottom))); }
           .pp-sticky-wrap {
             position: fixed; bottom: 0; left: 0; right: 0;
             padding: 10px 14px max(34px, calc(14px + env(safe-area-inset-bottom)));
@@ -1041,13 +1056,10 @@ export default function PreviewPanel() {
         {step === 1 && (
           <div className="pp-content-pad" style={{ animation: "pp-slide 0.35s ease" }}>
 
-            {/* Logo + BETA + History button */}
+            {/* Logo + History button */}
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
-              <div style={{ marginTop: "-12px", marginBottom: "8px" }}>
-                <span style={{ fontSize: "10px", fontWeight: "700", background: B.action, color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
-              </div>
               {/* Issue #9: History button */}
               {history.length > 0 && (
                 <button onClick={() => setShowHistory(v => !v)} style={{
@@ -1186,7 +1198,9 @@ export default function PreviewPanel() {
               {videoFile && (
                 <input type="text" value={plannedCaption} onChange={e => setPlannedCaption(e.target.value)}
                   placeholder="Planned caption (optional)" maxLength={2000}
-                  style={{ width: "100%", marginTop: "8px", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "13px", fontFamily: "inherit", color: B.body }} />
+                  // fontSize must be >=16px -- iOS Safari auto-zooms the page on
+                  // focus for any input below that, which is the reported zoom.
+                  style={{ width: "100%", marginTop: "8px", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "16px", fontFamily: "inherit", color: B.body }} />
               )}
               {linkFetchError && (
                 <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>
@@ -1425,9 +1439,6 @@ export default function PreviewPanel() {
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
-              <div style={{ marginTop: "-12px", marginBottom: "12px" }}>
-                <span style={{ fontSize: "10px", fontWeight: "700", background: "#4E342E", color: "#fff", padding: "3px 8px", borderRadius: "4px", letterSpacing: "0.06em" }}>BETA</span>
-              </div>
               {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{
                   position: "absolute", top: "10px", right: "0",
