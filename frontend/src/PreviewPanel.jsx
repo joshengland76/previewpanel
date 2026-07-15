@@ -564,14 +564,21 @@ export default function PreviewPanel() {
         const jobDone = data.status === "done" || data.status === "partial";
         const jobErrored = data.status === "error" || data.status === "timeout";
         // App submissions get a fire-and-forget synthesis that lands shortly AFTER
-        // the judges finish. Keep polling while it's still "pending" (capped ~40s)
+        // the judges finish. Keep polling while it's still "pending" (capped ~90s)
         // so the "assembling" state can swap to the real overview when it arrives.
         // null status on a just-finished job = the brief gap before the backend
         // marks synthesis "pending"; treat it as pending so we don't flash the
         // fallback. Either way it's bounded by the wait cap.
+        // Cap bumped 14->30 polls (42s->90s) -- a real "hero card missing" report
+        // traced to a live job whose synthesis genuinely took 51s (a large
+        // 131.6MB/73s file; typical recent jobs land at 20-26s), no double-fire,
+        // no error, just Claude taking longer on a bigger synthesis input. The
+        // old 42s cap had no margin above that; 90s gives ~1.75x headroom above
+        // the worst observed case instead of degrading to the fallback view
+        // moments before the real result would have arrived.
         const synthPending = data.synthesisStatus === "pending" || data.synthesisStatus == null;
         if (jobDone && synthPending) synthWaitRef.current++;
-        const waitingForSynth = jobDone && synthPending && synthWaitRef.current < 14;
+        const waitingForSynth = jobDone && synthPending && synthWaitRef.current < 30;
 
         // Judges + synthesis phase fully resolved (arrived, or gave up waiting).
         const synthResolved = jobDone && !waitingForSynth;
