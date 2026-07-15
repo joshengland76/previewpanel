@@ -1074,12 +1074,16 @@ export default function PreviewPanel() {
                 }}>
                   <div style={{ fontWeight: "700", fontSize: "13px", color: "#888", marginBottom: "8px" }}>Paste a TikTok link</div>
                   {/* inputMode="none" suppresses the on-screen keyboard on tap
-                      (there's nothing to type here, only paste) while leaving
-                      the field fully focusable/editable -- tapping in still
-                      places a cursor and brings up the OS's native paste
-                      suggestion, it just does it without the keyboard behind it. */}
+                      (there's nothing to type here, only paste). A first tap
+                      alone only places a cursor -- iOS/Android only summon the
+                      paste bubble once there's an active SELECTION, which
+                      normally takes a second tap on the caret. Calling
+                      select() the moment the field gains focus forces that
+                      selection state immediately, so the paste suggestion
+                      shows on the very first tap instead of the second. */}
                   <input ref={linkInputRef} type="url" inputMode="none" placeholder="https://…" value={videoLinkUrl}
                     onChange={e => setVideoLinkUrl(e.target.value)}
+                    onFocus={e => e.target.select()}
                     onKeyDown={e => { if (e.key === "Enter") handleSubmit(); }}
                     style={{ width: "100%", maxWidth: "320px", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "16px", fontFamily: "inherit" }} />
                   <span onClick={() => { setShowLinkInput(false); setVideoLinkUrl(""); setLinkFetchError(null); }}
