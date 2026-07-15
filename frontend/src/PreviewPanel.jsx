@@ -418,6 +418,18 @@ export default function PreviewPanel() {
   const [showLinkInput, setShowLinkInput] = useState(false);
   const [videoLinkUrl, setVideoLinkUrl] = useState("");
   const [linkFetchError, setLinkFetchError] = useState(null);
+
+  // Auto-focus the link input the moment the box switches into paste mode --
+  // without this, the field starts unfocused, so the user's first tap only
+  // focuses it (no selection yet) and a SECOND tap is what actually engages
+  // the caret and surfaces the OS's native paste suggestion. Focusing here
+  // means that first tap lands on an already-focused field, so it's the tap
+  // that shows the paste bubble instead of a "just give it focus" throwaway
+  // tap. inputMode="none" on the field keeps the keyboard from appearing
+  // even though it's now focused programmatically.
+  useEffect(() => {
+    if (showLinkInput) linkInputRef.current?.focus();
+  }, [showLinkInput]);
   const pollRef = useRef(null);
   const synthWaitRef = useRef(0);
   // Pre-launch fix, Task 2 -- chains a second capped wait onto the same

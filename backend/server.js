@@ -4197,8 +4197,11 @@ async function checkJobCompletion(jobId) {
   // Panel synthesis — APP submissions ONLY, never research (constraint 1.3).
   // Fire-and-forget: never blocks job completion, the status response, or the
   // research path; a failure only flips synthesisStatus and degrades to judges.
+  // Stashed on the job (same pattern as shadowScoringPromise below) so the
+  // push-send gate after it can wait for the real completion instead of
+  // firing the instant judges finish.
   if (willSynthesize) {
-    runSynthesisForJob(jobId).catch((err) => {
+    job.synthesisPromise = runSynthesisForJob(jobId).catch((err) => {
       job.synthesisStatus = "failed";
       console.error(`[${jobId}] [synthesis] unexpected error: ${err.message}`);
     });
@@ -4220,9 +4223,19 @@ async function checkJobCompletion(jobId) {
 
   // Real Web Push -- fires once per finalized job (didFinalize guard above
   // already ensures this whole block runs only once), regardless of whether
-  // the user's tab is open, backgrounded, or the phone is locked.
+  // the user's tab is open, backgrounded, or the phone is locked. Waits for
+  // synthesis AND shadow-scoring (whichever the job actually kicked off
+  // above) to SETTLE first -- sending right after judges finish (the
+  // original version of this) notified well before the panel's actual
+  // verdict/score display had finished assembling, since both of those
+  // routinely take another 15-90s after "all judges complete." Using the
+  // real promises (not a fixed delay) means the notification always lines
+  // up with what the user would actually see if they opened the app.
   if (finalStatus === "done" || finalStatus === "partial") {
-    sendPushForJob(jobId).catch((err) => {
+    Promise.allSettled([
+      willSynthesize ? job.synthesisPromise : null,
+      job.shadowScoringPromise,
+    ]).then(() => sendPushForJob(jobId)).catch((err) => {
       console.error(`[${jobId}] [push] unexpected error: ${err.message}`);
     });
   }
