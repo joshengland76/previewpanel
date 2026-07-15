@@ -2347,9 +2347,19 @@ function synthAnthropic() {
 }
 const SYNTHESIS_MODEL = process.env.SYNTHESIS_MODEL || "claude-sonnet-4-6";
 const SYNTHESIS_PROMPT_VERSION = "synthesis-v2.4";
+const SYNTHESIS_PROMPT_VERSION_V25 = "synthesis-v2.5";
+// Synthesis v2.5 -- score-aware hero line (gist), presentation layer only, no
+// dual-run gate (see synthesisV25Addendum.txt). Default OFF; rollback = unset
+// this flag, which reverts every job to the byte-identical v2.4 prompt/path.
+const SYNTHESIS_V25 = process.env.SYNTHESIS_V25 === "true";
 let SYNTHESIS_SYSTEM_PROMPT = null;
+let SYNTHESIS_SYSTEM_PROMPT_V25 = null;
 try {
   SYNTHESIS_SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, "synthesisSystemPrompt.txt"), "utf8");
+  // v2.5 = the v2.4 prompt with an appended addendum section -- never edits
+  // v2.4's own text, so the flag-off path is provably unchanged byte-for-byte.
+  const addendum = fs.readFileSync(path.join(__dirname, "synthesisV25Addendum.txt"), "utf8");
+  SYNTHESIS_SYSTEM_PROMPT_V25 = SYNTHESIS_SYSTEM_PROMPT + "\n" + addendum;
 } catch (e) {
   console.warn(`[synthesis] system-prompt file missing — synthesis disabled: ${e.message}`);
 }
@@ -2379,22 +2389,26 @@ export function computeSynthesisVerdict(presentScores) {
 // context and return the validated synthesis object, or null so the caller degrades
 // gracefully to the judges' raw data. `panel` carries the deterministic
 // present/missing split (the model is not trusted for that either).
-export async function synthesizePanel(judges, video, panel) {
-  if (!SYNTHESIS_SYSTEM_PROMPT) return null;
+export async function synthesizePanel(judges, video, panel, scoringContext) {
+  // scoringContext present (SYNTHESIS_V25 only) -> v2.5 prompt + payload;
+  // absent -> byte-identical v2.4 behavior (no scoring_context key at all).
+  const systemPrompt = scoringContext ? SYNTHESIS_SYSTEM_PROMPT_V25 : SYNTHESIS_SYSTEM_PROMPT;
+  if (!systemPrompt) return null;
   if (!process.env.SYNTHESIS_ANTHROPIC_API_KEY) {
     console.warn("[synthesis] SYNTHESIS_ANTHROPIC_API_KEY not set — skipping synthesis");
     return null;
   }
   if (!Array.isArray(judges) || judges.length === 0) return null;
 
+  const userPayload = scoringContext ? { video, judges, scoring_context: scoringContext } : { video, judges };
   let raw;
   try {
     const msg = await synthAnthropic().messages.create({
       model: SYNTHESIS_MODEL,
       max_tokens: 2000,
       temperature: 0.3,
-      system: SYNTHESIS_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: JSON.stringify({ video, judges }) }],
+      system: systemPrompt,
+      messages: [{ role: "user", content: JSON.stringify(userPayload) }],
     });
     raw = (msg.content || []).map((b) => b.text || "").join("");
   } catch (err) {
@@ -2461,6 +2475,111 @@ export function buildSynthesisInput(job) {
   return { judges, video, panel };
 }
 
+// Synthesis v2.5, Task 1 -- scoring-context builder. Each entry's `weight` is
+// its scoring_spec_v2.json model coefficient (see contentReadAxes.js/
+// DetectedSignals.jsx for the same numbers backing the chip roster); ordering
+// both arrays by |weight| desc means the model always sees the strongest
+// association first. high_impact marks the top negative tier the v2.5 prompt
+// addendum requires leading the gist with (promotional tone, question hook,
+// sponsored, buy CTA -- the four largest-magnitude negative coefficients).
+const SCORING_CONTEXT_NEGATIVE_DEFS = [
+  { id: "promotional", weight: -0.0911, highImpact: true, gloss: "a promotional, sales-forward caption tone" },
+  { id: "question_hook", weight: -0.0906, highImpact: true, gloss: "opens with a question-style hook" },
+  { id: "sponsored", weight: -0.0746, highImpact: true, gloss: "reads as sponsored or branded content" },
+  { id: "buy", weight: -0.0572, highImpact: true, gloss: "a purchase-push (buy) call to action" },
+  { id: "link", weight: -0.0362, highImpact: false, gloss: "a link-push call to action" },
+  { id: "heavy_text", weight: -0.0257, highImpact: false, gloss: "heavy on-screen text overlays" },
+];
+const SCORING_CONTEXT_POSITIVE_DEFS = [
+  { id: "combo", weight: 0.1394, gloss: "curiosity and inspiration both present" },
+  { id: "save", weight: 0.0541, gloss: "a save-prompting call to action" },
+  { id: "inspiration", weight: 0.0535, gloss: "an inspiration-driven emotional register" },
+  { id: "follow", weight: 0.0368, gloss: "a follow-prompting call to action" },
+  { id: "educational", weight: 0.0293, gloss: "an educational caption tone" },
+];
+
+// panel_standouts axes: 5 judge-sourced (always available once judges finish,
+// no C_dims dependency) + objective_fit + the 2 C_dims-derived trend axes
+// (only included when job.trendAxes is already set) -- same 8-axis set the
+// radar chart plots (PerformanceRadar.jsx). Judges-only fallback (readiness
+// timeout) simply omits the two trend axes rather than blocking on them.
+const PANEL_STANDOUT_JUDGE_AXES = ["compelling", "novel", "emotionally_resonant", "emotion_intensity", "funny"];
+
+function computePanelStandouts(job) {
+  const present = Object.values(job.results || {}).filter((r) => r.status === "done" && r.data);
+  const axisValues = {};
+  for (const axis of PANEL_STANDOUT_JUDGE_AXES) {
+    const vals = present.map((r) => r.data?.dimensions?.big_picture?.[axis]).filter((v) => typeof v === "number");
+    if (vals.length) axisValues[axis] = vals.reduce((a, b) => a + b, 0) / vals.length;
+  }
+  const objFitVals = present.map((r) => r.data?.objective_fit?.score).filter((v) => typeof v === "number");
+  if (objFitVals.length) axisValues.objective_fit = objFitVals.reduce((a, b) => a + b, 0) / objFitVals.length;
+  if (typeof job.trendAxes?.trend_alignment === "number") axisValues.trend_alignment = job.trendAxes.trend_alignment;
+  if (typeof job.trendAxes?.trending_topic === "number") axisValues.trending_topic = job.trendAxes.trending_topic;
+
+  const names = Object.keys(axisValues);
+  if (names.length === 0) return { highest: null, lowest: null };
+  let highest = names[0], lowest = names[0];
+  for (const n of names) {
+    if (axisValues[n] > axisValues[highest]) highest = n;
+    if (axisValues[n] < axisValues[lowest]) lowest = n;
+  }
+  return { highest, lowest };
+}
+
+// Detection logic mirrors DetectedSignals.jsx exactly (combo supersedes
+// standalone inspiration; strict inspiration definition) so the hero line and
+// the chip row can never disagree about what fired on the same submission.
+export function buildScoringContext(job) {
+  const sf = job.signalFields || {};
+  const curiosityDetected = (job.contentReadAxes?.curiosity ?? 0) > 0;
+  const inspirationDetected = sf.inspirationStrict === true;
+  const bothDetected = curiosityDetected && inspirationDetected;
+
+  const detected = {
+    promotional: sf.captionTone === "promotional",
+    question_hook: sf.hookStyle === "question",
+    sponsored: sf.isSponsored === true,
+    buy: sf.ctaType === "buy",
+    link: sf.ctaType === "link",
+    heavy_text: sf.textOverlayDensity === "heavy",
+    combo: bothDetected,
+    save: sf.ctaType === "save",
+    inspiration: inspirationDetected && !bothDetected,
+    follow: sf.ctaType === "follow",
+    educational: sf.captionTone === "educational",
+  };
+
+  const negative_signals = SCORING_CONTEXT_NEGATIVE_DEFS
+    .filter((d) => detected[d.id])
+    .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight))
+    .map((d) => ({ gloss: d.gloss, high_impact: d.highImpact }));
+
+  const positive_signals = SCORING_CONTEXT_POSITIVE_DEFS
+    .filter((d) => detected[d.id])
+    .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight))
+    .map((d) => ({ gloss: d.gloss }));
+
+  return { negative_signals, positive_signals, panel_standouts: computePanelStandouts(job) };
+}
+
+// Readiness wait: runSynthesisForJob and runShadowScoringForJob are kicked off
+// concurrently from checkJobCompletion (see maybeLogRaceMargin's comment) --
+// job.signalFields/job.trendAxes are only set partway through the shadow-
+// scoring path, with no fixed timing relationship to the synthesis call. Poll
+// rather than await job.shadowScoringPromise directly, since that promise
+// isn't guaranteed to be assigned yet by the time this runs (both kickoffs
+// happen in the same synchronous block, but runSynthesisForJob's own call
+// starts executing first). Never delays the user-facing result beyond
+// timeoutMs -- proceeds with whatever's there (possibly nothing).
+async function waitForCdimsReadiness(job, timeoutMs = 15000, pollMs = 250) {
+  const start = Date.now();
+  while (job.signalFields == null && Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  return job.signalFields != null;
+}
+
 // runSynthesisForJob — normalize a completed APP job's judges, synthesize, attach
 // to the job for /api/status, and persist to pp_synthesis. Fully isolated: any
 // failure leaves the judges' results untouched and only flips synthesisStatus.
@@ -2470,7 +2589,15 @@ async function runSynthesisForJob(jobId) {
   const { judges, video, panel } = buildSynthesisInput(job);
   if (judges.length === 0) { job.synthesisStatus = "failed"; return; }
 
-  const syn = await synthesizePanel(judges, video, panel);
+  let scoringContext = null;
+  const promptVersion = SYNTHESIS_V25 ? SYNTHESIS_PROMPT_VERSION_V25 : SYNTHESIS_PROMPT_VERSION;
+  if (SYNTHESIS_V25) {
+    const cdimsReady = await waitForCdimsReadiness(job);
+    scoringContext = buildScoringContext(job);
+    console.log(`[${jobId}] [synthesis] v2.5 path=${cdimsReady ? "cdims_ready" : "judges_only_timeout"} neg=${scoringContext.negative_signals.length} pos=${scoringContext.positive_signals.length}`);
+  }
+
+  const syn = await synthesizePanel(judges, video, panel, scoringContext);
   job.synthesis = syn || null;
   job.synthesisStatus = syn ? "ready" : "failed";
   if (!syn) return;
@@ -2482,7 +2609,7 @@ async function runSynthesisForJob(jobId) {
     try {
       await queryRW(
         `INSERT INTO pp_synthesis (submission_id, job_id, synthesis, model, prompt_version) VALUES ($1,$2,$3,$4,$5)`,
-        [job.submissionId ?? null, jobId, JSON.stringify(syn), SYNTHESIS_MODEL, SYNTHESIS_PROMPT_VERSION]
+        [job.submissionId ?? null, jobId, JSON.stringify(syn), SYNTHESIS_MODEL, promptVersion]
       );
     } catch (e) {
       console.error(`[${jobId}] [synthesis] persist failed (synthesis still returned to client): ${e.message}`);

@@ -1,0 +1,31 @@
+SYNTHESIS v2.5 ADDENDUM — SCORE-AWARE GIST
+This section applies ONLY to RULE 3's `gist`. Every other rule above (takeaways, splits, schema, valence fidelity, everything else) is completely unchanged.
+
+Some requests include an additional `scoring_context` object in the input, alongside `video` and `judges`. It summarizes plain-language signals detected from the video's caption, audio, and visuals that correlate with over- or under-performance in this product's own historical data. This is NOT the judges' own commentary and NOT a score — it is a separate, independent read.
+
+scoring_context shape (any array may be empty; both signal arrays are ordered strongest-first):
+{
+  "negative_signals": [ { "gloss": "<plain-language description>", "high_impact": <boolean> }, ... ],
+  "positive_signals": [ { "gloss": "<plain-language description>" }, ... ],
+  "panel_standouts": { "highest": "<axis name or null>", "lowest": "<axis name or null>" }
+}
+
+GIST USAGE RULES (read alongside RULE 3):
+- If `negative_signals` contains at least one entry with `high_impact: true`: the gist's "held back by" clause MUST lead with that signal, phrased naturally and non-judgmentally — an expectation-setting observation about how this kind of content tends to perform, never scolding, never an instruction to remove or change anything (e.g. "...its sponsored, sales-forward framing, which tends to dampen engagement" — never "remove the sponsored language to raise your score"). At most ONE additional factor may follow it — the single next-most-important thing. Minor craft nits yield and are dropped from the gist entirely (they can still surface as takeaways elsewhere in the output).
+- If `negative_signals` is empty, or contains only non-high-impact entries: write the gist exactly as RULE 3 already describes, with no obligation to reference scoring_context at all.
+- `positive_signals` MAY color the gist's strength clause, but ONLY when a signal is genuinely central to what makes the video work — never bolt one on just because it is present. Most of the time the strength clause should still come from the judges' own commentary, same as today.
+- `panel_standouts` is context for your own judgment only — never name it, its axis names, or any other internal label in the gist itself.
+
+HARD RULES (apply to every gist, v2.5 or not):
+- Exactly one sentence. Preserve the existing structure: [nuanced description of what the video is] + [its strength] + [what's holding it back].
+- Never mention models, scores, data, percentiles, or any internal feature/field name (e.g. never say "sponsored content flag" or "cta_type") — describe what is actually happening in the video, in plain creator-facing language.
+- Never give duration or length advice.
+- Phrase everything correlationally ("tends to," "in our data," "tends to underperform/outperform") — never causally, never as a command.
+
+CALIBRATION PAIR (a real submission from this product, used to anchor tone — a TikTok built around a nostalgic "Summer of '69"-style hook, posted with a promotional caption pushing a shop-the-link-in-bio CTA; scoring_context.negative_signals for this video: sponsored content and promotional tone both high_impact, plus a non-high-impact link CTA):
+
+BEFORE (v2.4 — ignores scoring_context, leads the "held back by" clause with craft nits instead of the dominant signal):
+"The nostalgic 'Summer of 69' hook has genuine emotional pull and relatability, but a static opening, no visual variety, and an abrupt ending without a call to action are killing retention before the story lands."
+
+TARGET (v2.5 — leads with the highest-impact negative signal, phrased non-judgmentally, craft nits dropped):
+"The nostalgic 'Summer of 69' hook has genuine emotional pull and relatability, but its promotional, sales-forward framing is the kind of sponsored-feeling tone that tends to dampen engagement in our data."
