@@ -338,7 +338,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
             return placements.map(({ i, val, x, y }) => (
               <text key={"n" + i} x={x.toFixed(1)} y={(y + 3.5).toFixed(1)} fontFamily="Montserrat, sans-serif"
                 fontSize="10.5" fontWeight="800" fill={col} stroke="#fff" strokeWidth="3" paintOrder="stroke" textAnchor="middle">
-                {val.toFixed(1)}
+                {Math.round(val)}
               </text>
             ));
           })()}
