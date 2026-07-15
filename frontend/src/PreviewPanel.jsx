@@ -1057,9 +1057,13 @@ export default function PreviewPanel() {
           <div className="pp-content-pad" style={{ animation: "pp-slide 0.35s ease" }}>
 
             {/* Logo + History button */}
-            <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
+            <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "0", position: "relative" }}>
+              {/* owl-logo.png has ~20px of transparent padding baked in below the
+                  wordmark at this render height (measured: 19.8% of the source
+                  image's height) -- negative margin pulls real content up into
+                  that dead space instead of stacking more space on top of it. */}
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
-                style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
+                style={{ height: "98px", width: "auto", display: "block", margin: "0 auto -18px" }} />
               {/* Issue #9: History button */}
               {history.length > 0 && (
                 <button onClick={() => setShowHistory(v => !v)} style={{
@@ -1196,11 +1200,19 @@ export default function PreviewPanel() {
                   <label>, not nested inside it, so typing here never bubbles
                   into the file-input's own click/focus behavior. */}
               {videoFile && (
-                <input type="text" value={plannedCaption} onChange={e => setPlannedCaption(e.target.value)}
-                  placeholder="Planned caption (optional)" maxLength={2000}
-                  // fontSize must be >=16px -- iOS Safari auto-zooms the page on
-                  // focus for any input below that, which is the reported zoom.
-                  style={{ width: "100%", marginTop: "8px", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "16px", fontFamily: "inherit", color: B.body }} />
+                // Wrapper applies a visual scale so the text reads at the same
+                // size as the Objective placeholder (14px) without touching the
+                // input's own fontSize, which must stay >=16px -- iOS Safari
+                // auto-zooms the page on focus for any input below that (the
+                // earlier reported zoom bug). transform:scale is a paint-time
+                // effect the zoom heuristic doesn't see, so this satisfies both
+                // constraints at once. Width is inversely compensated (100/0.875)
+                // so the scaled-down box still spans the full row.
+                <div style={{ marginTop: "8px", width: `${100/0.875}%`, transform: "scale(0.875)", transformOrigin: "left top" }}>
+                  <input type="text" value={plannedCaption} onChange={e => setPlannedCaption(e.target.value)}
+                    placeholder="Planned caption (optional)" maxLength={2000}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "8px", border: `1.5px solid ${B.border}`, fontSize: "16px", fontFamily: "inherit", color: B.body }} />
+                </div>
               )}
               {linkFetchError && (
                 <div style={{ marginTop: "8px", padding: "10px 14px", background: "#FFEBEE", border: "1.5px solid #EF9A9A", borderRadius: "10px", fontSize: "12px", color: "#C62828", lineHeight: "1.5" }}>
@@ -1436,9 +1448,9 @@ export default function PreviewPanel() {
           <div style={{ animation: "pp-slide 0.3s ease", paddingBottom: "max(40px, calc(env(safe-area-inset-bottom) + 24px))" }}>
 
             {/* Top bar */}
-            <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "4px", position: "relative" }}>
+            <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "0", position: "relative" }}>
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
-                style={{ height: "98px", width: "auto", display: "block", margin: "0 auto" }} />
+                style={{ height: "98px", width: "auto", display: "block", margin: "0 auto -18px" }} />
               {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{
                   position: "absolute", top: "10px", right: "0",
