@@ -80,6 +80,46 @@ turned off — none of them are load-bearing for the core scoring pipeline:
 The **keep-warm path has no flag and must never be touched** regardless of
 what else needs rolling back.
 
+## Local dev environment: known limitations
+
+This local `.env` intentionally runs a thinner stack than production. When a
+session's local verification looks incomplete or degrades to a fallback view,
+check here before treating it as a bug:
+
+- **No `DISPLAY_SCORE`.** Score card / percentiles never render locally —
+  every run falls back to the legacy 0–10 gauge. Expected, not broken.
+- **No `SHADOW_SCORING`.** This is the actual reason `recordShadowScore`
+  produces neither a completion nor a failure log line locally: the flag
+  check (`if (process.env.SHADOW_SCORING !== "true" && job?.source !==
+  "validation") return;`) sits in `runShadowScoringForJob`, *before* the
+  try/catch that does all the logging — so the early return is silent by
+  construction, not a swallowed error. `DISPLAY_SCORE` alone can't produce a
+  score card locally even if set, since `getScoreDisplay` needs a
+  `shadowResult` that `SHADOW_SCORING` being off never generates. Both flags
+  need to be `true` together to see the real score-display path locally.
+- **No `yt_dlp`.** Link-fetch submissions always fail at the probe step
+  (`[link-fetch] probe failed for <url>: ... No module named yt_dlp`). The
+  guard/routing logic around a link-fetch submission is still fully
+  verifiable locally; the actual video fetch is not.
+
+Net: full score-card and link-fetch verification require the production
+path (Vercel + Render), not this local sandbox.
+
+## Standing conventions
+
+- **Verification-row cleanup is pre-authorized.** Any DB rows a session's own
+  live/production verification creates (test submissions, shadow_scores,
+  fingerprints, etc.) are cleaned up — deleted, or flagged `test_row` where a
+  table already supports that (e.g. `posted_videos.test_row`) — as the final
+  step of that same session, not left for someone else to notice later. Every
+  row touched is listed by id (job id, submission id, or table-specific id) in
+  the readout, whether deleted or flagged.
+- **Every readout ends with a git/deploy state line.** Format: commit sha,
+  pushed Y/N, deployed Y/N per surface (Vercel for frontend, Render for
+  backend — only the surfaces actually touched need reporting). "Verified
+  locally" and "live in production" are never conflated — a readout says
+  which one it means.
+
 ## Anchor rescore + drift calendar
 
 - **Anchor rescore: ~2026-08-09.** Re-runs the frozen anchor set against the
