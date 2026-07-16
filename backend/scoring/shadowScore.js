@@ -70,17 +70,19 @@ function foldGroupMean(own, existingArray, groupK) {
  * Every failure mode is caught internally and logged; nothing is ever re-thrown.
  *
  * fpGroup (pool hygiene Task 2): null, or { fpGroupKey, existingPredictions,
- * existingContentReadAxes, existingBigPicture } from server.js's
- * resolveFingerprintGroup() -- a Tier-1 fingerprint match against the same
- * user's own trailing-30d previews. When present, this row joins that group:
- * group_k/group_mean_prediction fold this row's own (unchanged, separately-
- * stored) prediction into the group; group_mean_content_read_axes does the
- * same for the Curiosity/Inspiration content-read axes (contentReadAxes
- * param); group_mean_big_picture does the same for the spider chart's other
- * 6 axes -- each of the 3 judges' own big-picture dimension scores plus
- * objective fit (bigPicture param, this row's own flattened {judge}_big_
- * {dim}/{judge}_objective_fit_score values, same shape as the `submissions`
- * columns they're read from). The row is inserted pool_eligible=false (only
+ * existingContentReadAxes, existingBigPicture, existingTrendAxes } from
+ * server.js's resolveFingerprintGroup() -- a Tier-1 fingerprint match against
+ * the same user's own trailing-30d previews. When present, this row joins
+ * that group: group_k/group_mean_prediction fold this row's own (unchanged,
+ * separately-stored) prediction into the group; group_mean_content_read_axes
+ * does the same for the Curiosity/Inspiration content-read axes
+ * (contentReadAxes param); group_mean_big_picture does the same for the
+ * spider chart's other 6 axes -- each of the 3 judges' own big-picture
+ * dimension scores plus objective fit (bigPicture param, this row's own
+ * flattened {judge}_big_{dim}/{judge}_objective_fit_score values, same shape
+ * as the `submissions` columns they're read from); group_mean_trend_axes does
+ * the same for the radar's remaining 2 axes, Trend Alignment/Trending Topic
+ * (trendAxes param). The row is inserted pool_eligible=false (only
  * a group's first member stays eligible).
  * When null, this row is a fresh singleton -- pool_eligible=true, and its
  * fp_group_key is a fresh UUID generated BEFORE the insert (bug fix: an
@@ -98,6 +100,7 @@ export async function recordShadowScore({
   fpGroup = null, // pool hygiene Task 2
   contentReadAxes = null, // Sweep C -- this row's own {curiosity, inspiration}, for group-mean folding below
   bigPicture = null, // this row's own flattened {judge}_big_{dim}/{judge}_objective_fit_score values
+  trendAxes = null, // this row's own {trend_alignment, trending_topic}, for group-mean folding below
 }) {
   try {
     const spec = loadSpec();
@@ -127,6 +130,9 @@ export async function recordShadowScore({
     const groupMeanBigPicture = fpGroup && bigPicture
       ? foldGroupMean(bigPicture, fpGroup.existingBigPicture, groupK)
       : bigPicture;
+    const groupMeanTrendAxes = fpGroup && trendAxes
+      ? foldGroupMean(trendAxes, fpGroup.existingTrendAxes, groupK)
+      : trendAxes;
     const poolEligible = !fpGroup; // only a group's first row stays eligible
     // Bug fix: generated up front (not derived from this row's own id after
     // insert) so there is no INSERT-then-UPDATE gap for a concurrent match
@@ -139,8 +145,8 @@ export async function recordShadowScore({
          input_features, prediction, calibrated_percentile, tier_at_score_time, extract_cdims_status,
          objective, platform, user_id, source, is_posted_video, posted_video_id,
          pool_eligible, fp_group_key, group_k, group_mean_prediction, group_mean_content_read_axes,
-         group_mean_big_picture)
-       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+         group_mean_big_picture, group_mean_trend_axes)
+       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING id`,
       [
         submissionId ?? null, promptVersion ?? null, pegasusModel ?? null, specHash(),
@@ -150,6 +156,7 @@ export async function recordShadowScore({
         poolEligible, fpGroupKey, groupK, groupMeanPrediction,
         groupMeanContentReadAxes ? JSON.stringify(groupMeanContentReadAxes) : null,
         groupMeanBigPicture ? JSON.stringify(groupMeanBigPicture) : null,
+        groupMeanTrendAxes ? JSON.stringify(groupMeanTrendAxes) : null,
       ]
     );
     const id = rows[0]?.id ?? null;
@@ -166,7 +173,7 @@ export async function recordShadowScore({
     // Returned so a caller (e.g. the score-display module) can build a
     // display without recomputing scoreFeatures a second time, and so it can
     // exclude this row's own id from the niche/overall pools it just joined.
-    return { id, prediction, calibratedPercentile, tierAtScoreTime, groupK, groupMeanPrediction, groupMeanContentReadAxes, groupMeanBigPicture };
+    return { id, prediction, calibratedPercentile, tierAtScoreTime, groupK, groupMeanPrediction, groupMeanContentReadAxes, groupMeanBigPicture, groupMeanTrendAxes };
   } catch (e) {
     // Backpressure guard: never let a shadow-scoring failure surface to the
     // caller or affect the user-facing response in any way.

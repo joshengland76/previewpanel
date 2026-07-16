@@ -400,6 +400,7 @@ export default function PreviewPanel() {
   const [trendAxes, setTrendAxes] = useState(null); // Spider v3 -- Trend Alignment/Trending Topic, the panel-only radar axes that replaced Curiosity/Inspiration
   const [signalFields, setSignalFields] = useState(null); // Spider v3.1 -- backs the full "Detected signals" positive/negative chip row
   const [groupMeanBigPicture, setGroupMeanBigPicture] = useState(null); // group-mean (or own) values for the spider chart's other 6 judge-scored axes
+  const [groupMeanTrendAxes, setGroupMeanTrendAxes] = useState(null); // same group-mean treatment for the radar's remaining 2 axes (Trend Alignment, Trending Topic)
   const [axisDeciles, setAxisDeciles] = useState(null); // radar rolling-decile normalization -- deciles 1-10 (or null) per axis, vs the rolling 1,000-row windows
   const [trimAvailable, setTrimAvailable] = useState(false);
   const [openJudgeIds, setOpenJudgeIds] = useState(() => new Set());
@@ -556,6 +557,7 @@ export default function PreviewPanel() {
         setTrendAxes(data.trendAxes ?? null);
         setSignalFields(data.signalFields ?? null);
         setGroupMeanBigPicture(data.groupMeanBigPicture ?? null);
+        setGroupMeanTrendAxes(data.groupMeanTrendAxes ?? null);
         setAxisDeciles(data.axisDeciles ?? null);
         setLinkDisplayUrl(data.linkDisplayUrl ?? null);
         setLinkSourceUrl(data.sourceUrl ?? null);
@@ -1614,7 +1616,7 @@ export default function PreviewPanel() {
                     </button>
                   </div>
                 )}
-                <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture}
+                <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture} groupMeanTrendAxes={groupMeanTrendAxes}
                   contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles}
                   skipObjectiveFit={!OBJECTIVE_OPTIONS.includes(objective)} />
                 <WhatsWorkingFixes synthesis={synthesis} duration={videoDurationSecs} />
@@ -1628,7 +1630,7 @@ export default function PreviewPanel() {
                 still produced via the new components (no synthesis overview). */}
             {isFinished && synthesisStatus !== "ready" && synthesisStatus !== "pending" && (
               <>
-                <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture}
+                <PerformanceRadar results={judgeResults} trendAxes={trendAxes} groupMeanBigPicture={groupMeanBigPicture} groupMeanTrendAxes={groupMeanTrendAxes}
                   contentReadAxes={contentReadAxes} signalFields={signalFields} axisDeciles={axisDeciles}
                   skipObjectiveFit={!OBJECTIVE_OPTIONS.includes(objective)} />
                 <ToolkitSection results={judgeResults} trim={trimCtx} />

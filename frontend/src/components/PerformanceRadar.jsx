@@ -128,15 +128,20 @@ function decileKeyFor(axis) { return axis.key === "__objfit" ? "objective_fit" :
 
 // Per-judge ghost-line value: this judge's own raw dimension score's decile
 // within the shared grid, or (fallback) the pre-decile raw-value logic.
-// trendAxes is only consulted in the fallback for axis.contentRead entries
-// -- every per-judge polygon reads the SAME value there (these are single
-// scalars per video, not per-judge readings), so `data` (the per-judge
-// payload) is simply irrelevant for those two axes in the fallback too.
-function judgeAxisValue(data, axis, trendAxes, groupMeanBigPicture, judgeId, axisDeciles) {
+// trendAxes/groupMeanTrendAxes are only consulted in the fallback for
+// axis.contentRead entries -- every per-judge polygon reads the SAME value
+// there (these are single scalars per video, not per-judge readings), so
+// `data` (the per-judge payload) is simply irrelevant for those two axes in
+// the fallback too. groupMeanTrendAxes (group-mean once a repeat submission
+// groups, else same as trendAxes) is preferred, mirroring groupMeanBigPicture
+// below -- this branch is rarely hit in practice since axisDeciles is itself
+// now built from the effective (already group-mean-aware) value server-side.
+function judgeAxisValue(data, axis, trendAxes, groupMeanBigPicture, judgeId, axisDeciles, groupMeanTrendAxes) {
   const dbJudgeId = judgeId === "cool" ? "trendsetter" : judgeId;
   const decileEntry = axisDeciles?.[decileKeyFor(axis)];
   if (axis.contentRead) {
     if (decileEntry?.avg != null) return decileEntry.avg;
+    if (groupMeanTrendAxes && groupMeanTrendAxes[axis.key] != null) return num(groupMeanTrendAxes[axis.key]);
     return num(trendAxes?.[axis.key]);
   }
   if (decileEntry?.[dbJudgeId] != null) return decileEntry[dbJudgeId];
@@ -227,7 +232,7 @@ function computeLabelPlacements(vals, activeIndices, pt, ang) {
   });
 }
 
-export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, contentReadAxes, signalFields, axisDeciles, skipObjectiveFit }) {
+export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, groupMeanTrendAxes, contentReadAxes, signalFields, axisDeciles, skipObjectiveFit }) {
   const [focus, setFocus] = useState("avg"); // "avg" shows all four; a judge id isolates that judge
   const [showInfo, setShowInfo] = useState(false);
 
@@ -250,7 +255,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
     ? axes.map((_, i) => i).filter((i) => i !== objFitIndex)
     : axes.map((_, i) => i);
 
-  if (!activeIndices.some((i) => present.some((x) => judgeAxisValue(x.data, axes[i], trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles) != null))) return null;
+  if (!activeIndices.some((i) => present.some((x) => judgeAxisValue(x.data, axes[i], trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles, groupMeanTrendAxes) != null))) return null;
 
   const ang = (i) => (-90 + i * (360 / axes.length)) * Math.PI / 180;
   const pt = (i, v) => {
@@ -270,7 +275,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
   };
   const polyPoints = (vals) => activeIndices.map((i) => pt(i, vals[i] ?? 0).map((n) => n.toFixed(1)).join(",")).join(" ");
 
-  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles)) }));
+  const judgeVals = present.map((x) => ({ judge: x.judge, vals: axes.map((a) => judgeAxisValue(x.data, a, trendAxes, groupMeanBigPicture, x.judge.id, axisDeciles, groupMeanTrendAxes)) }));
   const avgVals = axes.map((a, i) => axisAvgValue(a, axisDeciles, judgeVals, i));
 
   return (

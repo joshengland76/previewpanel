@@ -890,6 +890,12 @@ async function initDb() {
     // row's insert, mirroring group_mean_prediction/content_read_axes exactly
     // rather than re-querying+re-joining submissions at every read.
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_mean_big_picture JSONB`);
+    // Same treatment for the radar's remaining 2 axes (Trend Alignment,
+    // Trending Topic) -- these were left out of the original group-mean
+    // extension; adding them now for full 8-axis parity with the score
+    // card's own percentile (which already ranks the group mean, not the
+    // raw own-run prediction, once group_k>=2).
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS group_mean_trend_axes JSONB`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_fp_group_key ON shadow_scores(fp_group_key)`);
     await client.query("COMMIT");
 
@@ -1834,8 +1840,8 @@ const BIG_PICTURE_COLUMNS = ["critic", "trendsetter", "connector"].flatMap((j) =
 // candidate) so this never touches the ffmpeg semaphore, unlike
 // fingerprintPreviewForJob above. Returns null (no group forming yet) or
 // { fpGroupKey, existingPredictions, existingContentReadAxes,
-// existingBigPicture } for shadowScore.js to fold into this row's group_k/
-// group_mean_* columns. Never throws -- every failure mode (no fingerprint
+// existingBigPicture, existingTrendAxes } for shadowScore.js to fold into
+// this row's group_k/group_mean_* columns. Never throws -- every failure mode (no fingerprint
 // yet, no user_id, matcher spawn failure) degrades to "skip grouping for
 // this submission," never to blocking or delaying scoring.
 async function resolveFingerprintGroup(job) {
@@ -1922,11 +1928,16 @@ async function resolveFingerprintGroup(job) {
     // big-picture columns, already joined in above (no recomputation needed,
     // these are stored verbatim on `submissions`, not derived).
     const existingBigPicture = matched.map((c) => Object.fromEntries(BIG_PICTURE_COLUMNS.map((k) => [k, c[k]])));
+    // Same treatment for the radar's remaining 2 axes (Trend Alignment,
+    // Trending Topic) -- recomputed from each matched row's own
+    // input_features, same as existingContentReadAxes above.
+    const existingTrendAxes = matched.map((c) => computeTrendAxes(c.input_features));
     return {
       fpGroupKey: groupKey,
       existingPredictions: matched.map((c) => c.prediction),
       existingContentReadAxes,
       existingBigPicture,
+      existingTrendAxes,
     };
   } catch (e) {
     console.error(`[fingerprint_group] resolve failed (non-fatal, scoring unaffected): ${e.message}`);
@@ -2678,21 +2689,34 @@ async function fetchShadowAxisRows() {
 // graceful-degradation contract as every other C_dims-derived field here.
 const JUDGE_DIM_KEYS = { compelling: "compelling", novel: "novel", emotionally_resonant: "emotionally_resonant",
   emotion_intensity: "emotion_intensity", funny: "funny" };
+// Panel mean of the 3 judges' own value for one dim/objective-fit, straight
+// from whichever `dimensions` object the caller passed in (this run's own,
+// or the fingerprint-group mean once group_k>=2) -- NOT features.jc_*/
+// objfit_consensus, which are always this run's own aggregate and would go
+// stale the moment a submission joins a group. Falls back to null (never 0)
+// when no judge has a value, matching decileFor()'s own null-degrades-
+// gracefully contract.
+function panelMean(dimensionsObj, keys) {
+  const vals = keys.map((k) => dimensionsObj[k]).filter((v) => typeof v === "number");
+  return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+}
 async function computeAxisDeciles(features, dimensions, trendAxes) {
   const axisPools = await getAxisPools(fetchShadowAxisRows);
   const deciles = {};
   for (const dim of Object.keys(JUDGE_DIM_KEYS)) {
     const pool = axisPools.judge[`jc_${dim}`];
+    const avgVal = panelMean(dimensions, ["critic", "trendsetter", "connector"].map((j) => `${j}_big_${dim}`));
     deciles[dim] = {
-      avg: decileFor(features[`jc_${dim}`], pool),
+      avg: decileFor(avgVal ?? features[`jc_${dim}`], pool),
       critic: decileFor(dimensions[`critic_big_${dim}`], pool),
       trendsetter: decileFor(dimensions[`trendsetter_big_${dim}`], pool),
       connector: decileFor(dimensions[`connector_big_${dim}`], pool),
     };
   }
   const objFitPool = axisPools.judge.objfit_consensus;
+  const objFitAvg = panelMean(dimensions, ["critic_objective_fit_score", "trendsetter_objective_fit_score", "connector_objective_fit_score"]);
   deciles.objective_fit = {
-    avg: decileFor(features.objfit_consensus, objFitPool),
+    avg: decileFor(objFitAvg ?? features.objfit_consensus, objFitPool),
     critic: decileFor(dimensions.critic_objective_fit_score, objFitPool),
     trendsetter: decileFor(dimensions.trendsetter_objective_fit_score, objFitPool),
     connector: decileFor(dimensions.connector_objective_fit_score, objFitPool),
@@ -2855,26 +2879,25 @@ async function runShadowScoringForJob(jobId) {
     // `dimensions` above is already flattened into the exact
     // {judge}_big_{dim}/{judge}_objective_fit_score keys BIG_PICTURE_COLUMNS
     // names, same shape as the `submissions` columns. This run's own value;
-    // job.groupMeanBigPicture is set below once shadowResult's group-mean (if
-    // any) is known, mirroring contentReadAxes above.
+    // job.groupMeanBigPicture/job.groupMeanTrendAxes are set below once
+    // shadowResult's group-mean (if any) is known, mirroring contentReadAxes
+    // above.
     const ownBigPicture = Object.fromEntries(BIG_PICTURE_COLUMNS.map((k) => [k, dimensions[k] ?? null]));
     job.groupMeanBigPicture = ownBigPicture;
-
-    // Radar rolling-decile normalization (radar/links prompt, Part A) --
-    // this run's own panel-average + per-judge deciles against the rolling
-    // 1,000-row windows (axisPools.js). Never blocks/throws on failure --
-    // same non-fatal contract as the rest of this shadow-scoring path.
-    try {
-      job.axisDeciles = await computeAxisDeciles(features, dimensions, ownTrendAxes);
-    } catch (e) {
-      console.error(`[${jobId}] axisDeciles computation failed (non-fatal): ${e.message}`);
-      job.axisDeciles = null;
-    }
+    job.groupMeanTrendAxes = ownTrendAxes;
 
     // Pool hygiene Task 2 -- fingerprint-group score consistency. A no-op
     // (returns null immediately) for validation rescores, research traffic,
     // and any submission without a ready fingerprint/user_id -- see
-    // resolveFingerprintGroup()'s own guards.
+    // resolveFingerprintGroup()'s own guards. Bug fix: this (and the
+    // recordShadowScore call below) used to run AFTER computeAxisDeciles,
+    // so the radar's decile ranking always used this run's own raw value --
+    // group averaging only ever reached the raw-value FALLBACK path inside
+    // judgeAxisValue (frontend), never the decile rank itself, which is the
+    // path actually shown whenever decile computation succeeds (the common
+    // case). Moved both up so the effective (group-mean-once-k>=2) values
+    // below can feed computeAxisDeciles directly, matching how the overall
+    // percentile already ranks the group-mean prediction, not the raw one.
     const fpGroup = await resolveFingerprintGroup(job);
 
     const shadowResult = await recordShadowScore({
@@ -2889,6 +2912,7 @@ async function runShadowScoringForJob(jobId) {
       userId: job.userId ?? null, // Phase C, Task 1
       contentReadAxes: ownContentReadAxes, // Sweep C -- folded into group_mean_content_read_axes below when grouped
       bigPicture: ownBigPicture, // folded into group_mean_big_picture below when grouped
+      trendAxes: ownTrendAxes, // folded into group_mean_trend_axes below when grouped
       // Phase C, Task 3 -- posted-video validation rescores are tagged
       // distinctly so percentilePools/personal-history queries can exclude
       // them (see idx_shadow_scores_is_posted_video's call sites below).
@@ -2912,9 +2936,27 @@ async function runShadowScoringForJob(jobId) {
     // alone (still recorded for backend/research use) -- this just stops
     // consuming it for the user-facing payload. shadowResult.groupMeanContentReadAxes
     // is intentionally unused past this point.
-    // Same swap for the other 6 judge-scored spider-chart axes.
+    // Same swap for the other 6 judge-scored spider-chart axes, and now the
+    // 2 trend axes too -- full 8-axis parity.
     if (shadowResult && shadowResult.groupK >= 2 && shadowResult.groupMeanBigPicture) {
       job.groupMeanBigPicture = shadowResult.groupMeanBigPicture;
+    }
+    if (shadowResult && shadowResult.groupK >= 2 && shadowResult.groupMeanTrendAxes) {
+      job.groupMeanTrendAxes = shadowResult.groupMeanTrendAxes;
+    }
+
+    // Radar rolling-decile normalization (radar/links prompt, Part A) --
+    // ranks the EFFECTIVE (group-mean once group_k>=2, else this run's own)
+    // panel-average + per-judge values against the rolling 1,000-row windows
+    // (axisPools.js), matching how the score card's own percentile already
+    // ranks the group-mean prediction rather than the raw one. Never blocks/
+    // throws on failure -- same non-fatal contract as the rest of this
+    // shadow-scoring path.
+    try {
+      job.axisDeciles = await computeAxisDeciles(features, job.groupMeanBigPicture, job.groupMeanTrendAxes);
+    } catch (e) {
+      console.error(`[${jobId}] axisDeciles computation failed (non-fatal): ${e.message}`);
+      job.axisDeciles = null;
     }
 
     // Phase C, Task 3 -- posted_videos gets the scoring result written back
@@ -4691,13 +4733,20 @@ app.get("/api/status/:jobId", async (req, res) => {
   }
 
   // Same durable-recovery shape for the spider chart's other 6 judge-scored
-  // axes -- computed from the `submissions` columns already durably stored
-  // for every past submission (BIG_PICTURE_COLUMNS), so a job whose
-  // in-memory groupMeanBigPicture never got set recovers identically.
-  if ((job.groupMeanBigPicture == null || job.axisDeciles == null) && jobDoneForRecovery && job.submissionId != null && pgPool) {
+  // axes plus the 2 trend axes -- computed from the `submissions` columns
+  // already durably stored for every past submission (BIG_PICTURE_COLUMNS),
+  // so a job whose in-memory groupMeanBigPicture/groupMeanTrendAxes never
+  // got set recovers identically. Bug fix, same as the live path above: this
+  // used to recompute axisDeciles from the row's raw own values (`row`,
+  // `trendAxes` freshly computed from input_features) regardless of
+  // group_k -- decile ranking never reflected group averaging even when
+  // group_mean_big_picture/group_mean_trend_axes were sitting right there in
+  // the same row. Now builds the effective values first and feeds those in.
+  if ((job.groupMeanBigPicture == null || job.groupMeanTrendAxes == null || job.axisDeciles == null)
+    && jobDoneForRecovery && job.submissionId != null && pgPool) {
     try {
       const { rows } = await pgPool.query(
-        `SELECT group_k, group_mean_big_picture, ss.input_features, ${BIG_PICTURE_COLUMNS.map((c) => `s.${c}`).join(", ")}
+        `SELECT group_k, group_mean_big_picture, group_mean_trend_axes, ss.input_features, ${BIG_PICTURE_COLUMNS.map((c) => `s.${c}`).join(", ")}
          FROM shadow_scores ss JOIN submissions s ON s.id = ss.submission_id
          WHERE ss.submission_id = $1 LIMIT 1`,
         [job.submissionId]
@@ -4709,20 +4758,25 @@ app.get("/api/status/:jobId", async (req, res) => {
             ? row.group_mean_big_picture
             : Object.fromEntries(BIG_PICTURE_COLUMNS.map((k) => [k, row[k] ?? null]));
         }
-        // Radar rolling-decile normalization -- restored-history recompute.
-        // row.input_features is the same buildScoringFeatures() output the
-        // live path uses; a row from before jc_*/objfit_consensus were
-        // computed (or before EXTRACT_CDIMS was on, for the trend fields)
-        // simply lacks those keys, and decileFor() already degrades to null
-        // for a missing raw value -- the frontend falls back to the raw
-        // 0-10 value in that case, same as every other C_dims-derived field.
+        if (job.groupMeanTrendAxes == null) {
+          const ownTrendAxes = row.input_features ? computeTrendAxes(row.input_features) : null;
+          job.groupMeanTrendAxes = (row.group_k >= 2 && row.group_mean_trend_axes) ? row.group_mean_trend_axes : ownTrendAxes;
+        }
+        // Radar rolling-decile normalization -- restored-history recompute,
+        // ranking the same effective (group-mean once group_k>=2) values
+        // just resolved above. row.input_features is the same
+        // buildScoringFeatures() output the live path uses; a row from
+        // before jc_*/objfit_consensus were computed (or before
+        // EXTRACT_CDIMS was on, for the trend fields) simply lacks those
+        // keys, and decileFor() already degrades to null for a missing raw
+        // value -- the frontend falls back to the raw 0-10 value in that
+        // case, same as every other C_dims-derived field.
         if (job.axisDeciles == null && row.input_features) {
-          const trendAxes = computeTrendAxes(row.input_features);
-          job.axisDeciles = await computeAxisDeciles(row.input_features, row, trendAxes);
+          job.axisDeciles = await computeAxisDeciles(row.input_features, job.groupMeanBigPicture, job.groupMeanTrendAxes);
         }
       }
     } catch (e) {
-      console.error(`[${req.params.jobId}] groupMeanBigPicture/axisDeciles DB fallback failed (non-fatal): ${e.message}`);
+      console.error(`[${req.params.jobId}] groupMeanBigPicture/groupMeanTrendAxes/axisDeciles DB fallback failed (non-fatal): ${e.message}`);
     }
   }
 
@@ -4777,6 +4831,10 @@ app.get("/api/status/:jobId", async (req, res) => {
     // Group-mean (or own, if ungrouped) values for the spider chart's other 6
     // judge-scored axes -- {judge}_big_{dim}/{judge}_objective_fit_score keyed.
     groupMeanBigPicture: job.groupMeanBigPicture ?? null,
+    // Same treatment for the radar's remaining 2 axes (Trend Alignment,
+    // Trending Topic) -- {trend_alignment, trending_topic} keyed, full
+    // 8-axis parity with groupMeanBigPicture above.
+    groupMeanTrendAxes: job.groupMeanTrendAxes ?? null,
     // Radar rolling-decile normalization (radar/links prompt, Part A) --
     // { [axisKey]: { avg, critic?, trendsetter?, connector? } }, deciles
     // 1-10 or null (falls back to the raw 0-10 value) per the pool/grid this
