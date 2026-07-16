@@ -119,6 +119,8 @@ path (Vercel + Render), not this local sandbox.
   backend — only the surfaces actually touched need reporting). "Verified
   locally" and "live in production" are never conflated — a readout says
   which one it means.
+- **Render build-failure emails get a same-day glance** — confirm a
+  subsequent successful deploy or escalate; never let one age unexamined.
 
 ## Anchor rescore + drift calendar
 
