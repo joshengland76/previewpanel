@@ -142,9 +142,11 @@ rows appeared for both §1 test runs.
 
 ## Git / deploy state
 
-- Commit: `03f267c` (objective guard) is on `origin/main`; this readout +
-  `TESTER_OPS_RUNBOOK.md` additions are committed on top as noted below.
-- Pushed: Y (both commits, `origin/main`).
-- Deployed — Vercel (frontend): Y, verified live via served-bundle content
-  check in §0.
+- Commit: `1b6113f` (this readout + ops-doc additions), on top of `03f267c`
+  (objective guard). Both on `origin/main`.
+- Pushed: Y — both commits pushed to `origin/main`.
+- Deployed — Vercel (frontend): Y for `03f267c` (verified live via
+  served-bundle content check in §0 before `1b6113f` existed); `1b6113f` is
+  docs-only (this file + `TESTER_OPS_RUNBOOK.md`), no frontend code changed,
+  nothing new to verify live for it.
 - Deployed — Render (backend): N/A, no backend files changed this session.
