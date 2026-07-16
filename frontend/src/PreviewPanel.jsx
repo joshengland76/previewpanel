@@ -10,6 +10,7 @@ import { PerformanceRadar } from "./components/PerformanceRadar.jsx";
 import { ToolkitSection } from "./components/ToolkitSection.jsx";
 import { JudgeDeepDives } from "./components/JudgeDeepDives.jsx";
 import { AccountSettingsTrigger } from "./components/AccountSettings.jsx";
+import { ObjectiveGuardModal } from "./components/ObjectiveGuardModal.jsx";
 
 const PLATFORM_LOGOS = { youtube: YouTubeLogo, tiktok: TikTokLogo, instagram: InstagramLogo };
 function PlatformIcon({ id, size }) {
@@ -388,6 +389,9 @@ export default function PreviewPanel() {
   const [objDropOpen, setObjDropOpen] = useState(false);
   const [objFilter, setObjFilter] = useState("");
   const [objDropAbove, setObjDropAbove] = useState(false);
+  // Objective guard -- second-chance selector shown when Convene/link-fetch
+  // is tapped with no objective set (see handleSubmit).
+  const [showObjectiveGuard, setShowObjectiveGuard] = useState(false);
   const [selectedJudges, setSelectedJudges] = useState(["critic","cool","connector"]);
   const [step, setStep] = useState(1);
   const [jobId, setJobId] = useState(null);
@@ -684,25 +688,45 @@ export default function PreviewPanel() {
     return () => clearInterval(pollRef.current);
   }, [jobId]);
 
-  const handleSubmit = async () => {
+  // The actual submission action, split out from handleSubmit's validation so
+  // the objective guard modal can invoke it directly once a category is
+  // chosen (or explicitly skipped) -- passing objectiveOverride rather than
+  // relying on the `objective` state landing before this runs, since a modal
+  // button click that both sets state and submits in the same tick would
+  // otherwise read the stale (pre-update) value.
+  const proceedSubmit = (objectiveOverride) => {
     // Readout polish round 2 -- one shared CTA for both submission modes now
     // (the link box's own "Go" button was removed). Link mode has no upload
     // byte-progress to show, so it skips the notification-primer detour
     // file uploads use and goes straight to handleLinkFetch, same as before.
     if (showLinkInput && !videoFile) {
-      if (!videoLinkUrl.trim() || selectedJudges.length === 0) return;
-      handleLinkFetch();
+      handleLinkFetch(objectiveOverride);
       return;
     }
-
-    if (!videoFile || selectedJudges.length === 0) return;
 
     // Issue #4: Show notification primer before starting
     if (typeof Notification !== "undefined" && Notification.permission === "default") {
       setShowNotifPrimer(true);
       return;
     }
-    startAnalysis();
+    startAnalysis(objectiveOverride);
+  };
+
+  const handleSubmit = () => {
+    if (showLinkInput && !videoFile) {
+      if (!videoLinkUrl.trim() || selectedJudges.length === 0) return;
+    } else {
+      if (!videoFile || selectedJudges.length === 0) return;
+    }
+
+    // Objective guard -- moment-of-action check, fires every time the
+    // objective field is empty (custom-typed values are non-empty and skip
+    // this). Canonical objective already set → unchanged flow, no modal.
+    if (!objective.trim()) {
+      setShowObjectiveGuard(true);
+      return;
+    }
+    proceedSubmit();
   };
 
   // Runs immediately after the user picks a file — never blocks the file picker opening.
@@ -778,12 +802,16 @@ export default function PreviewPanel() {
   };
 
   // Validation already completed in handleFileSelect — just check stored state, then go.
-  const startAnalysis = () => {
+  const startAnalysis = (objectiveOverride) => {
     if (uploadZoneError) return;
-    doStartAnalysis();
+    doStartAnalysis(objectiveOverride);
   };
 
-  const doStartAnalysis = () => {
+  const doStartAnalysis = (objectiveOverride) => {
+    // typeof guard, not just ??  -- a caller bound directly to onClick (e.g.
+    // NotificationPrimer's onSkip) would otherwise leak the DOM event object
+    // in as objectiveOverride and get FormData-stringified to "[object Object]".
+    const activeObjective = typeof objectiveOverride === "string" ? objectiveOverride : objective;
     setShowNotifPrimer(false);
     savedRef.current = false;
     setStep(2);
@@ -804,7 +832,7 @@ export default function PreviewPanel() {
 
     const formData = new FormData();
     formData.append("platform", platform);
-    formData.append("objective", objective);
+    formData.append("objective", activeObjective);
     formData.append("judges", JSON.stringify(selectedJudges));
     if (userId) formData.append("userId", userId); // Phase C, Task 1
     if (plannedCaption.trim()) formData.append("caption", plannedCaption.trim()); // Chips v2, Task 3c
@@ -885,9 +913,10 @@ export default function PreviewPanel() {
   // path already falls back to when no progress event fires in time. Once
   // /api/fetch-video returns a jobId, this is 100% the same downstream flow
   // as a file upload (same useEffect([jobId]) polling loop, same rendering).
-  const handleLinkFetch = async () => {
+  const handleLinkFetch = async (objectiveOverride) => {
     const url = videoLinkUrl.trim();
     if (!url) return;
+    const activeObjective = typeof objectiveOverride === "string" ? objectiveOverride : objective;
     setLinkFetchError(null);
     setShowNotifPrimer(false);
     savedRef.current = false;
@@ -910,7 +939,7 @@ export default function PreviewPanel() {
       const res = await fetch(`${API_BASE}/api/fetch-video`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, objective, judges: JSON.stringify(selectedJudges), userId: userId || null }),
+        body: JSON.stringify({ url, objective: activeObjective, judges: JSON.stringify(selectedJudges), userId: userId || null }),
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || "Couldn't fetch that link — download the file and upload it instead.");
@@ -1047,10 +1076,26 @@ export default function PreviewPanel() {
       {showNotifPrimer && (
         <NotificationPrimer
           onAllow={handleAllowNotifications}
-          onSkip={startAnalysis}
+          onSkip={() => startAnalysis()}
           timeEstimate={timeEstimate}
         />
       )}
+
+      {/* Objective guard -- second-chance category selector, see handleSubmit */}
+      <ObjectiveGuardModal
+        open={showObjectiveGuard}
+        options={OBJECTIVE_OPTIONS}
+        onScore={(picked) => {
+          setObjective(picked);
+          setShowObjectiveGuard(false);
+          proceedSubmit(picked);
+        }}
+        onContinueWithoutScore={() => {
+          setShowObjectiveGuard(false);
+          proceedSubmit();
+        }}
+        onClose={() => setShowObjectiveGuard(false)}
+      />
 
       <main className="pp-main" style={{ maxWidth: "740px", margin: "0 auto", padding: "32px 20px 60px" }}>
 
@@ -1263,7 +1308,7 @@ export default function PreviewPanel() {
             {/* 3 — Objective */}
             <div className="pp-section-gap" style={{ marginBottom: "8px", position: "relative" }} ref={objDropRef}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>
-                Objective <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(optional)</span>
+                Objective <span style={{ fontWeight: "400", textTransform: "none", color: "#ccc" }}>(needed for your score)</span>
               </div>
               {/* Trigger row */}
               <div
@@ -1282,7 +1327,7 @@ export default function PreviewPanel() {
                 }}
               >
                 <span style={{ flex: 1, fontSize: "14px", fontFamily: "Montserrat, sans-serif", color: objective ? B.body : "#bbb", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {objective || "Select a content category (optional)"}
+                  {objective || "Select a content category"}
                 </span>
                 {objective ? (
                   <span
