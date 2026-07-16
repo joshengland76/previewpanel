@@ -165,17 +165,30 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
   );
 }
 
-// ── Sticky condensed verdict bar — revealed once the hero scrolls out of view ──
+// ── Sticky condensed verdict bar — revealed once the hero scrolls out of view.
+// position: fixed (not sticky/maxHeight) and slid via transform/opacity only --
+// deliberate. This bar and the hero it condenses are siblings (see VerdictPanel
+// below), and the hero's own IntersectionObserver is what drives `visible`. An
+// earlier version toggled this bar's reserved layout height (position: sticky
+// + maxHeight 0->60px), which shifted the hero's position on screen every time
+// the bar showed/hid -- right at the scroll depth where the hero's bottom edge
+// sits near the observer's threshold, that shift was enough to flip
+// isIntersecting back, causing show/hide/show/hide to oscillate (visible as a
+// rapid scroll "wobble" with this bar flickering in and out). Fixed positioning
+// removes the bar from document flow entirely, so it can never move the hero
+// or re-trigger the observer, at the cost of needing to replicate the page's
+// own maxWidth/padding here since it's no longer inside that flow. ──
 function StickyVerdictBar({ synthesis, results, visible, onJumpToJudge }) {
   const verdict = synthesis.verdict || {};
   const act = actionFor(verdict);
   return (
-    <div style={{ position: "sticky", top: 0, zIndex: 40, background: B.bg,
-      maxHeight: visible ? 60 : 0, opacity: visible ? 1 : 0,
-      overflow: "hidden", pointerEvents: visible ? "auto" : "none",
-      transition: "max-height .3s ease, opacity .25s ease",
-      borderBottom: visible ? `1px solid ${B.border}` : "1px solid transparent" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "10px 4px" }}>
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 40, background: B.bg,
+      opacity: visible ? 1 : 0, transform: visible ? "translateY(0)" : "translateY(-100%)",
+      pointerEvents: visible ? "auto" : "none",
+      transition: "transform .3s ease, opacity .25s ease",
+      borderBottom: `1px solid ${B.border}` }}>
+      <div style={{ maxWidth: 740, margin: "0 auto", padding: "10px 20px",
+        display: "flex", alignItems: "center", gap: 9 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: act.color, flex: "none" }} />
         <span style={{ fontSize: 12.5, fontWeight: 700, color: B.body, whiteSpace: "nowrap" }}>
           <b style={{ fontFamily: "Montserrat, sans-serif", fontSize: 14, fontWeight: 800 }}>{verdict.headline_score}</b>
