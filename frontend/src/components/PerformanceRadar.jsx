@@ -184,8 +184,11 @@ function axisAvgValue(axis, axisDeciles, judgeVals, axisIndex) {
 // Nudged 15->17 / 14->16 (Readout polish round 2) -- a value of exactly 10.0
 // puts the vertex right on the rim, and the old offsets left its dot (r=4.5)
 // just barely clipping the label at that radius. Small bump, not a redesign.
-const LABEL_INSIDE_OFFSET = 17;
-const LABEL_OUTSIDE_OFFSET = 16;
+// Pulled back in to 14/13 afterward to sit closer to the vertex dots again,
+// now that the larger 11.5px label text gives collision detection more
+// margin to work with.
+const LABEL_INSIDE_OFFSET = 14;
+const LABEL_OUTSIDE_OFFSET = 13;
 const MIN_LABEL_SPACING = 20; // px between label centers below which they read as overlapping
 
 function computeLabelPlacements(vals, activeIndices, pt, ang) {
@@ -342,7 +345,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, grou
             const placements = computeLabelPlacements(vals, activeIndices, pt, ang);
             return placements.map(({ i, val, x, y }) => (
               <text key={"n" + i} x={x.toFixed(1)} y={(y + 3.5).toFixed(1)} fontFamily="Montserrat, sans-serif"
-                fontSize="10.5" fontWeight="800" fill={col} stroke="#fff" strokeWidth="3" paintOrder="stroke" textAnchor="middle">
+                fontSize="11.5" fontWeight="800" fill={col} stroke="#fff" strokeWidth="3" paintOrder="stroke" textAnchor="middle">
                 {Math.round(val)}
               </text>
             ));

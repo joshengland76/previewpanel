@@ -1591,7 +1591,7 @@ export default function PreviewPanel() {
 
             {/* Platform + file tags (only when finished) */}
             {isFinished && (
-              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "9px", marginBottom: "9px", flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "5px", padding: "5px 13px", background: plat.color+"10", border: `1.5px solid ${plat.color}35`, borderRadius: "99px", fontSize: "12px", fontWeight: "700", lineHeight: "1.2", color: plat.color, flexShrink: 0 }}>
                   <PlatformIcon id={plat.id} size={15} />
                   {plat.label}
