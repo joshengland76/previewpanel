@@ -298,7 +298,7 @@ function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploa
   return (
     <div style={{
       background: B.lightBrown, border: `1.5px solid ${B.brown}30`, borderRadius: "14px",
-      padding: "20px 24px", marginBottom: "18px",
+      padding: "20px 24px", marginTop: "18px", marginBottom: "18px",
     }}>
       {/* Progress bar */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>

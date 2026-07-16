@@ -301,7 +301,7 @@ export function PerformanceRadar({ results, trendAxes, groupMeanBigPicture, cont
                 {muted && <title>Select a content category to have the panel score objective fit.</title>}
                 <line x1={CX} y1={CY} x2={sp[0]} y2={sp[1]} stroke={B.border} strokeWidth="1" />
                 <text x={lp[0].toFixed(1)} y={(lp[1] + dy).toFixed(1)} fontFamily="Montserrat, sans-serif"
-                  fontSize="8.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>
+                  fontSize="9.5" fontWeight="700" fill="#8a8178" textAnchor={anchor}>
                   {a.label}
                 </text>
               </g>

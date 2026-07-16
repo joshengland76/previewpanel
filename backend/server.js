@@ -3942,13 +3942,20 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     // immediately with zero added delay. The delete itself is deferred into
     // this same async chain (rather than run synchronously on the next
     // lines) purely so fingerprinting always gets to finish reading the
-    // file first -- REAL END-USER PREVIEW submissions only (job.source is
-    // undefined for those; research_api has its own separate collection
-    // pipeline, and Task 3's validation ingestion is already-posted content
-    // being rescored, not a preview -- fingerprinting it would be pointless
-    // and would pollute preview_fingerprints, which Task 4's matcher assumes
-    // contains only real previews).
-    const isRealPreviewSubmission = !jobs[jobId].source;
+    // file first -- REAL END-USER PREVIEW submissions only: research_api has
+    // its own separate collection pipeline, and Task 3's validation ingestion
+    // is already-posted content being rescored, not a preview -- fingerprinting
+    // either would be pointless and would pollute preview_fingerprints, which
+    // Task 4's matcher assumes contains only real previews. Bug fix: this
+    // used to test `!jobs[jobId].source` (true only for plain file uploads,
+    // where source is left undefined), which silently caught link-fetch
+    // submissions too, since those set source="link_fetch" (a truthy string)
+    // -- link-fetch is just as much a real preview as a file upload (same
+    // isApp test two lines up already treats it that way), so it was never
+    // meant to be excluded here. That's why repeat link-fetch runs of the
+    // same URL never grouped/averaged: no fingerprint row was ever written
+    // for any of them to match against.
+    const isRealPreviewSubmission = jobs[jobId].source !== "research_api" && jobs[jobId].source !== "validation";
     const fingerprintTarget = isRealPreviewSubmission && activeConvertedPath !== retainPath ? activeConvertedPath : null;
     // Bug fix: this IIFE was previously fire-and-forget with no handle kept
     // anywhere, so jobs[jobId].fingerprintId's assignment (below) raced
