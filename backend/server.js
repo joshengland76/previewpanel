@@ -3386,10 +3386,21 @@ app.post("/api/fetch-video", async (req, res) => {
   // is a network-bound yt-dlp process, not ffmpeg itself, but the slot still
   // caps how many heavy video-fetch/convert operations run at once on this
   // one instance.
+  //
+  // Bug fix -- silent-audio TikTok links: `mp4/best` picks the highest-
+  // bitrate mp4-tagged format, which for some videos is a bytevc1/H.265
+  // rendition. Confirmed live (2026-07) that TikTok's CDN can serve that
+  // rendition with NO audio track at all even though yt-dlp's own format
+  // listing claims acodec=aac for it (metadata doesn't match the actual
+  // muxed bytes) -- so judging and trim/export both went silent on exactly
+  // that video, while every H.264 rendition of the SAME video had real,
+  // working audio. Preferring an h264-coded format first sidesteps the
+  // bad rendition; `mp4/best` stays as the fallback for any video that
+  // only has h265/other formats available.
   await acquireFfmpegSlot();
   let download;
   try {
-    download = await runYtDlp(["--no-warnings", "-f", "mp4/best", "-o", destPath, parsed.href], LINK_DOWNLOAD_TIMEOUT_MS);
+    download = await runYtDlp(["--no-warnings", "-f", "best[vcodec=h264]/mp4/best", "-o", destPath, parsed.href], LINK_DOWNLOAD_TIMEOUT_MS);
   } finally {
     releaseFfmpegSlot();
   }
