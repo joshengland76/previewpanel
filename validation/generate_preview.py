@@ -256,21 +256,39 @@ def midrank_percentile(value, pool):
     return round(((below + 0.5 * equal) / n) * 100)
 
 
-def pill_text(percentile, mode, objective):
-    if percentile is None:
-        return None
-    # Polish v3, Task 6: never DISPLAY 0th or 100th. Both are
-    # mathematically real outputs of midrank_percentile (the pool's
-    # actual lowest/highest value rounds to exactly 0 or 100), but "0th
-    # percentile" / "100th percentile" reads as a false-absolute claim
-    # ("literally the single worst/best video ever") this document never
-    # intends to make -- ordinal framing only, everywhere else in this
-    # generator. Clamps the DISPLAY string only; the stored v["percentile"]
-    # stays the true computed value for anything that isn't user-facing text.
+def _clamped_ordinal(percentile):
+    """Polish v3, Task 6: never DISPLAY 0th or 100th. Both are
+    mathematically real outputs of midrank_percentile (the pool's actual
+    lowest/highest value rounds to exactly 0 or 100), but "0th percentile"
+    / "100th percentile" reads as a false-absolute claim ("literally the
+    single worst/best video ever") this document never intends to make --
+    ordinal framing only, everywhere else in this generator. Clamps the
+    DISPLAY string only; the stored v["percentile"] stays the true
+    computed value for anything that isn't user-facing text. Returns
+    e.g. "99th" -- callers append " percentile" (+ scope, where wanted)."""
     n = max(1, min(99, int(round(percentile))))
     suffix = "th" if 11 <= (n % 100) <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def pill_text(percentile, mode, objective):
+    """Full form, 'Nth percentile · <scope>' -- Polish v4, Task 1: used
+    ONLY for the single, context-free bet-card instance now. Table rows
+    use pill_text_short instead, since the comparison basis (niche name
+    or "last 1,000") now lives once in the OUR SCORE column header's own
+    subline rather than being repeated on every one of up to 13 rows."""
+    if percentile is None:
+        return None
     scope = objective if mode == "objective" else "all videos"
-    return f"{n}{suffix} percentile · {scope}"
+    return f"{_clamped_ordinal(percentile)} percentile · {scope}"
+
+
+def pill_text_short(percentile):
+    """'Nth percentile', no scope suffix -- Polish v4, Task 1: every
+    row pill in both Section-A and Section-B tables."""
+    if percentile is None:
+        return None
+    return f"{_clamped_ordinal(percentile)} percentile"
 
 
 def report_concentration_watch_stat_for_render(pools, objective, mode):
@@ -345,14 +363,16 @@ def mark_top_bottom_pills(section_a):
     return section_a
 
 
-def score_section_a(videos, pool, mode, objective):
+def score_section_a(videos, pool):
     """videos: dicts with prediction (raw ŷ) and wec_rate (real 30-day
     result) already populated. Adds percentile/pill/result_x, plus
     pill_kind/pill_group/pill_tick via mark_top_bottom_pills. Median is
-    over THIS shown set, not the creator's full history."""
+    over THIS shown set, not the creator's full history. Pill is the
+    SHORT form (Polish v4, Task 1) -- mode/objective no longer needed
+    here, the scope now lives once in the column header subline."""
     for v in videos:
         v["percentile"] = midrank_percentile(v["prediction"], pool)
-        v["pill"] = pill_text(v["percentile"], mode, objective)
+        v["pill"] = pill_text_short(v["percentile"])
 
     wec_values = [v["wec_rate"] for v in videos if v.get("wec_rate") is not None]
     median_wec = statistics.median(wec_values) if wec_values else None
@@ -403,6 +423,30 @@ def send_check_verdict(hero):
     else:
         verdict = "WEAK"
     return verdict, f"top={hero['top']:.2f}x bottom={hero['bottom']:.2f}x gap={gap:+.2f}x"
+
+
+def bet_card_fields(section_b, mode, objective):
+    """Polish v4, Task 2: the bet card is Section-B ONLY now -- the old
+    Section-A fallback (picking the best-scored video across BOTH
+    sections) is removed. This is deliberately a different question from
+    the hero sentence's own best-bet-fallback branch (still section_a +
+    section_b, unchanged): the bet card specifically answers "what's
+    still unproven," not "what scored best overall" -- a Section-A video
+    already has a real result, so it was never really a "bet" by the time
+    this document renders. Returns {'empty': True} when Section B has no
+    videos at all, else {'empty': False, 'caption', 'date', 'pill'
+    (FULL suffix -- a single, context-free instance, Task 1's row-pill
+    dedup doesn't apply here), 'checkin'}."""
+    if not section_b:
+        return {"empty": True}
+    video = max(section_b, key=lambda v: v["prediction"])
+    return {
+        "empty": False,
+        "caption": truncate_caption(video["caption"]),
+        "date": fmt_date(video["posted_at"]),
+        "pill": pill_text(video["percentile"], mode, objective) or "—",
+        "checkin": (video["posted_at"] + timedelta(days=30)).strftime("%b %-d"),
+    }
 
 
 def insight_line(all_scored_videos):
@@ -648,11 +692,11 @@ def prospect_section_b(conn, handle):
 # ── HTML rendering (edits Josh's template string in place -- structure/CSS
 #    untouched, only data + the mode-marked strings change) ─────────────────
 ROW_A_RE = re.compile(
-    r'<tr><td class="date">.*?</td><td class="video">.*?</td><td>.*?</td>'
+    r'<tr><td class="date">.*?</td><td class="video">.*?</td><td class="score">.*?</td>'
     r'<td class="result[^"]*">.*?</td><td class="match">.*?</td></tr>'
 )
 ROW_B_RE = re.compile(
-    r'<tr><td class="date">.*?</td><td class="video">.*?</td><td>.*?</td>'
+    r'<tr><td class="date">.*?</td><td class="video">.*?</td><td class="score">.*?</td>'
     r'<td class="checkin">.*?</td></tr>'
 )
 
@@ -681,10 +725,13 @@ def row_a_html(v):
     # Inline TOP/BOTTOM pill next to the percentile pill -- only on rows
     # mark_top_bottom_pills actually placed in one of the two groups.
     badge = f'<span class="pill-{v["pill_kind"]}">{v["pill_group"]}</span>' if v.get("pill_kind") else ""
-    # ✓/✗ ONLY on pill rows now (middle rows render nothing here) -- a
-    # miss renders as a real ✗ (var(--low)), not a near-invisible dash.
+    # ✓/✗ ONLY on pill rows -- a miss renders as a real ✗ (var(--low)), not
+    # a near-invisible dash. Middle (non-pill) rows get an explicit small
+    # muted "no call" (Polish v4, Task 4) instead of a blank cell -- their
+    # ranking wasn't confident enough to be one of the panel's actual
+    # calls, and that's worth saying rather than leaving unexplained.
     if v.get("pill_tick") is None:
-        mark_html = ""
+        mark_html = '<span class="no-call">no call</span>'
     elif v["pill_tick"]:
         mark_html = '<span class="tick">✓</span>'
     else:
@@ -692,7 +739,7 @@ def row_a_html(v):
     cap = truncate_caption(v["caption"])
     return (f'<tr><td class="date">{fmt_date(v["posted_at"])}</td>'
             f'<td class="video"><span class="cap">"{cap}"</span></td>'
-            f'<td><span class="pill">{pill}</span>{badge}</td>'
+            f'<td class="score"><span class="pill">{pill}</span>{badge}</td>'
             f'<td class="result {result_class}">{result_text}</td>'
             f'<td class="match">{mark_html}</td></tr>')
 
@@ -715,7 +762,7 @@ def row_b_html(v, checkin_date):
     cap = truncate_caption(v["caption"])
     return (f'<tr><td class="date">{fmt_date(v["posted_at"])}</td>'
             f'<td class="video"><span class="cap">"{cap}"</span></td>'
-            f'<td><span class="pill">{pill}</span></td>'
+            f'<td class="score"><span class="pill">{pill}</span></td>'
             f'<td class="checkin">{checkin_date}</td></tr>')
 
 
@@ -781,17 +828,29 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     )
     html = re.sub(r'<div class="sub">.*?</div>', f'<div class="sub">{hero_sub}</div>', html, count=1, flags=re.S)
 
-    if strongest:
-        checkin = (strongest["posted_at"] + timedelta(days=30)).strftime("%b %-d") if strongest in section_b else None
-        bet_note = (f'Logged before results exist — day-30 check-in {checkin}.' if checkin
-                    else 'Result already on record — see the table below.')
-        html = re.sub(
-            r'<div class="video">.*?</div>\s*<span class="pill">.*?</span>\s*<div class="note">.*?</div>',
-            f'<div class="video">"{truncate_caption(strongest["caption"])}" · {fmt_date(strongest["posted_at"])}</div>\n      '
-            f'<span class="pill">{strongest.get("pill") or "—"}</span>\n      '
-            f'<div class="note">{bet_note}</div>',
-            html, count=1, flags=re.S,
+    # Polish v4, Task 1: the OUR SCORE column subline is where the
+    # niche/overall comparison basis now lives (row pills dropped it --
+    # see pill_text_short) -- both tables show the identical subline, one
+    # global replace catches both header cells.
+    score_col_sub = (f'percentile among recent {objective} videos' if mode == "objective"
+                      else "percentile among the last 1,000 videos we've scored")
+    html = html.replace('percentile among recent Makeup videos', score_col_sub)
+
+    bet = bet_card_fields(section_b, mode, objective)
+    if bet["empty"]:
+        bet_replacement = ('<div class="video">Nothing posted in the last 30 days — your next video is '
+                            'your strongest bet. Run it first.</div>')
+    else:
+        bet_replacement = (
+            f'<div class="video">"{bet["caption"]}" · {bet["date"]}</div>\n      '
+            f'<span class="pill">{bet["pill"]}</span>\n      '
+            f'<div class="note">Logged before results exist — day-30 check-in {bet["checkin"]}.</div>'
         )
+    html = re.sub(
+        r'<div class="video">.*?</div>\s*<span class="pill">.*?</span>\s*<div class="note">.*?</div>',
+        bet_replacement,
+        html, count=1, flags=re.S,
+    )
 
     rows_a_html = build_section_a_rows_html(section_a)
     html = ROW_A_RE.sub("@@ROW_A@@", html)
@@ -899,7 +958,7 @@ def main():
 
     for v in section_b:
         v["percentile"] = midrank_percentile(v["prediction"], pool)
-        v["pill"] = pill_text(v["percentile"], mode, objective)
+        v["pill"] = pill_text_short(v["percentile"])
 
     prepared_date = datetime.now(timezone.utc).strftime("%B %-d, %Y")
     niche_line = objective if mode == "objective" else args.descriptor
@@ -918,7 +977,7 @@ def main():
     # Task 3), not the row count's. If 8A+5B genuinely doesn't fit one
     # page, the document grows to page 2 -- never drop rows below spec or
     # shrink type to force a fit.
-    section_a = score_section_a(list(section_a_full), pool, mode, objective)
+    section_a = score_section_a(list(section_a_full), pool)
     if len(section_a) < SECTION_A_MAX_ROWS:
         print(f"[generate_preview] NOTE: only {len(section_a)}/{SECTION_A_MAX_ROWS} Section-A videos exist "
               f"within this mode's lookback window -- rendering what exists, not padding or erroring.")

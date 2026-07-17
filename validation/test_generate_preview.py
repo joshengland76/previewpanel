@@ -14,7 +14,9 @@ Usage: ./_venv/bin/python3 test_generate_preview.py
 """
 import sys
 
-from generate_preview import hero_contrast, mark_top_bottom_pills
+from datetime import datetime, timezone
+
+from generate_preview import hero_contrast, mark_top_bottom_pills, bet_card_fields
 
 
 def make_rows(n):
@@ -116,9 +118,48 @@ def test_pills():
     return failures
 
 
+def test_bet_card():
+    """Polish v4, Task 2: bet_card_fields is Section-B ONLY -- both
+    branches (empty and non-empty), plus confirming it picks the
+    HIGHEST-scored Section-B video (not just the first/most-recent one)
+    and that the pill keeps its FULL suffix (unlike the row pills)."""
+    failures = []
+
+    # Empty Section B -> {'empty': True}, no other keys relied upon.
+    result = bet_card_fields([], "objective", "Aesthetic/Vibes")
+    if result != {"empty": True}:
+        failures.append(f"empty section_b: expected {{'empty': True}}, got {result}")
+
+    # Non-empty -> picks the HIGHEST-scored row, not the first in the list.
+    section_b = [
+        {"prediction": 0.1, "percentile": 60, "caption": "low one",
+         "posted_at": datetime(2026, 7, 1, tzinfo=timezone.utc)},
+        {"prediction": 0.5, "percentile": 91, "caption": "high one",
+         "posted_at": datetime(2026, 7, 3, tzinfo=timezone.utc)},
+    ]
+    result = bet_card_fields(section_b, "objective", "Aesthetic/Vibes")
+    if result["empty"] is not False:
+        failures.append(f"non-empty section_b: expected empty=False, got {result}")
+    if result.get("caption") != "high one":
+        failures.append(f"non-empty section_b: expected the higher-scored video ('high one'), got {result}")
+    if result.get("pill") != "91st percentile · Aesthetic/Vibes":
+        failures.append(f"bet card pill should keep its FULL suffix (single context-free "
+                         f"instance, unlike row pills), got {result.get('pill')!r}")
+    if result.get("checkin") != "Aug 2":
+        failures.append(f"checkin should be posted_at + 30 days, expected 'Aug 2', got {result.get('checkin')}")
+
+    # --overall mode: pill scope is "all videos", not an objective name.
+    result = bet_card_fields(section_b, "overall", None)
+    if result.get("pill") != "91st percentile · all videos":
+        failures.append(f"--overall bet card pill: expected 'all videos' scope, got {result.get('pill')!r}")
+
+    return failures
+
+
 def run():
     failures = []
     failures += test_pills()
+    failures += test_bet_card()
 
     # n=3: below the n>=4 floor for even a 2-vs-2 split -- must drop entirely.
     rows = make_rows(3)
@@ -177,8 +218,9 @@ def run():
         for f in failures:
             print(f"  - {f}")
         sys.exit(1)
-    print("All hero_contrast + mark_top_bottom_pills tier tests passed "
-          "(n=3,4,5,6,8 + no-result-rows case, all 4 tick branches at n=8).")
+    print("All hero_contrast + mark_top_bottom_pills + bet_card_fields tests passed "
+          "(n=3,4,5,6,8 + no-result-rows case, all 4 tick branches at n=8, "
+          "bet card empty/non-empty branches).")
 
 
 if __name__ == "__main__":
