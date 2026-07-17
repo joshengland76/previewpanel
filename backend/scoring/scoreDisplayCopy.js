@@ -17,6 +17,25 @@
 // Percentiles are ALWAYS rendered as integers (Math.round, done upstream in
 // percentilePools.js) -- never decimals.
 //
+// Display clamp (Polish v3, Task 6 -- found while auditing the recruitment
+// generator's own percentile display for the same edge case): midrankPercentile
+// can legitimately return exactly 0 or 100 (the pool's actual lowest/highest
+// value), which used to reach a real user as "Beats 0% of..." / "Beats 100%
+// of..." (this file's own predictHeadline/overallAppHeadline/personalHeadline)
+// or a bare "0"/"100" in the score card's gauge (VerdictHero.jsx renders
+// scoreDisplay.overallAppPercentile directly). Both read as absolute claims
+// ("literally the worst/best video in the pool") this file's own
+// baseline-relative-only rule (#1 above) doesn't intend. Applied ONCE, in
+// scoreDisplay.js where niche/overallApp/personal.value are computed --
+// every consumer (this file's headline strings AND the raw numbers the
+// frontend renders directly) sees the same already-clamped number, so the
+// functions below just Math.round() as before; they never see a raw 0/100
+// to begin with.
+export function clampPercentile(p) {
+  if (p == null) return p; // null/undefined pass through -- "no pool data" is not "1st percentile"
+  return Math.max(1, Math.min(99, Math.round(p)));
+}
+//
 // FRAMING NOTE (fixed after a real bug report): this file used to render
 // "Top N%" (N = 100 - percentile). That inverts at the low end of the
 // distribution -- a video that is literally the WORST in its pool has

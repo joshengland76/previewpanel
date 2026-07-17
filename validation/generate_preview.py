@@ -72,7 +72,6 @@ without a paper trail).
 """
 import argparse
 import json
-import math
 import os
 import pathlib
 import re
@@ -260,7 +259,15 @@ def midrank_percentile(value, pool):
 def pill_text(percentile, mode, objective):
     if percentile is None:
         return None
-    n = int(round(percentile))
+    # Polish v3, Task 6: never DISPLAY 0th or 100th. Both are
+    # mathematically real outputs of midrank_percentile (the pool's
+    # actual lowest/highest value rounds to exactly 0 or 100), but "0th
+    # percentile" / "100th percentile" reads as a false-absolute claim
+    # ("literally the single worst/best video ever") this document never
+    # intends to make -- ordinal framing only, everywhere else in this
+    # generator. Clamps the DISPLAY string only; the stored v["percentile"]
+    # stays the true computed value for anything that isn't user-facing text.
+    n = max(1, min(99, int(round(percentile))))
     suffix = "th" if 11 <= (n % 100) <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
     scope = objective if mode == "objective" else "all videos"
     return f"{n}{suffix} percentile · {scope}"
@@ -287,61 +294,115 @@ def size_section_a_window(videos_most_recent_first, max_rows=SECTION_A_MAX_ROWS)
     return videos_most_recent_first[:max_rows]
 
 
+def _topbottom_k(n):
+    """Single source of truth for 'how many rows count as top/bottom at
+    this n', shared by hero_contrast and mark_top_bottom_pills so the
+    hero sentence and the Section-A pills can never disagree about it.
+    n>=6 -> 3; n in {4,5} -> 2 (a k=3 read at n=5 would pull the
+    middle-ranked row into BOTH groups -- overlapping sets are worse than
+    a smaller honest split); n<4 -> None (not enough spread to say
+    anything about a top-vs-bottom split that isn't noise)."""
+    if n >= 6:
+        return 3
+    if n >= 4:
+        return 2
+    return None
+
+
+def mark_top_bottom_pills(section_a):
+    """Polish v3: replaces the old shown-set top-half/bottom-half
+    'CALLED IT?' rule with explicit TOP-N/BOTTOM-N pills -- same
+    self-relative philosophy (this says whether our RANKING of YOUR
+    videos called the direction right, not whether you're an
+    above-average creator against the pool -- the percentile pill already
+    answers that), just made concrete instead of implicit. Mutates each
+    row with pill_kind ('top'|'bottom'|None), pill_group (display label,
+    e.g. 'Top 3'), and pill_tick (True/False/None). TOP row: ✓ iff
+    result_x>=1.0 (a top-scored video that actually over-performed),
+    else ✗ (a top-scored video that under-performed -- a real miss).
+    BOTTOM row: ✓ iff result_x<1.0, else ✗. Middle (non-pill) rows get
+    neither a pill nor a mark -- their ranking wasn't confident enough to
+    be one of the panel's actual calls."""
+    for v in section_a:
+        v["pill_kind"] = None
+        v["pill_group"] = None
+        v["pill_tick"] = None
+
+    usable = [v for v in section_a if v.get("result_x") is not None]
+    k = _topbottom_k(len(usable))
+    if k is None:
+        return section_a
+
+    by_score = sorted(usable, key=lambda v: v["prediction"], reverse=True)
+    for v in by_score[:k]:
+        v["pill_kind"] = "top"
+        v["pill_group"] = f"Top {k}"
+        v["pill_tick"] = v["result_x"] >= 1.0
+    for v in by_score[-k:]:
+        v["pill_kind"] = "bottom"
+        v["pill_group"] = f"Bottom {k}"
+        v["pill_tick"] = v["result_x"] < 1.0
+    return section_a
+
+
 def score_section_a(videos, pool, mode, objective):
     """videos: dicts with prediction (raw ŷ) and wec_rate (real 30-day
-    result) already populated. Adds percentile/pill/result_x/tick in place.
-    Median is over THIS shown set post-window-sizing, per spec -- not the
-    creator's full history."""
+    result) already populated. Adds percentile/pill/result_x, plus
+    pill_kind/pill_group/pill_tick via mark_top_bottom_pills. Median is
+    over THIS shown set, not the creator's full history."""
     for v in videos:
         v["percentile"] = midrank_percentile(v["prediction"], pool)
         v["pill"] = pill_text(v["percentile"], mode, objective)
 
     wec_values = [v["wec_rate"] for v in videos if v.get("wec_rate") is not None]
     median_wec = statistics.median(wec_values) if wec_values else None
-
-    scores_desc = sorted((v["prediction"] for v in videos), reverse=True)
-    top_half_min_score = scores_desc[max(0, len(scores_desc) // 2 - 1)] if scores_desc else None
-
     for v in videos:
-        if median_wec and v.get("wec_rate") is not None:
-            v["result_x"] = v["wec_rate"] / median_wec
-        else:
-            v["result_x"] = None
-        # Self-relative, deliberately NOT pool-relative (e.g. "beat the
-        # niche-pool median result"): a creator whose whole catalog sits
-        # below the pool median would show an all-miss "CALLED IT?" column
-        # despite the model ranking their own videos perfectly against each
-        # other -- the claim this column makes is "did our RANKING of YOUR
-        # videos call the direction right," not "are you an above-average
-        # creator." Pool standing is what the percentile pill already says;
-        # this column says something pool standing can't.
-        in_top_half = top_half_min_score is not None and v["prediction"] >= top_half_min_score
-        v["tick"] = (in_top_half == (v["result_x"] >= 1.0)) if v["result_x"] is not None else None
+        v["result_x"] = (v["wec_rate"] / median_wec
+                          if median_wec and v.get("wec_rate") is not None else None)
+
+    mark_top_bottom_pills(videos)
     return videos
 
 
 def hero_contrast(section_a_scored):
     """Tiered by n (usable = has a real result_x, i.e. a real 30-day
-    result exists): n>=6 -> 3-vs-3; n in {4,5} -> 2-vs-2 (a 3-vs-3 read at
-    n=5 would pull the middle-ranked row into BOTH groups -- overlapping
-    sets are worse than a smaller honest contrast); n<4 -> None, caller
-    drops the contrast and leads with the best-bet framing instead (there
-    isn't enough spread across just 3 videos to say anything about a
-    "top vs bottom" split that isn't noise). Sets never overlap by
-    construction: 2*k <= n holds at every tier this function chooses.
+    result exists) via _topbottom_k -- same tiering mark_top_bottom_pills
+    uses for the Section-A pills. n<4 -> None, caller drops the contrast
+    and leads with the best-bet framing instead. Sets never overlap by
+    construction: 2*k <= n holds at every tier _topbottom_k chooses.
     Returns {"k": 2|3, "top": mean, "bottom": mean} or None."""
     usable = [v for v in section_a_scored if v.get("result_x") is not None]
-    n = len(usable)
-    if n >= 6:
-        k = 3
-    elif n >= 4:
-        k = 2
-    else:
+    k = _topbottom_k(len(usable))
+    if k is None:
         return None
     by_score = sorted(usable, key=lambda v: v["prediction"], reverse=True)
     top = statistics.mean(v["result_x"] for v in by_score[:k])
     bottom = statistics.mean(v["result_x"] for v in by_score[-k:])
     return {"k": k, "top": top, "bottom": bottom}
+
+
+SEND_CHECK_STRONG_GAP = 0.5
+
+
+def send_check_verdict(hero):
+    """Polish v3, Task 7 -- advisory only, printed after every render,
+    never blocks it. STRONG: top beats bottom by >=0.5x (a real, visible
+    contrast). WEAK: top beats bottom, but by less than 0.5x (the model's
+    own ranking barely separated these videos' real outcomes). INVERTED:
+    top's average result is actually BELOW bottom's -- the panel's top
+    picks under-performed its bottom picks on THIS creator's real 30-day
+    numbers, worth a human look before this document goes out. N/A when
+    hero is None (n<4, no contrast computed at all)."""
+    if hero is None:
+        return "N/A", "fewer than 4 Section-A videos with a real result -- no contrast to check"
+    gap = hero["top"] - hero["bottom"]
+    if gap < 0:
+        verdict = "INVERTED"
+    elif gap >= SEND_CHECK_STRONG_GAP:
+        verdict = "STRONG"
+    else:
+        verdict = "WEAK"
+    return verdict, f"top={hero['top']:.2f}x bottom={hero['bottom']:.2f}x gap={gap:+.2f}x"
 
 
 def insight_line(all_scored_videos):
@@ -590,7 +651,6 @@ ROW_A_RE = re.compile(
     r'<tr><td class="date">.*?</td><td class="video">.*?</td><td>.*?</td>'
     r'<td class="result[^"]*">.*?</td><td class="match">.*?</td></tr>'
 )
-ROW_A_DIVIDER_RE = re.compile(r'<tr class="typical-divider">.*?</tr>')
 ROW_B_RE = re.compile(
     r'<tr><td class="date">.*?</td><td class="video">.*?</td><td>.*?</td>'
     r'<td class="checkin">.*?</td></tr>'
@@ -617,36 +677,37 @@ def truncate_caption(raw):
 def row_a_html(v):
     result_class = "up" if (v["result_x"] or 0) >= 1.0 else "down"
     result_text = f'{v["result_x"]:.1f}× <small>your typical</small>' if v.get("result_x") is not None else "—"
-    # Checkmark semantics made visual -- a miss renders as a real ✗
-    # (var(--low), the same rust used for a below-typical result), not a
-    # near-invisible muted dash. Visible honesty: the reader should see
-    # the hit rate at a glance, not have to hunt for it.
-    tick_html = '<span class="tick">✓</span>' if v.get("tick") else '<span class="miss">✗</span>'
     pill = v.get("pill") or "—"
+    # Inline TOP/BOTTOM pill next to the percentile pill -- only on rows
+    # mark_top_bottom_pills actually placed in one of the two groups.
+    badge = f'<span class="pill-{v["pill_kind"]}">{v["pill_group"]}</span>' if v.get("pill_kind") else ""
+    # ✓/✗ ONLY on pill rows now (middle rows render nothing here) -- a
+    # miss renders as a real ✗ (var(--low)), not a near-invisible dash.
+    if v.get("pill_tick") is None:
+        mark_html = ""
+    elif v["pill_tick"]:
+        mark_html = '<span class="tick">✓</span>'
+    else:
+        mark_html = '<span class="miss">✗</span>'
     cap = truncate_caption(v["caption"])
     return (f'<tr><td class="date">{fmt_date(v["posted_at"])}</td>'
             f'<td class="video"><span class="cap">"{cap}"</span></td>'
-            f'<td><span class="pill">{pill}</span></td>'
+            f'<td><span class="pill">{pill}</span>{badge}</td>'
             f'<td class="result {result_class}">{result_text}</td>'
-            f'<td class="match">{tick_html}</td></tr>')
+            f'<td class="match">{mark_html}</td></tr>')
 
 
 def build_section_a_rows_html(section_a):
-    """Rows sorted by score descending (caller's responsibility -- section_a
-    arrives already in that order from the data-source adapters), with a
-    hairline divider inserted after ceil(n/2) rows -- the point where the
-    shown set's own top-half/bottom-half split (score_section_a's tick
-    logic) falls, made visible rather than left implicit."""
+    """Polish v3: sorted by score descending (fixes the date-sort
+    regression -- an earlier version left rows in the data-source
+    adapters' date order, but the spec was always score-sort). No divider
+    row anymore -- the TOP/BOTTOM pills (row_a_html) mark the split
+    explicitly now, inline, so a separate hairline row would be
+    redundant."""
     if not section_a:
         return '<tr><td colspan="5">No videos in this window yet.</td></tr>'
-    divider_after = math.ceil(len(section_a) / 2)
-    parts = []
-    for i, v in enumerate(section_a, start=1):
-        parts.append(row_a_html(v))
-        if i == divider_after and i < len(section_a):
-            parts.append('<tr class="typical-divider"><td colspan="5">'
-                          '<span class="divider-label">— your typical —</span></td></tr>')
-    return "\n    ".join(parts)
+    by_score = sorted(section_a, key=lambda v: v["prediction"], reverse=True)
+    return "\n    ".join(row_a_html(v) for v in by_score)
 
 
 def row_b_html(v, checkin_date):
@@ -658,7 +719,7 @@ def row_b_html(v, checkin_date):
             f'<td class="checkin">{checkin_date}</td></tr>')
 
 
-def render_html(*, handle, niche_line, prepared_date, window_start, window_end,
+def render_html(*, handle, niche_line, prepared_date, render_date, section_a_start,
                  section_a, section_b, hero, insight, precision_caveat, mode, objective):
     html = TEMPLATE_PATH.read_text()
 
@@ -668,20 +729,30 @@ def render_html(*, handle, niche_line, prepared_date, window_start, window_end,
     html = html.replace('PreviewPanel — Performance Preview · @maya.gets.glowy',
                          f'PreviewPanel — Performance Preview · @{handle}')
     html = html.replace('<div class="handle">@maya.gets.glowy</div>', f'<div class="handle">@{handle}</div>')
+    # Polish v3, Task 2: end of the posted-videos range is the REPORT RUN
+    # DATE, not the latest video's own posted_at -- "posted videos X to
+    # (effectively) now," not "X to whenever the last video happened to
+    # land." The engagement-definition clause moved off this line entirely
+    # (now lives on the result column's own subline, Task 4).
     html = re.sub(
         r'<div class="meta">.*?</div>\s*</div>\s*</header>',
         f'<div class="meta">{niche_line} · TikTok · prepared {prepared_date}<br>\n'
-        f'      every public video posted {window_start} – {window_end} '
-        f'· engagement = likes + shares + saves per view</div>\n    </div>\n  </header>',
+        f'      posted videos {section_a_start} – {render_date}</div>\n    </div>\n  </header>',
         html, count=1, flags=re.S,
     )
 
     all_rows_for_bet = section_a + section_b
     strongest = max(all_rows_for_bet, key=lambda v: v["prediction"]) if all_rows_for_bet else None
+    # Polish v3, Task 3: opening clause is now dynamic and carries the
+    # completeness claim itself ("every public video ... since <date>"),
+    # rather than a generic "last two months" -- the actual claim is
+    # "since Section A's oldest video," whatever span that really is.
+    opening = (f"We rated every public video you've posted since {section_a_start} — "
+               f"from content alone, never seeing a single view count.")
     if hero:
         word = {2: "2", 3: "3"}[hero["k"]]
         thesis_h1 = (
-            f'We rated your last two months of videos from content alone — never seeing a single view count. '
+            f'{opening} '
             f'Your <b>{word} highest-rated</b> averaged <b class="up">{hero["top"]:.1f}×</b> your typical engagement. '
             f'Your <b>{word} lowest-rated</b> averaged <b class="down">{hero["bottom"]:.1f}×</b>.'
         )
@@ -691,13 +762,13 @@ def render_html(*, handle, niche_line, prepared_date, window_start, window_end,
         # (see hero_contrast's own docstring) -- lead with the best bet
         # instead of forcing a noisy contrast.
         thesis_h1 = (
-            f'We rated your last two months of videos from content alone — never seeing a single view count. '
+            f'{opening} '
             f'Your strongest bet so far: <b>"{truncate_caption(strongest["caption"])}"</b>, '
             f'<b class="up">{strongest.get("pill") or "—"}</b>.'
         )
     else:
         thesis_h1 = (
-            'We rated your last two months of videos from content alone — never seeing a single view count. '
+            f'{opening} '
             '<b>Day-30 results are still pending</b> on this batch — check back after the day-30 window closes.'
         )
     html = re.sub(r'<h1>.*?</h1>', f'<h1>{thesis_h1}</h1>', html, count=1, flags=re.S)
@@ -722,11 +793,6 @@ def render_html(*, handle, niche_line, prepared_date, window_start, window_end,
             html, count=1, flags=re.S,
         )
 
-    # Strip the static sample's divider row first (its position was fixed
-    # for the 8-row sample; the real divider goes wherever ceil(n/2) falls
-    # for THIS creator's actual row count), then swap every real sample row
-    # for a marker and collapse the run into the freshly built row set.
-    html = ROW_A_DIVIDER_RE.sub("", html)
     rows_a_html = build_section_a_rows_html(section_a)
     html = ROW_A_RE.sub("@@ROW_A@@", html)
     html = re.sub(r'(@@ROW_A@@\s*)+', rows_a_html, html)
@@ -858,13 +924,16 @@ def main():
               f"within this mode's lookback window -- rendering what exists, not padding or erroring.")
     hero = hero_contrast(section_a)
     insight = insight_line(section_a + section_b)
-    all_dates = [v["posted_at"] for v in section_a + section_b if v.get("posted_at")]
-    window_start = fmt_date(min(all_dates)) if all_dates else "—"
-    window_end = fmt_date(max(all_dates)) if all_dates else "—"
+    # Polish v3, Tasks 2-3: "Section-A start date" is the single date both
+    # the meta line and the dynamic hero sentence hang off of -- the
+    # OLDEST Section-A video specifically (not blended with Section B).
+    section_a_dates = [v["posted_at"] for v in section_a if v.get("posted_at")]
+    section_a_start = fmt_date(min(section_a_dates)) if section_a_dates else "—"
+    render_date = fmt_date(datetime.now(timezone.utc))
 
     html = render_html(
         handle=handle, niche_line=niche_line, prepared_date=prepared_date,
-        window_start=window_start, window_end=window_end,
+        render_date=render_date, section_a_start=section_a_start,
         section_a=section_a, section_b=section_b, hero=hero, insight=insight,
         precision_caveat=precision_caveat, mode=mode, objective=objective,
     )
@@ -876,6 +945,12 @@ def main():
         print(f"[generate_preview] NOTE: {pages} pages -- {len(section_a)}A+{len(section_b)}B genuinely doesn't "
               f"fit one page at this layout; shipping as-is per the fit rule (row counts and type size are "
               f"fixed by spec, not adjustable to force a 1-page fit).")
+
+    verdict, detail = send_check_verdict(hero)
+    print(f"[generate_preview] SEND-CHECK: {verdict} ({detail})")
+    if verdict == "INVERTED":
+        print("[generate_preview]   INVERTED = do not send without a human look -- the panel's top picks "
+              "under-performed its bottom picks on this creator's real numbers.", file=sys.stderr)
 
     print(f"[generate_preview] wrote {html_path}")
     print(f"[generate_preview] wrote {pdf_path} ({pages} page(s))")

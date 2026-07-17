@@ -5,11 +5,16 @@ Polish v2, Task 5 -- unit tests for hero_contrast's tiered guard
 per the prompt's explicit list. No DB/network required -- pure function
 over synthetic rows.
 
+Polish v3, Task 5 -- extended with the same n=3,4,5,6,8 coverage for
+mark_top_bottom_pills (the TOP-N/BOTTOM-N pill + ✓/✗ logic that replaced
+the hairline divider), sharing _topbottom_k with hero_contrast so both
+are exercised against the same tiering rule.
+
 Usage: ./_venv/bin/python3 test_generate_preview.py
 """
 import sys
 
-from generate_preview import hero_contrast
+from generate_preview import hero_contrast, mark_top_bottom_pills
 
 
 def make_rows(n):
@@ -33,8 +38,87 @@ def assert_no_overlap(hero, rows):
     assert not (top_set & bottom_set), f"top/bottom sets overlap at k={hero['k']}, n={len(rows)}"
 
 
+def assert_no_pill_overlap(rows):
+    tops = {id(v) for v in rows if v.get("pill_kind") == "top"}
+    bottoms = {id(v) for v in rows if v.get("pill_kind") == "bottom"}
+    assert not (tops & bottoms), "top/bottom pill groups overlap"
+
+
+def test_pills():
+    """mark_top_bottom_pills at n=3,4,5,6,8 -- kind/label/tick assignment,
+    middle rows getting neither, no overlap. n=8 uses explicit result_x
+    values (not make_rows' monotonic sequence) so all four tick branches
+    -- TOP hit, TOP miss, BOTTOM hit, BOTTOM miss -- actually get
+    exercised, not just the "everything above the line beats 1.0x" case."""
+    failures = []
+
+    # n=3: below the floor for even a 2-vs-2 split -- no pills, no marks.
+    rows = make_rows(3)
+    mark_top_bottom_pills(rows)
+    if any(v["pill_kind"] is not None for v in rows):
+        failures.append("n=3: expected no pill_kind set on any row")
+    if any(v["pill_tick"] is not None for v in rows):
+        failures.append("n=3: expected no pill_tick set on any row")
+
+    # n=4: Top 2 / Bottom 2, no middle rows (2+2=4).
+    rows = make_rows(4)
+    mark_top_bottom_pills(rows)
+    kinds = [v["pill_kind"] for v in rows]  # make_rows is already score-descending
+    if kinds != ["top", "top", "bottom", "bottom"]:
+        failures.append(f"n=4: expected [top,top,bottom,bottom] by score order, got {kinds}")
+    labels = {v["pill_group"] for v in rows}
+    if labels != {"Top 2", "Bottom 2"}:
+        failures.append(f"n=4: expected labels {{'Top 2','Bottom 2'}}, got {labels}")
+    assert_no_pill_overlap(rows)
+
+    # n=5: Top 2 / Bottom 2, one middle row (rank 3) with no pill.
+    rows = make_rows(5)
+    mark_top_bottom_pills(rows)
+    kinds = [v["pill_kind"] for v in rows]
+    if kinds != ["top", "top", None, "bottom", "bottom"]:
+        failures.append(f"n=5: expected [top,top,None,bottom,bottom], got {kinds}")
+    assert_no_pill_overlap(rows)
+
+    # n=6: Top 3 / Bottom 3, no middle rows (3+3=6).
+    rows = make_rows(6)
+    mark_top_bottom_pills(rows)
+    kinds = [v["pill_kind"] for v in rows]
+    if kinds != ["top", "top", "top", "bottom", "bottom", "bottom"]:
+        failures.append(f"n=6: expected 3 top then 3 bottom, got {kinds}")
+    assert_no_pill_overlap(rows)
+
+    # n=8 (the real Section-A target): Top 3 / Bottom 3, 2 middle rows,
+    # all four tick branches exercised explicitly.
+    rows = [
+        {"prediction": 8.0, "result_x": 1.5},   # TOP, hit  (>=1.0 -> True)
+        {"prediction": 7.0, "result_x": 0.8},   # TOP, MISS (<1.0 -> False)
+        {"prediction": 6.0, "result_x": 1.2},   # TOP, hit
+        {"prediction": 5.0, "result_x": 1.1},   # middle -- no pill regardless of result
+        {"prediction": 4.0, "result_x": 0.9},   # middle -- no pill regardless of result
+        {"prediction": 3.0, "result_x": 0.7},   # BOTTOM, hit  (<1.0 -> True)
+        {"prediction": 2.0, "result_x": 1.3},   # BOTTOM, MISS (>=1.0 -> False)
+        {"prediction": 1.0, "result_x": 0.5},   # BOTTOM, hit
+    ]
+    mark_top_bottom_pills(rows)
+    expected_kind = ["top", "top", "top", None, None, "bottom", "bottom", "bottom"]
+    expected_tick = [True, False, True, None, None, True, False, True]
+    got_kind = [v["pill_kind"] for v in rows]
+    got_tick = [v["pill_tick"] for v in rows]
+    if got_kind != expected_kind:
+        failures.append(f"n=8 kinds: expected {expected_kind}, got {got_kind}")
+    if got_tick != expected_tick:
+        failures.append(f"n=8 ticks: expected {expected_tick}, got {got_tick}")
+    bad_labels = [v["pill_group"] for v in rows if v["pill_group"] not in ("Top 3", "Bottom 3", None)]
+    if bad_labels:
+        failures.append(f"n=8: unexpected pill_group labels {bad_labels}")
+    assert_no_pill_overlap(rows)
+
+    return failures
+
+
 def run():
     failures = []
+    failures += test_pills()
 
     # n=3: below the n>=4 floor for even a 2-vs-2 split -- must drop entirely.
     rows = make_rows(3)
@@ -93,7 +177,8 @@ def run():
         for f in failures:
             print(f"  - {f}")
         sys.exit(1)
-    print("All hero_contrast tier tests passed (n=3,4,5,6,8 + no-result-rows case).")
+    print("All hero_contrast + mark_top_bottom_pills tier tests passed "
+          "(n=3,4,5,6,8 + no-result-rows case, all 4 tick branches at n=8).")
 
 
 if __name__ == "__main__":

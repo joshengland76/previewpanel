@@ -10,7 +10,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { SCORE_DISPLAY_COPY } from "./scoreDisplayCopy.js";
+import { SCORE_DISPLAY_COPY, clampPercentile } from "./scoreDisplayCopy.js";
 import { getPools, midrankPercentile, personalDisplay, PERSONAL_MIN_VIDEOS, dedupePersonalGroups } from "./percentilePools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -117,8 +117,19 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
 
   const pools = await getPools(fetchShadowRows);
   const objectivePool = pools.byObjective[objective] || [];
-  const niche = midrankPercentile(prediction, objectivePool, { excludeKey: selfKey });
-  const overallApp = midrankPercentile(prediction, pools.overall, { excludeKey: selfKey });
+  // Polish v3, Task 6 -- clamped here, the single place niche/overallApp
+  // (and personal.value, below) get computed, so every consumer (this
+  // function's own copy.*Headline calls AND the raw nichePercentile/
+  // overallAppPercentile/personal fields the frontend Gauge renders
+  // directly) sees the same already-clamped number, never a raw 0 or 100.
+  // midrankPercentile can legitimately return either at the pool's actual
+  // lowest/highest value; both read as an absolute claim ("literally the
+  // worst/best video in the pool") this app's baseline-relative-only
+  // framing rule (scoreDisplayCopy.js's own header comment) doesn't
+  // intend. clampPercentile lives in scoreDisplayCopy.js since it's a
+  // display concern, imported here rather than duplicated.
+  const niche = clampPercentile(midrankPercentile(prediction, objectivePool, { excludeKey: selfKey }));
+  const overallApp = clampPercentile(midrankPercentile(prediction, pools.overall, { excludeKey: selfKey }));
   // Pool sizes reported to the user are the window-capped count INCLUDING
   // self (the just-scored video genuinely is one of "the videos we've
   // scored," even though it's excluded from the percentile comparison
@@ -132,6 +143,13 @@ export async function getScoreDisplay(objective, prediction, userId, deps = {}) 
   const personalRows = userId ? await fetchPersonalPredictions(userId) : [];
   const personalPool = dedupePersonalGroups(personalRows);
   const personal = personalDisplay(prediction, personalPool);
+  // Same display clamp as niche/overallApp above -- personal.value is the
+  // one other raw midrank output that reaches a user (personalHeadline,
+  // and personal itself is returned below for any direct frontend read).
+  // Ordinal-type personal ({rank, total}) is untouched -- not a percentile.
+  if (personal && personal.type === "percentile") {
+    personal.value = clampPercentile(personal.value);
+  }
 
   return {
     objective,
