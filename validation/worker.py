@@ -63,7 +63,11 @@ INTER_USER_DELAY_S = 3         # politeness delay between different profile scan
 DOWNLOAD_DIR = pathlib.Path(__file__).resolve().parent / "_downloads"
 
 # ── Prospect-report pipeline constants ──────────────────────────────────────
-PROSPECT_MAX_AGED_DEFAULT = 12
+# Polish v2, Task 2 -- generate_preview.py now targets exactly 8 Section-A
+# rows (not "up to 8"). Raised from 12 -> 14 so a typical 2-video scoring
+# failure rate (observed ~1/8 in the Task-4 dress rehearsal) still leaves
+# >=8 successfully-scored aged videos to draw from.
+PROSPECT_MAX_AGED_DEFAULT = 14
 PROSPECT_MAX_FRESH_DEFAULT = 4
 PROSPECT_AGED_MIN_DAYS = 30
 PROSPECT_AGED_MAX_DAYS = 100
@@ -519,7 +523,7 @@ def main():
                               "(e.g. for day-30 verification without waiting 30 days); defaults to now")
     parser.add_argument("--prospect", type=str, default=None,
                          help="Performance Preview prospect-report mode: @handle of a not-yet-enrolled creator")
-    parser.add_argument("--max-aged", type=int, default=None, help="--prospect: cap on videos aged 30-100 days (default 12)")
+    parser.add_argument("--max-aged", type=int, default=None, help="--prospect: cap on videos aged 30-100 days (default 14)")
     parser.add_argument("--max-fresh", type=int, default=None, help="--prospect: cap on videos aged <30 days (default 4)")
     args = parser.parse_args()
 

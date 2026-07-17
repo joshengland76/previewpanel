@@ -23,15 +23,16 @@
     letter-spacing:.12em; padding:4px 40px; opacity:.85;}
 
   header{display:flex; justify-content:space-between; align-items:baseline;
-    border-bottom:2px solid var(--ink); padding-bottom:10px;}
+    border-bottom:2px solid var(--ink); padding-bottom:4px;}
   .wordmark{display:flex; align-items:center;}
-  .wordmark img{height:68px; width:auto; display:block;}
-  .doc-title{font-size:10px; letter-spacing:.22em; font-weight:800; color:var(--brown); text-transform:uppercase;}
+  .wordmark img{height:34px; width:auto; display:block;}
+  .doc-title{font-size:10px; letter-spacing:.22em; font-weight:800; color:var(--brown);
+    text-transform:uppercase; margin-top:2px;}
   .who{text-align:right;}
-  .who .handle{font-weight:800; font-size:14px;}
-  .who .meta{color:var(--muted); font-size:10.5px;}
+  .who .handle{font-weight:800; font-size:21px; color:var(--brown); line-height:1.15;}
+  .who .meta{color:var(--muted); font-size:10.5px; margin-top:2px;}
 
-  .hero{display:flex; gap:12px; margin:11px 0 12px; align-items:stretch;}
+  .hero{display:flex; gap:12px; margin:6px 0 9px; align-items:stretch;}
   .thesis{flex:1.6; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:11px 14px;}
   .thesis h1{font-family:'Fraunces', Georgia, serif; font-weight:500; font-size:16.5px; line-height:1.4;}
   .thesis h1 b{font-weight:650;}
@@ -43,15 +44,15 @@
   .bet .pill{margin-top:6px;}
   .bet .note{color:var(--muted); font-size:10px; margin-top:6px;}
 
-  .section-h{display:flex; align-items:baseline; gap:8px; margin:10px 0 5px;}
+  .section-h{display:flex; align-items:baseline; gap:8px; margin:7px 0 4px;}
   .section-h .kicker{font-size:10px; letter-spacing:.18em; font-weight:800; text-transform:uppercase; color:var(--brown);}
   .section-h .rule{flex:1; border-top:1px solid var(--line);}
 
   table{width:100%; border-collapse:collapse; background:var(--card);
-    border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+    border:1px solid var(--line); border-radius:10px; overflow:hidden; font-size:10.5px;}
   th{font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
-    text-align:left; padding:5.5px 10px; border-bottom:1px solid var(--line); font-weight:800;}
-  td{padding:5px 10px; border-bottom:1px solid #F0E9DE; vertical-align:middle;}
+    text-align:left; padding:4px 10px; border-bottom:1px solid var(--line); font-weight:800;}
+  td{padding:3.5px 10px; border-bottom:1px solid #F0E9DE; vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
   td.date{color:var(--muted); font-size:11px; white-space:nowrap; font-variant-numeric:tabular-nums;}
   td.video{max-width:250px;}
@@ -62,42 +63,49 @@
   .result.up{color:var(--good);} .result.down{color:var(--low);}
   .result small{font-weight:600; color:var(--muted);}
   td.match{text-align:center; width:34px;}
-  .tick{color:var(--good); font-weight:800;} .dash{color:var(--muted);}
+  /* Checkmark semantics made visual -- a miss is a real ✗, not a muted
+     dash, so the reader sees the honest hit rate at a glance rather than
+     a near-invisible "nothing here" mark. Rule is unchanged (self-relative:
+     shown-set top half vs result>=1.0x -- see generate_preview.py's
+     score_section_a for why a pool-relative version would be wrong). */
+  .tick{color:var(--good); font-weight:800; font-size:14px;}
+  .miss{color:var(--low); font-weight:700; font-size:11px; opacity:.75;}
+  tr.typical-divider td{padding:1.5px 10px; border-bottom:1px solid #F0E9DE;}
+  tr.typical-divider .divider-label{display:block; text-align:center; font-size:8.5px;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--muted);}
 
-  .onrecord{position:relative;}
   .onrecord table{border:1.5px solid var(--gold);}
-  .stamp{position:absolute; right:6px; top:-14px; transform:rotate(6deg);
-    border:2px solid var(--gold); color:var(--gold); background:var(--gold-bg);
-    font-size:9px; font-weight:800; letter-spacing:.14em; padding:4px 10px;
-    border-radius:6px; text-transform:uppercase;}
+  .chip-predicted{border:1px solid var(--gold); background:var(--gold-bg); color:var(--gold);
+    font-size:9px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+    padding:3px 9px; border-radius:6px; white-space:nowrap; flex:none;}
   td.checkin{color:var(--gold); font-weight:800; font-size:11px; white-space:nowrap;}
   td.checkin small{color:var(--muted); font-weight:600; display:block;}
 
-  .insight{margin-top:8px; font-size:11.5px; color:var(--ink);}
+  .insight{margin-top:5px; font-size:11.5px; color:var(--ink);}
   .insight b{color:var(--brown);}
 
-  footer{margin-top:7px; border-top:2px solid var(--ink); padding-top:7px;
+  footer{margin-top:5px; border-top:2px solid var(--ink); padding-top:5px;
     display:flex; gap:12px; align-items:flex-start;}
-  footer .how{flex:1; color:var(--muted); font-size:9.8px; line-height:1.45;}
+  footer .how{flex:1; color:var(--muted); font-size:9.8px; line-height:1.4;}
   footer .cta{flex:0 0 150px; text-align:right;}
   footer .cta .go{font-family:'Fraunces', Georgia, serif; font-size:12.5px; font-weight:650;}
   footer .cta .url{color:var(--brown); font-weight:800; font-size:11px;}
 
 
-  .pitch{margin-top:8px; background:var(--tan); border:1px solid var(--line);
-    border-radius:10px; padding:7px 12px; display:flex; align-items:baseline; gap:12px;}
+  .pitch{margin-top:5px; background:var(--tan); border:1px solid var(--line);
+    border-radius:10px; padding:6px 12px; display:flex; align-items:baseline; gap:12px;}
   .pitch .lead{font-family:'Fraunces', Georgia, serif; font-weight:650; font-size:13px; white-space:nowrap;}
   .pitch .gets{font-size:10.5px; color:var(--ink); line-height:1.5;}
   .pitch .gets b{color:var(--brown);}
 
   @media print{
     html,body{background:#fff; font-size:12px;}
-    .page{padding:8px 14px;}
-    td{padding:4px 9px;}
+    .page{padding:6px 14px;}
+    td{padding:3px 9px;}
     .thesis h1{font-size:15.5px;}
-    .hero{margin:9px 0 10px;}
+    .hero{margin:5px 0 7px;}
     .ribbon{display:none;}
-    @page{size:letter; margin:8mm;}
+    @page{size:letter; margin:7mm;}
   }
 </style>
 </head>
@@ -132,20 +140,20 @@
 
   <div class="section-h"><span class="kicker">Posted 30+ days ago — what we predicted vs. what happened</span><span class="rule"></span></div>
   <table>
-    <tr><th>Posted</th><th>Video</th><th>Our score</th><th>30-day result<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">likes + shares + saves per view</span></th><th></th></tr>
+    <tr><th>Posted</th><th>Video</th><th>Our score</th><th>30-day result<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">likes + shares + saves per view</span></th><th>Called it?</th></tr>
     <tr><td class="date">May 20</td><td class="video"><span class="cap">"the blush hack nobody believes until they try it"</span></td><td><span class="pill">93rd percentile · Makeup</span></td><td class="result up">2.4× <small>your typical</small></td><td class="match"><span class="tick">✓</span></td></tr>
     <tr><td class="date">Jun 14</td><td class="video"><span class="cap">"rating viral SPF the internet lied about"</span></td><td><span class="pill">88th percentile · Makeup</span></td><td class="result up">1.8× <small>your typical</small></td><td class="match"><span class="tick">✓</span></td></tr>
     <tr><td class="date">Apr 30</td><td class="video"><span class="cap">"3 products I repurchased 5+ times"</span></td><td><span class="pill">82nd percentile · Makeup</span></td><td class="result up">2.1× <small>your typical</small></td><td class="match"><span class="tick">✓</span></td></tr>
-    <tr><td class="date">Jun 2</td><td class="video"><span class="cap">"trying my followers' weirdest requests"</span></td><td><span class="pill">78th percentile · Makeup</span></td><td class="result down">0.8× <small>your typical</small></td><td class="match"><span class="dash">–</span></td></tr>
-    <tr><td class="date">May 6</td><td class="video"><span class="cap">"my 5am shift-day routine, unfiltered"</span></td><td><span class="pill">59th percentile · Makeup</span></td><td class="result up">1.3× <small>your typical</small></td><td class="match"><span class="dash">–</span></td></tr>
+    <tr><td class="date">Jun 2</td><td class="video"><span class="cap">"trying my followers' weirdest requests"</span></td><td><span class="pill">78th percentile · Makeup</span></td><td class="result down">0.8× <small>your typical</small></td><td class="match"><span class="miss">✗</span></td></tr>
+    <tr class="typical-divider"><td colspan="5"><span class="divider-label">— your typical —</span></td></tr>
+    <tr><td class="date">May 6</td><td class="video"><span class="cap">"my 5am shift-day routine, unfiltered"</span></td><td><span class="pill">59th percentile · Makeup</span></td><td class="result up">1.3× <small>your typical</small></td><td class="match"><span class="miss">✗</span></td></tr>
     <tr><td class="date">Jun 9</td><td class="video"><span class="cap">"drugstore dupe or waste of $9?"</span></td><td><span class="pill">42nd percentile · Makeup</span></td><td class="result down">0.9× <small>your typical</small></td><td class="match"><span class="tick">✓</span></td></tr>
     <tr><td class="date">Apr 28</td><td class="video"><span class="cap">"unboxing the PR haul (honest edition)"</span></td><td><span class="pill">26th percentile · Makeup</span></td><td class="result down">0.6× <small>your typical</small></td><td class="match"><span class="tick">✓</span></td></tr>
     <tr><td class="date">May 27</td><td class="video"><span class="cap">"get ready with me: sister's graduation"</span></td><td><span class="pill">19th percentile · Makeup</span></td><td class="result down">0.7× <small>your typical</small></td><td class="match"><span class="tick">✓</span></td></tr>
   </table>
 
-  <div class="section-h" style="margin-top:12px;"><span class="kicker">Posted in the last 30 days — our predictions, on the record</span><span class="rule"></span></div>
+  <div class="section-h" style="margin-top:12px;"><span class="kicker">Posted in the last 30 days — our predictions, on the record</span><span class="rule"></span><span class="chip-predicted">Predicted Jul 16, 2026 · before results exist</span></div>
   <div class="onrecord">
-    <div class="stamp">Predicted · Jul 16, 2026</div>
     <table>
       <tr><th>Posted</th><th>Video</th><th>Our score</th><th>Day-30 check-in</th></tr>
       <tr><td class="date">Jul 9</td><td class="video"><span class="cap">"grwm but every product is under $12"</span></td><td><span class="pill">91st percentile · Makeup</span></td><td class="checkin">Aug 8 <small>we'll compare, either way</small></td></tr>
@@ -163,7 +171,7 @@
 
   <footer>
     <div class="how">
-      <b>How to read this:</b> each score predicts performance relative to your typical video, from content alone — the model never sees view counts. “Typical” = your median engagement rate above; ✓ = score direction matched result. In our 4,900-video study, top-tier picks beat typical engagement 68% — more than 2 in 3. Predictions, not promises.
+      <b>How to read this:</b> each score predicts performance relative to your typical video, from content alone — the model never sees view counts. ✓/✗ = whether our higher-rated half matched an above-typical result. In our 4,900-video study, top-tier picks beat typical engagement 68% — more than 2 in 3. Predictions, not promises.
     </div>
     <div class="cta">
       <div class="go">Know before you post.</div>

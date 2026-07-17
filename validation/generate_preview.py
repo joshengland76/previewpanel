@@ -307,21 +307,41 @@ def score_section_a(videos, pool, mode, objective):
             v["result_x"] = v["wec_rate"] / median_wec
         else:
             v["result_x"] = None
+        # Self-relative, deliberately NOT pool-relative (e.g. "beat the
+        # niche-pool median result"): a creator whose whole catalog sits
+        # below the pool median would show an all-miss "CALLED IT?" column
+        # despite the model ranking their own videos perfectly against each
+        # other -- the claim this column makes is "did our RANKING of YOUR
+        # videos call the direction right," not "are you an above-average
+        # creator." Pool standing is what the percentile pill already says;
+        # this column says something pool standing can't.
         in_top_half = top_half_min_score is not None and v["prediction"] >= top_half_min_score
         v["tick"] = (in_top_half == (v["result_x"] >= 1.0)) if v["result_x"] is not None else None
     return videos
 
 
 def hero_contrast(section_a_scored):
-    """mean of 3 highest-SCORED vs 3 lowest-SCORED (by prediction, among
-    Section A's real-result rows only -- Section B has no result yet)."""
+    """Tiered by n (usable = has a real result_x, i.e. a real 30-day
+    result exists): n>=6 -> 3-vs-3; n in {4,5} -> 2-vs-2 (a 3-vs-3 read at
+    n=5 would pull the middle-ranked row into BOTH groups -- overlapping
+    sets are worse than a smaller honest contrast); n<4 -> None, caller
+    drops the contrast and leads with the best-bet framing instead (there
+    isn't enough spread across just 3 videos to say anything about a
+    "top vs bottom" split that isn't noise). Sets never overlap by
+    construction: 2*k <= n holds at every tier this function chooses.
+    Returns {"k": 2|3, "top": mean, "bottom": mean} or None."""
     usable = [v for v in section_a_scored if v.get("result_x") is not None]
-    if len(usable) < 3:
+    n = len(usable)
+    if n >= 6:
+        k = 3
+    elif n >= 4:
+        k = 2
+    else:
         return None
     by_score = sorted(usable, key=lambda v: v["prediction"], reverse=True)
-    top3 = statistics.mean(v["result_x"] for v in by_score[:3])
-    bottom3 = statistics.mean(v["result_x"] for v in by_score[-3:])
-    return top3, bottom3
+    top = statistics.mean(v["result_x"] for v in by_score[:k])
+    bottom = statistics.mean(v["result_x"] for v in by_score[-k:])
+    return {"k": k, "top": top, "bottom": bottom}
 
 
 def insight_line(all_scored_videos):
@@ -426,10 +446,42 @@ def _poll_status(job_id):
     raise TimeoutError(f"job {job_id} did not finish within {STATUS_POLL_TIMEOUT_S}s")
 
 
-def study_section_b(conn, creator_id, handle, mode, objective):
-    """Videos posted <30 days ago: scored FRESH, right now, via the live
-    app's own public link-fetch path (/api/fetch-video) -- fully
-    out-of-sample, byte-identical to a real user's result for that URL."""
+def _recent_reused_section_b_rows(conn, objective, mode, n_needed, reuse_within_hours):
+    """Polish v2, Task 6: 'may reuse existing link-fetch rows -- do not
+    re-fetch'. Pairs the N most recent source='link_fetch' shadow_scores
+    rows (created_at ASC = the order they were originally processed in) to
+    the N candidate research_videos (posted_at DESC = the order
+    study_section_b iterates them in) POSITIONALLY -- sound, not a
+    coincidence: study_section_b always processes candidates in that same
+    posted_at-DESC order, calling _fetch_video sequentially, so the Nth row
+    created is the Nth candidate processed. Returns None (caller falls back
+    to a real live-fetch) unless the count matches exactly -- a mismatch
+    means the reuse window doesn't cleanly cover one prior run, and
+    guessing which subset applies would be worse than just re-fetching."""
+    obj_filter = "s.objective = %s" if mode == "objective" else "TRUE"
+    params = [objective] if mode == "objective" else []
+    params += [reuse_within_hours]
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute(f"""
+        SELECT s.prediction, s.input_features FROM shadow_scores s
+        WHERE s.source = 'link_fetch' AND {obj_filter}
+          AND s.created_at > now() - interval '%s hours'
+        ORDER BY s.created_at ASC
+    """, params)
+    rows = cur.fetchall()
+    cur.close()
+    if len(rows) != n_needed:
+        return None
+    return rows
+
+
+def study_section_b(conn, creator_id, handle, mode, objective, reuse_within_hours=None):
+    """Videos posted <30 days ago: scored FRESH, via the live app's own
+    public link-fetch path (/api/fetch-video) -- fully out-of-sample,
+    byte-identical to a real user's result for that URL. Unless
+    reuse_within_hours is set and a matching prior batch is found (see
+    _recent_reused_section_b_rows), in which case no new API calls are
+    made at all."""
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT id AS video_id, posted_at, caption, source_url
@@ -440,6 +492,22 @@ def study_section_b(conn, creator_id, handle, mode, objective):
     """, (creator_id, AGED_MIN_DAYS))
     rows = cur.fetchall()
     cur.close()
+
+    reused = None
+    if reuse_within_hours is not None:
+        reused = _recent_reused_section_b_rows(conn, objective, mode, len(rows), reuse_within_hours)
+        if reused is not None:
+            print(f"[generate_preview] reusing {len(reused)} existing Section-B row(s) -- $0 marginal API cost")
+            out = []
+            for r, pred_row in zip(rows, reused):
+                out.append({
+                    "posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
+                    "prediction": pred_row["prediction"],
+                    "axis_scores": axis_scores_from_input_features(pred_row["input_features"]),
+                })
+            return out
+        print(f"[generate_preview] no matching prior batch to reuse (need exactly {len(rows)} rows within "
+              f"{reuse_within_hours}h) -- falling back to a live re-fetch", file=sys.stderr)
 
     out = []
     for r in rows:
@@ -522,6 +590,7 @@ ROW_A_RE = re.compile(
     r'<tr><td class="date">.*?</td><td class="video">.*?</td><td>.*?</td>'
     r'<td class="result[^"]*">.*?</td><td class="match">.*?</td></tr>'
 )
+ROW_A_DIVIDER_RE = re.compile(r'<tr class="typical-divider">.*?</tr>')
 ROW_B_RE = re.compile(
     r'<tr><td class="date">.*?</td><td class="video">.*?</td><td>.*?</td>'
     r'<td class="checkin">.*?</td></tr>'
@@ -548,7 +617,11 @@ def truncate_caption(raw):
 def row_a_html(v):
     result_class = "up" if (v["result_x"] or 0) >= 1.0 else "down"
     result_text = f'{v["result_x"]:.1f}× <small>your typical</small>' if v.get("result_x") is not None else "—"
-    tick_html = '<span class="tick">✓</span>' if v.get("tick") else '<span class="dash">–</span>'
+    # Checkmark semantics made visual -- a miss renders as a real ✗
+    # (var(--low), the same rust used for a below-typical result), not a
+    # near-invisible muted dash. Visible honesty: the reader should see
+    # the hit rate at a glance, not have to hunt for it.
+    tick_html = '<span class="tick">✓</span>' if v.get("tick") else '<span class="miss">✗</span>'
     pill = v.get("pill") or "—"
     cap = truncate_caption(v["caption"])
     return (f'<tr><td class="date">{fmt_date(v["posted_at"])}</td>'
@@ -556,6 +629,24 @@ def row_a_html(v):
             f'<td><span class="pill">{pill}</span></td>'
             f'<td class="result {result_class}">{result_text}</td>'
             f'<td class="match">{tick_html}</td></tr>')
+
+
+def build_section_a_rows_html(section_a):
+    """Rows sorted by score descending (caller's responsibility -- section_a
+    arrives already in that order from the data-source adapters), with a
+    hairline divider inserted after ceil(n/2) rows -- the point where the
+    shown set's own top-half/bottom-half split (score_section_a's tick
+    logic) falls, made visible rather than left implicit."""
+    if not section_a:
+        return '<tr><td colspan="5">No videos in this window yet.</td></tr>'
+    divider_after = math.ceil(len(section_a) / 2)
+    parts = []
+    for i, v in enumerate(section_a, start=1):
+        parts.append(row_a_html(v))
+        if i == divider_after and i < len(section_a):
+            parts.append('<tr class="typical-divider"><td colspan="5">'
+                          '<span class="divider-label">— your typical —</span></td></tr>')
+    return "\n    ".join(parts)
 
 
 def row_b_html(v, checkin_date):
@@ -585,14 +676,30 @@ def render_html(*, handle, niche_line, prepared_date, window_start, window_end,
         html, count=1, flags=re.S,
     )
 
-    thesis_h1 = (
-        f'We rated your last two months of videos from content alone — never seeing a single view count. '
-        f'Your <b>3 highest-rated</b> averaged <b class="up">{hero[0]:.1f}×</b> your typical engagement. '
-        f'Your <b>3 lowest-rated</b> averaged <b class="down">{hero[1]:.1f}×</b>.'
-        if hero else
-        'We rated your last two months of videos from content alone — never seeing a single view count. '
-        '<b>Day-30 results are still pending</b> on this batch — check back after the day-30 window closes.'
-    )
+    all_rows_for_bet = section_a + section_b
+    strongest = max(all_rows_for_bet, key=lambda v: v["prediction"]) if all_rows_for_bet else None
+    if hero:
+        word = {2: "2", 3: "3"}[hero["k"]]
+        thesis_h1 = (
+            f'We rated your last two months of videos from content alone — never seeing a single view count. '
+            f'Your <b>{word} highest-rated</b> averaged <b class="up">{hero["top"]:.1f}×</b> your typical engagement. '
+            f'Your <b>{word} lowest-rated</b> averaged <b class="down">{hero["bottom"]:.1f}×</b>.'
+        )
+    elif strongest:
+        # Hero-contrast guard: fewer than 4 Section-A rows with a real
+        # result isn't enough spread for an honest top-vs-bottom split
+        # (see hero_contrast's own docstring) -- lead with the best bet
+        # instead of forcing a noisy contrast.
+        thesis_h1 = (
+            f'We rated your last two months of videos from content alone — never seeing a single view count. '
+            f'Your strongest bet so far: <b>"{truncate_caption(strongest["caption"])}"</b>, '
+            f'<b class="up">{strongest.get("pill") or "—"}</b>.'
+        )
+    else:
+        thesis_h1 = (
+            'We rated your last two months of videos from content alone — never seeing a single view count. '
+            '<b>Day-30 results are still pending</b> on this batch — check back after the day-30 window closes.'
+        )
     html = re.sub(r'<h1>.*?</h1>', f'<h1>{thesis_h1}</h1>', html, count=1, flags=re.S)
     hero_sub = (
         f'Each score is the video’s percentile among recent {objective} videos rated by our '
@@ -603,8 +710,6 @@ def render_html(*, handle, niche_line, prepared_date, window_start, window_end,
     )
     html = re.sub(r'<div class="sub">.*?</div>', f'<div class="sub">{hero_sub}</div>', html, count=1, flags=re.S)
 
-    all_rows = section_a + section_b
-    strongest = max(all_rows, key=lambda v: v["prediction"]) if all_rows else None
     if strongest:
         checkin = (strongest["posted_at"] + timedelta(days=30)).strftime("%b %-d") if strongest in section_b else None
         bet_note = (f'Logged before results exist — day-30 check-in {checkin}.' if checkin
@@ -617,12 +722,20 @@ def render_html(*, handle, niche_line, prepared_date, window_start, window_end,
             html, count=1, flags=re.S,
         )
 
-    rows_a_html = "\n    ".join(row_a_html(v) for v in section_a) or '<tr><td colspan="5">No videos in this window yet.</td></tr>'
+    # Strip the static sample's divider row first (its position was fixed
+    # for the 8-row sample; the real divider goes wherever ceil(n/2) falls
+    # for THIS creator's actual row count), then swap every real sample row
+    # for a marker and collapse the run into the freshly built row set.
+    html = ROW_A_DIVIDER_RE.sub("", html)
+    rows_a_html = build_section_a_rows_html(section_a)
     html = ROW_A_RE.sub("@@ROW_A@@", html)
     html = re.sub(r'(@@ROW_A@@\s*)+', rows_a_html, html)
 
-    stamp_date = prepared_date
-    html = re.sub(r'<div class="stamp">Predicted · .*?</div>', f'<div class="stamp">Predicted · {stamp_date}</div>', html, count=1)
+    # Stamp redesign: flat chip in the section-h line, not a rotated
+    # absolute-positioned badge -- no overlap possible by construction
+    # (see the template's .chip-predicted rule / removed .stamp rule).
+    chip_html = f'Predicted {prepared_date} · before results exist'
+    html = re.sub(r'<span class="chip-predicted">.*?</span>', f'<span class="chip-predicted">{chip_html}</span>', html, count=1)
     rows_b_html = "\n      ".join(
         row_b_html(v, (v["posted_at"] + timedelta(days=30)).strftime("%b %-d")) for v in section_b
     ) or '<tr><td colspan="4">No videos in this window yet.</td></tr>'
@@ -681,6 +794,10 @@ def main():
     pct.add_argument("--overall", action="store_true")
     ap.add_argument("--descriptor", default="multi-niche creator",
                      help="--overall header niche line when no --objective is given")
+    ap.add_argument("--reuse-section-b-hours", type=float, default=None,
+                     help="--study only: reuse an existing link-fetch batch from within this many hours "
+                          "instead of re-fetching Section B live (falls back to a live fetch if no exact-count "
+                          "match is found)")
     args = ap.parse_args()
 
     handle = (args.study or args.prospect).lstrip("@")
@@ -705,11 +822,11 @@ def main():
         creator_id = study_creator_id(conn, handle)
         oof_preds = load_oof_predictions()
         section_a_full = study_section_a(conn, creator_id, oof_preds, mode, objective)
-        # Section B is scored FRESH, right now, via a real (billed) live
-        # link-fetch call per video -- fetched exactly once per run, never
-        # inside the shrink-retry loop below (that loop only re-slices
-        # Section A, which is free -- already-scored data).
-        section_b = study_section_b(conn, creator_id, handle, mode, objective)
+        # Section B is scored FRESH by default, via a real (billed) live
+        # link-fetch call per video -- unless --reuse-section-b-hours finds
+        # a matching prior batch, in which case it's free.
+        section_b = study_section_b(conn, creator_id, handle, mode, objective,
+                                     reuse_within_hours=args.reuse_section_b_hours)
     else:
         section_a_full = prospect_section_a(conn, handle)
         section_b = prospect_section_b(conn, handle)
@@ -726,38 +843,39 @@ def main():
     html_path = RECRUITMENT_DIR / f"{stem}.html"
     pdf_path = RECRUITMENT_DIR / f"{stem}.pdf"
 
-    # One page, verified via headless print -- shrink Section A's row count
-    # (never Section B's real "last 30 days" window, and never the
-    # template's own type sizes) until it fits, or give up loudly after a
-    # few tries. score_section_a is recomputed each pass -- the shown set's
-    # own median/top-half depend on exactly which rows are included.
-    n_rows = SECTION_A_MAX_ROWS
-    pages = None
-    while n_rows >= 3:
-        section_a = score_section_a(list(section_a_full[:n_rows]), pool, mode, objective)
-        hero = hero_contrast(section_a)
-        insight = insight_line(section_a + section_b)
-        all_dates = [v["posted_at"] for v in section_a + section_b if v.get("posted_at")]
-        window_start = fmt_date(min(all_dates)) if all_dates else "—"
-        window_end = fmt_date(max(all_dates)) if all_dates else "—"
+    # Section A targets exactly SECTION_A_MAX_ROWS (8) -- study_section_a /
+    # prospect_section_a already extend their lookback as far as each mode
+    # allows (unlimited for --study; capped at the 100-day phase5c boundary
+    # for --prospect) and cap at 8 via size_section_a_window, never fewer
+    # unless genuinely fewer videos exist. No shrink-to-fit here anymore:
+    # the one-page target is now the LAYOUT's job (compact header/type,
+    # Task 3), not the row count's. If 8A+5B genuinely doesn't fit one
+    # page, the document grows to page 2 -- never drop rows below spec or
+    # shrink type to force a fit.
+    section_a = score_section_a(list(section_a_full), pool, mode, objective)
+    if len(section_a) < SECTION_A_MAX_ROWS:
+        print(f"[generate_preview] NOTE: only {len(section_a)}/{SECTION_A_MAX_ROWS} Section-A videos exist "
+              f"within this mode's lookback window -- rendering what exists, not padding or erroring.")
+    hero = hero_contrast(section_a)
+    insight = insight_line(section_a + section_b)
+    all_dates = [v["posted_at"] for v in section_a + section_b if v.get("posted_at")]
+    window_start = fmt_date(min(all_dates)) if all_dates else "—"
+    window_end = fmt_date(max(all_dates)) if all_dates else "—"
 
-        html = render_html(
-            handle=handle, niche_line=niche_line, prepared_date=prepared_date,
-            window_start=window_start, window_end=window_end,
-            section_a=section_a, section_b=section_b, hero=hero, insight=insight,
-            precision_caveat=precision_caveat, mode=mode, objective=objective,
-        )
-        html_path.write_text(html)
-        render_pdf(html_path, pdf_path)
-        pages = pdf_page_count(pdf_path)
-        print(f"[generate_preview] render attempt: {n_rows} Section-A rows -> {pages} page(s)")
-        if pages == 1:
-            break
-        n_rows -= 1
-    else:
-        print(f"[generate_preview] WARNING: still {pages} page(s) at the {n_rows + 1}-row floor -- "
-              f"shrinking further would leave Section A too thin to be honest; shipping as-is",
-              file=sys.stderr)
+    html = render_html(
+        handle=handle, niche_line=niche_line, prepared_date=prepared_date,
+        window_start=window_start, window_end=window_end,
+        section_a=section_a, section_b=section_b, hero=hero, insight=insight,
+        precision_caveat=precision_caveat, mode=mode, objective=objective,
+    )
+    html_path.write_text(html)
+    render_pdf(html_path, pdf_path)
+    pages = pdf_page_count(pdf_path)
+    print(f"[generate_preview] {len(section_a)} Section-A + {len(section_b)} Section-B rows -> {pages} page(s)")
+    if pages != 1:
+        print(f"[generate_preview] NOTE: {pages} pages -- {len(section_a)}A+{len(section_b)}B genuinely doesn't "
+              f"fit one page at this layout; shipping as-is per the fit rule (row counts and type size are "
+              f"fixed by spec, not adjustable to force a 1-page fit).")
 
     print(f"[generate_preview] wrote {html_path}")
     print(f"[generate_preview] wrote {pdf_path} ({pages} page(s))")

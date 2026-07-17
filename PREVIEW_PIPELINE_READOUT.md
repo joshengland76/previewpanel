@@ -216,6 +216,30 @@ specifically the held-out estimate for the same rows; the two are
 different, both legitimate, numbers, and this is the shape their
 divergence should take.
 
+**CORRECTION (Polish v2, Task 7)** — the interpretation above leads with
+the wrong dominant cause. In-sample-artifact-vs-OOF is a real, legitimate
+distinction, but it isn't the main driver of the 0.536/0.079 gap. The two
+larger components: **(1) fresh-vs-stored measurement** — the prospect-mode
+ŷ is scored *today*, while the OOF value was computed at the 2026-07-07
+snapshot; that gap is temporal drift + version deltas (prompt/model
+revisions between snapshot and now), the same effect C8 in
+`PHASEB4B_READOUT.md` (`~/correlation-research/analysis/modeling/reports/
+capstone/`) quantified directly — a fresh rescore vs. a stored score shows
+moderate correlation (Spearman 0.634–0.811 for raw judge scores across two
+Pegasus eras) purely from re-running the pipeline later, with no
+in-sample/OOF distinction involved at all. **0.536 sits inside that same
+banked range**, not below it. **(2) Within-creator spread compression at
+n=7** — 7 points is a small enough sample that a handful of near-tied
+rankings can swing Spearman by several tenths on their own, independent of
+any systematic bias between the two scoring paths. Net: this comparison
+mixes two well-understood, already-quantified sources of noise (drift +
+small-n) with the in-sample/OOF distinction folded in as a smaller, third
+factor, not the headline one. **Task 4's own sanity-diff claim is
+unaffected** — prospect mode is internally consistent (every Task 4 number
+is a fresh live-path score, nothing stored/OOF mixed into it), so this
+correction narrows why the CROSS-check number looks the way it does; it
+doesn't call prospect mode's own results into question.
+
 ## Bugs found and fixed (surfaced by testing against real production traffic)
 
 1. **Section B row-attribution race.** First implementation read the
