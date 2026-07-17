@@ -13,3 +13,8 @@ __pycache__/
 *.pyc
 validation/_downloads/
 validation/_stress_test_out/
+
+# Generated Performance Preview documents -- per-creator output, not source.
+# The template itself (performance_preview_template.html) stays tracked.
+Recruitment/preview_*.html
+Recruitment/preview_*.pdf

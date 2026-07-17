@@ -627,6 +627,23 @@ async function initDb() {
     // from an ordinary no-signal Tier 3), but worker.py only ever logged it to
     // stdout; the dashboard's funnel needs it persisted to report it.
     await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS possibly_related BOOLEAN`);
+    // Prospect-report pipeline -- source distinguishes a not-yet-enrolled
+    // prospect creator's row (worker.py --prospect) from a real connected
+    // user's row (NULL/unset here, same as every row before this column
+    // existed). is_day30_equiv marks a day30_* snapshot captured immediately
+    // at ingest (phase5c license: an already-30-100-day-old video's current
+    // counters are a valid day-30 equivalent) rather than via a genuine
+    // 30-days-later collect_day30.py run -- the two provenances must stay
+    // distinguishable even though they land in the same day30_* columns.
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS source TEXT`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS is_day30_equiv BOOLEAN DEFAULT false`);
+    // The ingest route has always RECEIVED req.body.caption (threaded into
+    // C_dims) but never persisted it anywhere -- fine when the only consumer
+    // was a live scoring job, not fine for prospect-report rows a document
+    // generator needs to re-read long after ingestion (re-probing yt-dlp at
+    // render time is wasteful and fragile -- an aged video can go
+    // private/deleted between ingest and a later re-render).
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS caption TEXT`);
     // is_posted_video is the load-bearing exclusion flag for percentilePools
     // and personal-history queries (see below) -- posted-video validation
     // rescores must never pollute either pool. source is kept alongside it
@@ -2774,8 +2791,9 @@ async function runShadowScoringForJob(jobId) {
   // Phase C, Task 3 -- validation ingestion's entire purpose IS running this
   // scoring path (it's not an opt-in shadow A/B for a real app user), so it
   // must never be gated behind the SHADOW_SCORING rollout flag the way the
-  // normal app path is.
-  if (process.env.SHADOW_SCORING !== "true" && job?.source !== "validation") return;
+  // normal app path is. Prospect-report ingestion is the same kind of
+  // fire-and-forget research scoring, not an opt-in shadow A/B either.
+  if (process.env.SHADOW_SCORING !== "true" && job?.source !== "validation" && job?.source !== "prospect_report") return;
   if (!job || !pgPool) return;
 
   // Pre-launch fix, Task 4a -- test-only hook to force the shadow-vs-synthesis
@@ -2920,8 +2938,17 @@ async function runShadowScoringForJob(jobId) {
       // "link_fetch" provenance tag instead of falling into the generic
       // "app" bucket -- same pipeline, same eligibility, just a distinct
       // source so a future analysis can separate "uploaded a file" from
-      // "pasted a link" if that ever matters.
-      source: job.source === "validation" ? "validation" : job.source === "link_fetch" ? "link_fetch" : "app",
+      // "pasted a link" if that ever matters. prospect_report rows are
+      // genuine first-time-scored niche content (never scored before, no
+      // prior preview to double-count) -- the is_posted_video exclusion
+      // rationale is specifically about not double-counting an
+      // already-scored preview's rescore, which does not apply here, so
+      // prospect rows stay isPostedVideo=false and pool-eligible like any
+      // other first-time submission.
+      source: job.source === "validation" ? "validation"
+        : job.source === "link_fetch" ? "link_fetch"
+        : job.source === "prospect_report" ? "prospect_report"
+        : "app",
       isPostedVideo: job.source === "validation",
       postedVideoId: job.postedVideoId ?? null,
       fpGroup, // pool hygiene Task 2
@@ -2965,7 +2992,7 @@ async function runShadowScoringForJob(jobId) {
     // match was already found (matched_submission_id set before ingestion —
     // matching happens in the Task 4 worker, before it ever calls this
     // endpoint, so that fact is already known here).
-    if (job.source === "validation" && job.postedVideoId && shadowResult && pgPool) {
+    if ((job.source === "validation" || job.source === "prospect_report") && job.postedVideoId && shadowResult && pgPool) {
       const rawScores = Object.values(scores).filter((v) => typeof v === "number");
       const rawAvg = rawScores.length ? parseFloat((rawScores.reduce((a, b) => a + b, 0) / rawScores.length).toFixed(2)) : null;
       queryRW(
@@ -2988,7 +3015,7 @@ async function runShadowScoringForJob(jobId) {
     // Phase C, Task 3 -- validation ingestion creates NO display payload at
     // all, by design (nothing polls this job; the Mac worker gets a plain
     // JSON response from the ingestion endpoint instead).
-    if (process.env.DISPLAY_SCORE === "true" && shadowResult && job.source !== "validation") {
+    if (process.env.DISPLAY_SCORE === "true" && shadowResult && job.source !== "validation" && job.source !== "prospect_report") {
       // Pool hygiene Task 2 -- once k>=2 (this run matched a Tier-1
       // fingerprint from the user's own trailing-30d previews), the DISPLAYED
       // prediction is the group's mean ŷ INCLUDING this run, not this run's
@@ -3815,6 +3842,16 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
     // validation rescores are caption-faithful, matching the study's own
     // input construction instead of the always-empty slot used before.
     const caption = req.body.caption ? req.body.caption.toString().trim().slice(0, 2000) || null : null;
+    // Prospect-report pipeline -- this endpoint now serves two callers:
+    // worker.py's real-connected-user scan (source="validation", the
+    // original/default behavior) and its --prospect mode (source=
+    // "prospect_report", a not-yet-enrolled creator with no prior app
+    // history to match fingerprints against). Allowlisted rather than
+    // trusting the raw body since job.source also drives the pool-eligible/
+    // is_posted_video decision below.
+    const ALLOWED_INGEST_SOURCES = new Set(["validation", "prospect_report"]);
+    const rawSource = (req.body.source || "").toString().trim();
+    const source = ALLOWED_INGEST_SOURCES.has(rawSource) ? rawSource : "validation";
 
     if (!pgPool) { cleanupTempFile(); return res.status(503).json({ error: "Database not available" }); }
 
@@ -3832,13 +3869,13 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
     // updates in place rather than erroring or duplicating.
     const { rows: pvRows } = await queryRW(
       `INSERT INTO posted_videos
-         (user_id, tiktok_video_id, handle, posted_at, status, matched_submission_id, match_tier, match_overlap, audio_match, duration_delta, possibly_related)
-       VALUES ($1,$2,$3,$4,'downloaded',$5,$6,$7,$8,$9,$10)
+         (user_id, tiktok_video_id, handle, posted_at, status, matched_submission_id, match_tier, match_overlap, audio_match, duration_delta, possibly_related, source, caption)
+       VALUES ($1,$2,$3,$4,'downloaded',$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (tiktok_video_id) DO UPDATE SET
          user_id = $1, handle = $3, posted_at = $4, matched_submission_id = $5,
-         match_tier = $6, match_overlap = $7, audio_match = $8, duration_delta = $9, possibly_related = $10
+         match_tier = $6, match_overlap = $7, audio_match = $8, duration_delta = $9, possibly_related = $10, source = $11, caption = $12
        RETURNING id`,
-      [userId, tiktokVideoId, handle, postedAt, matchedSubmissionId, matchTier, matchOverlap, audioMatch, durationDelta, possiblyRelated]
+      [userId, tiktokVideoId, handle, postedAt, matchedSubmissionId, matchTier, matchOverlap, audioMatch, durationDelta, possiblyRelated, source, caption]
     );
     const postedVideoId = pvRows[0].id;
 
@@ -3849,7 +3886,7 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
       queuePosition: 0,
       platform: "tiktok", // posted-video framing always matches the matched preview's tiktok scoring
       objective,
-      source: "validation",
+      source,
       userId,
       postedVideoId,
       results: {},
@@ -3997,7 +4034,11 @@ async function runPipeline(jobId, videoUrl, platform, objective, selectedJudges)
     // meant to be excluded here. That's why repeat link-fetch runs of the
     // same URL never grouped/averaged: no fingerprint row was ever written
     // for any of them to match against.
-    const isRealPreviewSubmission = jobs[jobId].source !== "research_api" && jobs[jobId].source !== "validation";
+    // prospect_report rows are the same category as validation here --
+    // already-posted content being scored for the first time, not a live
+    // preview submission -- fingerprinting them would pollute
+    // preview_fingerprints the same way a validation rescore would.
+    const isRealPreviewSubmission = jobs[jobId].source !== "research_api" && jobs[jobId].source !== "validation" && jobs[jobId].source !== "prospect_report";
     const fingerprintTarget = isRealPreviewSubmission && activeConvertedPath !== retainPath ? activeConvertedPath : null;
     // Bug fix: this IIFE was previously fire-and-forget with no handle kept
     // anywhere, so jobs[jobId].fingerprintId's assignment (below) raced
@@ -4251,12 +4292,13 @@ async function recordSubmissionForJob(jobId, finalStatus) {
     // ONLY. Never touches submissions or submissionLog (that log/table is
     // reserved for real app/research traffic, not this evaluation batch).
     submissionId = await saveEvalRun(entry, job.videoId, job.externalVideoId);
-  } else if (job.source === "validation") {
+  } else if (job.source === "validation" || job.source === "prospect_report") {
     // Phase C, Task 3 -- posted-video validation rescoring writes NO
     // submissions row at all (the scoring result lives on posted_videos
     // directly, via the update in runShadowScoringForJob below) and never
     // touches submissionLog. avgScore/dimensions computed above are still
-    // used for logging only.
+    // used for logging only. Prospect-report ingestion is the same shape --
+    // its result also lives on posted_videos, not submissions.
     submissionId = null;
   } else {
     submissionLog.unshift(entry);

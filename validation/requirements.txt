@@ -5,3 +5,6 @@ requests
 numpy
 scipy
 yt-dlp
+pandas
+pyarrow
+pymupdf
