@@ -188,16 +188,13 @@ send." Pointer line added to `PreviewPanel_Operations_and_Roadmap.md`
 
 ## Git / deploy state
 
-- Commit: pending — see below, will be filled in with the real sha
-  before this file's own commit lands (matching the fill-in-after
-  convention from the prior round, not left as a placeholder in the
-  committed version).
-- Pushed: pending.
+- Commit: `b0adfaf`, on `origin/main`.
+- Pushed: Y.
 - Deployed — Render (backend): **required this round** —
   `scoreDisplay.js`/`scoreDisplayCopy.js` is a real production
   scoring-copy fix (Task 6), not a docs/template-only change like Polish
-  v2. Will verify live via the Render API (`status: "live"`, commit sha
-  matched) before calling this done, same as every prior round.
+  v2. Verified live via the Render API (`status: "live"`, commit sha
+  matched), not assumed.
 - Deployed — Vercel (frontend): N/A, no frontend files changed this
   session (the fix lives entirely in `backend/scoring/`, consumed by
   `VerdictHero.jsx` but that file itself wasn't touched).
