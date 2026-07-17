@@ -143,7 +143,7 @@ export function ToolkitSection({ results, trim }) {
                       {c.label && <span style={{ fontWeight: 700, fontSize: 13.5, color: B.body }}>{c.label}</span>}
                     </div>
                     {c.reason && <div style={{ fontSize: 12, lineHeight: 1.45, color: "#5c544a", marginTop: 6 }}>{c.reason}</div>}
-                    {trim?.available && trim?.videoFile && <TrimClip clip={c} trim={trim} />}
+                    {trim?.available && <TrimClip clip={c} trim={trim} />}
                   </div>
                 );
               })}

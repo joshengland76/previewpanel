@@ -4931,6 +4931,28 @@ app.post("/api/push-subscribe", async (req, res) => {
   }
 });
 
+// ── GET /api/trim-source/:jobId — stream the retained SOURCE video (not a
+// trimmed output) for TrimClip's scrub preview when the browser has no local
+// File object to createObjectURL from -- link-based submissions never get
+// one (nothing was uploaded from that device). res.sendFile handles Range
+// requests natively, which <video> needs for seeking/scrubbing. Same jobId-
+// as-capability access model as the rest of /api/trim*, and the same
+// TRIM_RETAIN_MS-governed lifetime -- this only reads the file the existing
+// retention timer already owns, no separate deletion here.
+app.get("/api/trim-source/:jobId", (req, res) => {
+  const entry = retainedTrims.get(req.params.jobId);
+  if (!entry || !fs.existsSync(entry.path)) {
+    return res.status(404).json({ error: "This clip is no longer available. Please re-run the analysis to trim." });
+  }
+  // A link-submission's retained file is always a proper .mp4 (the fetched
+  // download passes through convertToMp4 -- see retainTrimFile's call site).
+  // A file-upload's retained file is the ORIGINAL upload, which multer names
+  // with no extension at all -- sendFile can't sniff a Content-Type from
+  // that, so fall back to mp4 explicitly rather than serving it unlabeled.
+  res.type(path.extname(entry.path) || ".mp4");
+  res.sendFile(entry.path);
+});
+
 // ── POST /api/trim — download a trimmed clip from the retained converted file ──
 // App-only, best-effort. Body: { jobId, start, end, mode?: "copy"|"reencode" }.
 // "copy" (default) is a keyframe-accurate stream copy — near-zero CPU, no decode,

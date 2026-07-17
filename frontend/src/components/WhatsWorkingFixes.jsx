@@ -207,22 +207,25 @@ export function WhatsWorkingFixes({ synthesis, duration }) {
                       style={{ border: `1px solid ${on ? "#cdbfae" : B.lightBrown}`, background: on ? "#fff" : B.bg, borderRadius: 11,
                         overflow: "hidden", transition: "background .15s, border-color .15s",
                         boxShadow: on ? "0 2px 12px rgba(60,40,20,.06)" : "none" }}>
-                      {/* Collapsed to a single line: timestamp + as much of the
-                          first sentence as fits (CSS ellipsis) + the same
-                          down-arrow chevron the individual judge cards use. */}
+                      {/* Collapsed: timestamp + as much of the first sentence as
+                          fits (CSS ellipsis) + the same down-arrow chevron the
+                          individual judge cards use. Expanded: the SAME span
+                          switches to the full text, unclipped -- it continues
+                          from that same first line rather than repeating it
+                          in a second block below. */}
                       <button type="button" onClick={() => toggle(t.i)} aria-expanded={isOpen}
                         style={{ width: "100%", textAlign: "left", background: "none", border: "none", cursor: "pointer",
-                          padding: "9px 11px", display: "flex", alignItems: "center", gap: 8, fontFamily: "inherit" }}>
-                        {hasTime && <span style={{ fontSize: 12.5, fontWeight: 700, color: "#9C9281", flexShrink: 0 }}>{fmt(t.t_seconds)}</span>}
-                        <span style={{ fontSize: 12.5, lineHeight: 1.3, color: B.body, flex: 1, minWidth: 0,
-                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{firstSentence(t.text)}</span>
+                          padding: "9px 11px", display: "flex", alignItems: isOpen ? "flex-start" : "center", gap: 8, fontFamily: "inherit" }}>
+                        {hasTime && <span style={{ fontSize: 12.5, fontWeight: 700, color: "#9C9281", flexShrink: 0, marginTop: isOpen ? 1 : 0 }}>{fmt(t.t_seconds)}</span>}
+                        <span style={{ fontSize: 12.5, lineHeight: isOpen ? 1.45 : 1.3, color: B.body, flex: 1, minWidth: 0,
+                          overflow: isOpen ? "visible" : "hidden", textOverflow: isOpen ? "clip" : "ellipsis",
+                          whiteSpace: isOpen ? "normal" : "nowrap" }}>{isOpen ? t.text : firstSentence(t.text)}</span>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9C9281" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
-                          style={{ flexShrink: 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .25s" }}><path d="m6 9 6 6 6-6" /></svg>
+                          style={{ flexShrink: 0, marginTop: isOpen ? 2 : 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .25s" }}><path d="m6 9 6 6 6-6" /></svg>
                       </button>
                       {isOpen && (
                         <div style={{ padding: "0 11px 11px" }}>
-                          <div style={{ fontSize: 12.5, lineHeight: 1.45, color: B.body }}>{t.text}</div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                             {imp && <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: imp.c, background: imp.bg, padding: "2px 7px", borderRadius: 5 }}>{imp.label}</span>}
                             {count > 0 && <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "#9C9281" }}>{count} {count === 1 ? "judge" : "judges"}</span>}
                             <AttribIcons kind={t.kind} judges={t.judges} />

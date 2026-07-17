@@ -4,12 +4,21 @@ import { B, JUDGE_BY_ID } from "../brand.js";
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-clip "Trim & download" affordance for the Editor's suggested segments.
 //
-// LIVE-SESSION ONLY. Scrubbing is client-side against the original `videoFile`
-// still in memory (createObjectURL → <video>). A combined two-handle bar (handles
-// can't cross) plus ±0.1s steppers set start/end, each within ±3s of the Editor's
-// suggestion. A persistent time readout + "Preview selection" play the exact cut.
-// On confirm we POST {jobId,start,end,mode:"reencode"} to /api/trim → full-res,
-// post-quality H.264 clip → download. Hidden without a videoFile (restored history).
+// LIVE SESSION (or server-retained source) ONLY. Scrubbing is client-side
+// against a <video>: for a file upload, the original `videoFile` still in
+// memory (createObjectURL); for a link-based submission there is no local
+// File object (nothing was ever uploaded from this device), so instead the
+// <video> points straight at GET /api/trim-source/:jobId, which streams the
+// server's retained source with Range support -- the browser fetches only
+// the byte ranges it needs to scrub, same as any other <video src>. Either
+// way the source is gone once the server's retention window elapses (`trim`
+// prop's `available` flag mirrors that -- see /api/status's trimAvailable),
+// so the component self-hides once neither a local file nor a retained
+// server copy exists. A combined two-handle bar (handles can't cross) plus
+// ±0.1s steppers set start/end, each within ±3s of the Editor's suggestion.
+// A persistent time readout + "Preview selection" play the exact cut. On
+// confirm we POST {jobId,start,end,mode:"reencode"} to /api/trim → full-res,
+// post-quality H.264 clip → download.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const EDITOR = JUDGE_BY_ID.critic;
@@ -28,7 +37,7 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const round1 = (v) => Math.round(v * 10) / 10;
 
 export default function TrimClip({ clip, trim }) {
-  const { videoFile, jobId, apiBase = "", durationSecs } = trim || {};
+  const { videoFile, jobId, apiBase = "", durationSecs, available } = trim || {};
   const cap = Number.isFinite(durationSecs) && durationSecs > 0 ? durationSecs : 1e9;
   const sugStart = clamp(toSecs(clip.start), 0, cap);
   const sugEnd = clamp(toSecs(clip.end), sugStart + 0.5, cap);
@@ -54,12 +63,21 @@ export default function TrimClip({ clip, trim }) {
   const playingRef = useRef(playing); playingRef.current = playing;
 
   useEffect(() => {
-    if (!open || !videoFile) return;
-    const url = URL.createObjectURL(videoFile);
-    const v = videoRef.current; if (v) v.src = url;
-    return () => URL.revokeObjectURL(url);
+    if (!open) return;
+    const v = videoRef.current; if (!v) return;
+    if (videoFile) {
+      const url = URL.createObjectURL(videoFile);
+      v.src = url;
+      return () => URL.revokeObjectURL(url);
+    }
+    if (jobId) {
+      // No local file (link-based submission) -- stream the server-retained
+      // source directly; the browser issues its own Range requests as the
+      // user scrubs, so nothing is downloaded up front.
+      v.src = `${apiBase}/api/trim-source/${jobId}`;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, videoFile]);
+  }, [open, videoFile, jobId]);
 
   const seek = (t) => { const v = videoRef.current; if (v && Number.isFinite(t)) { try { v.currentTime = t; setCur(t); } catch { /* iOS pre-metadata */ } } };
   const applyStart = (t) => { const v = clamp(round1(t), startMin, Math.min(startMax, endRef.current - GAP)); setStart(v); return v; };
@@ -147,7 +165,7 @@ export default function TrimClip({ clip, trim }) {
     }
   };
 
-  if (!videoFile) return null; // live session only
+  if (!videoFile && !available) return null; // neither a local file nor a retained server copy
 
   const len = Math.max(0, end - start);
   const pct = (t) => `${((t - winLo) / (winHi - winLo)) * 100}%`;
