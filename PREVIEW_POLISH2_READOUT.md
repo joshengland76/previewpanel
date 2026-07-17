@@ -161,16 +161,16 @@ stored/OOF mixed in).
 
 ## Git / deploy state
 
-- Commits: pending this readout's own commit — all Polish v2 changes are
+- Commit: `fb08e2c`, on `origin/main`. All Polish v2 changes are
   template/generator/worker-default/docs, no `server.js` changes this
   round, so nothing requires a Render deploy.
-- Pushed: pending — will push immediately after this file is committed.
+- Pushed: Y.
 - Deployed — Render (backend): N/A, no backend files changed this
   session.
 - Deployed — Vercel (frontend): N/A, no frontend files changed this
   session.
 - Research repo (`~/correlation-research`): Ops doc §1e edit, committed
-  alongside this readout's own commit sequence.
+  and pushed separately, see that repo's own commit.
 
 ## STOP
 
