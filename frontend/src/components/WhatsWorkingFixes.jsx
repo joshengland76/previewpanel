@@ -87,6 +87,17 @@ function AttribIcons({ kind, judges }) {
     </span>
   );
 }
+// Collapsed-row summary: up to and including the first sentence-ending
+// punctuation (., !, or ?) followed by whitespace or end-of-string. CSS
+// text-overflow:ellipsis (on the row's own span) handles "as much as fits,
+// with a …" from there -- no manual character-counting needed, and it
+// degrades gracefully at any viewport width.
+function firstSentence(text) {
+  const s = String(text || "");
+  const m = s.match(/^.*?[.!?](?=\s|$)/);
+  return m ? m[0] : s;
+}
+
 function Owl({ canon, size = 16 }) {
   const j = JUDGE_BY_CANON[canon];
   if (!j) return null;
@@ -190,31 +201,45 @@ export function WhatsWorkingFixes({ synthesis, duration }) {
                   const judges = attrib(t);
                   const count = judges.length;
                   const imp = t.kind === "fix" && IMPACT[t.impact];
+                  const hasTime = Number.isFinite(Number(t.t_seconds));
                   return (
-                    <div key={t.i} onMouseEnter={() => setActive(t.i)} onMouseLeave={() => setActive(null)} onClick={() => toggle(t.i)}
+                    <div key={t.i} onMouseEnter={() => setActive(t.i)} onMouseLeave={() => setActive(null)}
                       style={{ border: `1px solid ${on ? "#cdbfae" : B.lightBrown}`, background: on ? "#fff" : B.bg, borderRadius: 11,
-                        padding: "9px 11px", cursor: "pointer", transition: "background .15s, border-color .15s",
+                        overflow: "hidden", transition: "background .15s, border-color .15s",
                         boxShadow: on ? "0 2px 12px rgba(60,40,20,.06)" : "none" }}>
-                      <div style={{ fontSize: 12.5, lineHeight: 1.45, color: B.body }}>{t.text}</div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                        {Number.isFinite(Number(t.t_seconds)) && (
-                          <span style={{ fontSize: 12.5, fontWeight: 700, color: "#9C9281" }}>{fmt(t.t_seconds)}</span>
-                        )}
-                        {imp && <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: imp.c, background: imp.bg, padding: "2px 7px", borderRadius: 5 }}>{imp.label}</span>}
-                        {count > 0 && <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "#9C9281" }}>{isOpen ? "Hide" : `${count} ${count === 1 ? "judge" : "judges"}`}</span>}
-                        <AttribIcons kind={t.kind} judges={t.judges} />
-                      </div>
-                      {isOpen && count > 0 && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
-                          {judges.map((c) => {
-                            const txt = takeText(t, c);
-                            return (
-                              <div key={c} style={{ display: "flex", gap: 7, alignItems: "flex-start", fontSize: 12, lineHeight: 1.4, color: "#5c544a" }}>
-                                <Owl canon={c} size={16} />
-                                <span style={txt ? undefined : { fontStyle: "italic", color: "#9C9281" }}>{txt || "flagged this moment"}</span>
-                              </div>
-                            );
-                          })}
+                      {/* Collapsed to a single line: timestamp + as much of the
+                          first sentence as fits (CSS ellipsis) + the same
+                          down-arrow chevron the individual judge cards use. */}
+                      <button type="button" onClick={() => toggle(t.i)} aria-expanded={isOpen}
+                        style={{ width: "100%", textAlign: "left", background: "none", border: "none", cursor: "pointer",
+                          padding: "9px 11px", display: "flex", alignItems: "center", gap: 8, fontFamily: "inherit" }}>
+                        {hasTime && <span style={{ fontSize: 12.5, fontWeight: 700, color: "#9C9281", flexShrink: 0 }}>{fmt(t.t_seconds)}</span>}
+                        <span style={{ fontSize: 12.5, lineHeight: 1.3, color: B.body, flex: 1, minWidth: 0,
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{firstSentence(t.text)}</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9C9281" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"
+                          style={{ flexShrink: 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .25s" }}><path d="m6 9 6 6 6-6" /></svg>
+                      </button>
+                      {isOpen && (
+                        <div style={{ padding: "0 11px 11px" }}>
+                          <div style={{ fontSize: 12.5, lineHeight: 1.45, color: B.body }}>{t.text}</div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                            {imp && <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase", color: imp.c, background: imp.bg, padding: "2px 7px", borderRadius: 5 }}>{imp.label}</span>}
+                            {count > 0 && <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "#9C9281" }}>{count} {count === 1 ? "judge" : "judges"}</span>}
+                            <AttribIcons kind={t.kind} judges={t.judges} />
+                          </div>
+                          {count > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
+                              {judges.map((c) => {
+                                const txt = takeText(t, c);
+                                return (
+                                  <div key={c} style={{ display: "flex", gap: 7, alignItems: "flex-start", fontSize: 12, lineHeight: 1.4, color: "#5c544a" }}>
+                                    <Owl canon={c} size={16} />
+                                    <span style={txt ? undefined : { fontStyle: "italic", color: "#9C9281" }}>{txt || "flagged this moment"}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

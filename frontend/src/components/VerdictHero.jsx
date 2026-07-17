@@ -1,19 +1,24 @@
-import { useEffect, useRef, useState } from "react";
-import { B, JUDGES, ACTION } from "../brand.js";
+import { B, ACTION } from "../brand.js";
 import { MethodologyDropdown } from "./MethodologyModal.jsx";
 import { AutoFitText } from "./AutoFitText.jsx";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Part B — Verdict hero + sticky condensed verdict bar.
+// Part B — Verdict hero.
 //
 // Consumes the real synthesis contract from /api/status:
 //   .synthesis = { verdict:{headline_score,action,gist}, panel:{judges_present,
 //                  judges_missing}, ... }
-//   .results   = per-judge { status, data:{ overall, ... } }  (mini-scores,
-//                used only by the sticky bar now -- the hero's own judge
-//                mini-score row was removed, see below)
 //   .scoreDisplay = the capstone-v2 percentile payload (null if DISPLAY_SCORE
 //                is off, or not ready yet, or an older submission predates it)
+//
+// The condensed sticky bar that used to appear here once the hero scrolled
+// out of view was removed outright (not just fixed) -- it rendered the
+// pre-percentile-overhaul UI (raw "X/10 · Polish first" + per-judge 0-10
+// score pills), which had drifted out of sync with the hero it was meant to
+// condense and was surfacing as a confusing "old UI" flash while scrolling.
+// See git history for the sticky-bar implementation if it's ever revisited
+// -- any reintroduction should render the SAME percentile-based content the
+// hero itself shows, not the legacy judge-score gauge.
 //
 // The hero's main circle used to show the combined judge score (0-10), then
 // (a later revision) the niche percentile. Score display UI overhaul: it now
@@ -45,6 +50,27 @@ function percentileColor(p) {
   if (p >= 50) return ACTION.post.color;
   if (p >= 25) return ACTION.polish.color;
   return ACTION.rework.color;
+}
+
+// At overallAppPercentile >= 90 the gist's trailing "held back by" clause
+// (the negative half of its documented "[strength], but [weakness]"
+// structure -- synthesisSystemPrompt.txt RULE 3 / synthesisV25Addendum.txt)
+// reads as noise on an already-excellent video. The percentile comparison
+// runs after the gist is generated with no shared timing guarantee (separate
+// pipelines -- see runSynthesisForJob vs the shadow-scoring path in
+// server.js), so this trims the clause at render time instead of re-prompting
+// the model. Splits on the LAST comma-introduced contrast conjunction, which
+// is how the gist always introduces that clause in practice (see the
+// addendum's own calibration example); if none is found the gist is left
+// untouched rather than risk mangling a sentence that doesn't fit the pattern.
+function trimHeldBackClause(gist) {
+  const s = String(gist || "");
+  const re = /,\s*(?:but|though|although|while|yet|however)\b/gi;
+  let last = null, m;
+  while ((m = re.exec(s))) last = m;
+  if (!last) return s;
+  const head = s.slice(0, last.index).trimEnd();
+  return /[.!?]$/.test(head) ? head : `${head}.`;
 }
 
 // Secondary percentile stat (niche, personal) -- score display UI overhaul:
@@ -87,7 +113,7 @@ function Gauge({ value, max, unitLabel, color, size = 132 }) {
   );
 }
 
-function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform }) {
+function VerdictHero({ synthesis, scoreDisplay, platform }) {
   const verdict = synthesis.verdict || {};
   const act = actionFor(verdict);
   const present = synthesis.panel?.judges_present || [];
@@ -96,15 +122,18 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
 
   const hasPercentile = !!(scoreDisplay && scoreDisplay.showPercentile);
   const isAbstain = !!(scoreDisplay && !scoreDisplay.showPercentile);
+  const heroGist = hasPercentile && scoreDisplay.overallAppPercentile >= 90
+    ? trimHeldBackClause(verdict.gist)
+    : verdict.gist;
 
   return (
-    <div ref={heroRef} style={{
+    <div style={{
       background: "#fff", border: `1px solid ${B.border}`, borderRadius: 20,
       boxShadow: "0 1px 2px rgba(60,40,20,.04), 0 6px 20px rgba(60,40,20,.05)",
       padding: "24px 20px 18px", textAlign: "center", position: "relative", overflow: "hidden",
     }}>
       <p style={{ fontSize: 16, lineHeight: 1.5, color: B.body, fontWeight: 500,
-        margin: "0 auto 16px", maxWidth: "34ch" }}>{verdict.gist}</p>
+        margin: "0 auto 16px", maxWidth: "34ch" }}>{heroGist}</p>
 
       {!isAbstain && (
         <div style={{ width: 132, height: 132, margin: "2px auto 4px" }}>
@@ -165,82 +194,12 @@ function VerdictHero({ synthesis, scoreDisplay, onJumpToJudge, heroRef, platform
   );
 }
 
-// ── Sticky condensed verdict bar — revealed once the hero scrolls out of view.
-// position: fixed (not sticky/maxHeight) and slid via transform/opacity only --
-// deliberate. This bar and the hero it condenses are siblings (see VerdictPanel
-// below), and the hero's own IntersectionObserver is what drives `visible`. An
-// earlier version toggled this bar's reserved layout height (position: sticky
-// + maxHeight 0->60px), which shifted the hero's position on screen every time
-// the bar showed/hid -- right at the scroll depth where the hero's bottom edge
-// sits near the observer's threshold, that shift was enough to flip
-// isIntersecting back, causing show/hide/show/hide to oscillate (visible as a
-// rapid scroll "wobble" with this bar flickering in and out). Fixed positioning
-// removes the bar from document flow entirely, so it can never move the hero
-// or re-trigger the observer, at the cost of needing to replicate the page's
-// own maxWidth/padding here since it's no longer inside that flow. ──
-function StickyVerdictBar({ synthesis, results, visible, onJumpToJudge }) {
-  const verdict = synthesis.verdict || {};
-  const act = actionFor(verdict);
-  return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 40, background: B.bg,
-      opacity: visible ? 1 : 0, transform: visible ? "translateY(0)" : "translateY(-100%)",
-      pointerEvents: visible ? "auto" : "none",
-      transition: "transform .3s ease, opacity .25s ease",
-      borderBottom: `1px solid ${B.border}` }}>
-      <div style={{ maxWidth: 740, margin: "0 auto", padding: "10px 20px",
-        display: "flex", alignItems: "center", gap: 9 }}>
-        <span style={{ width: 8, height: 8, borderRadius: "50%", background: act.color, flex: "none" }} />
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: B.body, whiteSpace: "nowrap" }}>
-          <b style={{ fontFamily: "Montserrat, sans-serif", fontSize: 14, fontWeight: 800 }}>{verdict.headline_score}</b>
-          /10 · {act.label}
-        </span>
-        <span style={{ marginLeft: "auto", display: "flex", gap: 5 }}>
-          {JUDGES.filter((j) => results && results[j.id]).map((j) => {
-            const r = results?.[j.id];
-            const score = r && r.status === "done" && r.data && r.data.overall != null ? r.data.overall : null;
-            return (
-              <button key={j.id} type="button" onClick={() => onJumpToJudge && onJumpToJudge(j.id)}
-                style={{ display: "flex", alignItems: "center", gap: 3, background: "#fff",
-                  border: `1px solid ${B.border}`, borderRadius: 999, padding: "2px 8px 2px 4px",
-                  cursor: "pointer", fontFamily: "Montserrat, sans-serif", fontWeight: 800, fontSize: 12.5,
-                  color: score != null ? j.color : B.grey, opacity: score != null ? 1 : 0.55 }}>
-                <img src={j.avatar} alt={j.name} style={{ width: 16, height: 16, objectFit: "contain",
-                  transform: j.avatarScale ? `scale(${j.avatarScale})` : undefined }} />
-                {score != null ? score : "—"}
-              </button>
-            );
-          })}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// Combined section: sticky bar + hero, with the scroll-observer wiring. Render
-// only when synthesis is ready; otherwise the parent shows the raw judge view.
-export function VerdictPanel({ synthesis, results, scoreDisplay, onJumpToJudge, platform }) {
-  const heroRef = useRef(null);
-  const [scrolled, setScrolled] = useState(false);
-
-  useEffect(() => {
-    const el = heroRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(
-      ([entry]) => setScrolled(!entry.isIntersecting),
-      { threshold: 0, rootMargin: "-64px 0px 0px 0px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
-
+// Render only when synthesis is ready; otherwise the parent shows the raw
+// judge view.
+export function VerdictPanel({ synthesis, scoreDisplay, platform }) {
   if (!synthesis || !synthesis.verdict) return null;
 
-  return (
-    <div>
-      <StickyVerdictBar synthesis={synthesis} results={results} visible={scrolled} onJumpToJudge={onJumpToJudge} />
-      <VerdictHero synthesis={synthesis} scoreDisplay={scoreDisplay} onJumpToJudge={onJumpToJudge} heroRef={heroRef} platform={platform} />
-    </div>
-  );
+  return <VerdictHero synthesis={synthesis} scoreDisplay={scoreDisplay} platform={platform} />;
 }
 
 export default VerdictPanel;

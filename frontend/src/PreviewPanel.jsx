@@ -72,7 +72,6 @@ const PLATFORMS = [
 
 // ── Issue #9: Local history helpers ──────────────────────────
 const HISTORY_KEY = "pp_history_v1";
-const MAX_HISTORY = 10;
 
 function loadHistory() {
   try {
@@ -80,12 +79,22 @@ function loadHistory() {
   } catch { return []; }
 }
 
+// Unlimited by count, but localStorage has a hard per-origin byte quota --
+// with no cap, a long enough history (each entry carries a thumbnail data
+// URL) can eventually overflow it. Rather than truncating up front or
+// silently dropping the save on a quota error, drop the oldest entries one
+// at a time and retry until it fits.
 function saveToHistory(entry) {
-  try {
-    const history = loadHistory();
-    history.unshift(entry);
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
-  } catch {}
+  const history = loadHistory();
+  history.unshift(entry);
+  while (history.length) {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+      return;
+    } catch {
+      history.pop();
+    }
+  }
 }
 
 // ── Phase C, Task 1: identity-lite ────────────────────────────
@@ -528,15 +537,6 @@ export default function PreviewPanel() {
   const toggleJudgeCard = (id) => setOpenJudgeIds(prev => {
     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
   });
-  // verdict mini-scores / sticky chips jump to + expand the matching judge card.
-  const jumpToJudge = (id) => {
-    setOpenJudgeIds(prev => new Set(prev).add(id));
-    setTimeout(() => {
-      const el = document.getElementById(`judge-${id}`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
-  };
-
   useEffect(() => {
     if (!jobId) return;
     subscribeForPush(jobId);
@@ -1133,7 +1133,7 @@ export default function PreviewPanel() {
             {showHistory && (
               <div style={{
                 border: `1.5px solid ${B.border}`, borderRadius: "14px",
-                background: "#fff", marginBottom: "16px",
+                background: "#fff", marginTop: "9px", marginBottom: "16px",
                 animation: "pp-fade 0.2s ease",
               }}>
                 <div style={{
@@ -1147,6 +1147,9 @@ export default function PreviewPanel() {
               </div>
             )}
 
+            {/* Order form (upload through CTA) — hidden while History is open,
+                so it doesn't sit stacked below the history list. */}
+            {!showHistory && <>
             {/* 1 — Video upload */}
             <div className="pp-section-gap" style={{ marginBottom: "10px" }}>
               <div style={{ fontSize: "12px", fontWeight: "700", color: "#aaa", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "6px" }}>Your Video</div>
@@ -1487,6 +1490,7 @@ export default function PreviewPanel() {
                   style={{ background: "transparent", border: "none", color: "#bbb", cursor: "pointer", fontSize: "18px", padding: "0 4px", lineHeight: 1 }}>×</button>
               </div>
             )}
+            </>}
           </div>
         )}
 
@@ -1637,7 +1641,7 @@ export default function PreviewPanel() {
                 + signal bars entirely. */}
             {isFinished && synthesisStatus === "ready" && synthesis && (
               <>
-                <VerdictPanel synthesis={synthesis} results={judgeResults} scoreDisplay={scoreDisplay} onJumpToJudge={jumpToJudge} platform={platform} />
+                <VerdictPanel synthesis={synthesis} scoreDisplay={scoreDisplay} platform={platform} />
                 {showTiktokNudge && (
                   <div style={{
                     display: "flex", alignItems: "center", gap: 10,
