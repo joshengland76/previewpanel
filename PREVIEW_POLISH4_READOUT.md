@@ -131,10 +131,8 @@ Ops doc §1e one-liner added.
 
 ## Git / deploy state
 
-- Commit: pending — filled in after this file's own commit, matching the
-  established fill-in-after convention (not left as a placeholder in the
-  version that ships).
-- Pushed: pending.
+- Commit: `e6e1d4d`, on `origin/main`.
+- Pushed: Y.
 - Deployed — Render (backend): N/A, no `backend/` files changed this
   round (template + generator + docs only).
 - Deployed — Vercel (frontend): N/A, no frontend files changed.
