@@ -2995,7 +2995,20 @@ async function runShadowScoringForJob(jobId) {
     if ((job.source === "validation" || job.source === "prospect_report") && job.postedVideoId && shadowResult && pgPool) {
       const rawScores = Object.values(scores).filter((v) => typeof v === "number");
       const rawAvg = rawScores.length ? parseFloat((rawScores.reduce((a, b) => a + b, 0) / rawScores.length).toFixed(2)) : null;
-      queryRW(
+      // Bug fix (found via the prospect-report dress rehearsal, real
+      // production traffic): this UPDATE was fire-and-forget (no await),
+      // so runShadowScoringForJob could return -- resolving
+      // job.shadowScoringPromise -- before this write actually committed.
+      // /api/validation/ingest awaits shadowScoringPromise specifically so
+      // its response's posted_videos SELECT sees final data (see the
+      // comment at that await site); without awaiting here too, that SELECT
+      // could still race ahead and read the pre-update row (status=
+      // 'downloaded', y_pred=null) even though the write lands correctly
+      // moments later. Data was never lost -- shadow_scores itself is
+      // written synchronously earlier in this same function -- but the
+      // synchronous HTTP response could report stale posted_videos state to
+      // the caller. Awaiting closes that window.
+      await queryRW(
         `UPDATE posted_videos SET y_pred = $1, avg_score = $2, prompt_version = $3, pegasus_model = $4,
            status = CASE WHEN matched_submission_id IS NOT NULL THEN 'matched' ELSE 'scored' END
          WHERE id = $5`,
