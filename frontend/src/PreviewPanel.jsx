@@ -258,7 +258,7 @@ function InviteGateScreen({ userId, onBound }) {
         setWorking(false);
         return;
       }
-      onBound();
+      onBound(body);
     } catch {
       setErrorMsg("Couldn't reach the server — check your connection and try again.");
       setWorking(false);
@@ -278,7 +278,7 @@ function InviteGateScreen({ userId, onBound }) {
         setWorking(false);
         return;
       }
-      onBound();
+      onBound(body);
     } catch {
       setErrorMsg("Couldn't reach the server — check your connection and try again.");
       setWorking(false);
@@ -373,10 +373,20 @@ function InviteGateScreen({ userId, onBound }) {
 }
 
 // ── Issue #9: History panel ───────────────────────────────────
-function HistoryPanel({ history, onRestore, onClose }) {
+function HistoryPanel({ history, onRestore, onClose, hasTrackRecord, onSwitchToTrackRecord }) {
+  // Beta UX polish v2, Task 3d -- when there's somewhere to send them
+  // (claimed/graded rows exist in Track Record even though Previews,
+  // this identity's own app runs, is genuinely empty), the cross-link
+  // line replaces the plain empty message rather than sitting beside it.
   if (!history.length) return (
     <div style={{ padding: "24px", textAlign: "center", color: "#aaa", fontSize: "13px" }}>
-      No previous results yet.
+      {hasTrackRecord ? (
+        <span onClick={onSwitchToTrackRecord} style={{ color: B.action, fontWeight: "700", cursor: "pointer", textDecoration: "underline" }}>
+          No previews yet — your Track Record is here →
+        </span>
+      ) : (
+        "No previous results yet."
+      )}
     </div>
   );
   return (
@@ -433,6 +443,7 @@ function HistoryPanel({ history, onRestore, onClose }) {
 // share the same two-section layout below, differing only in what data is
 // available to show in each.
 const TRACK_RECORD_LAST_SEEN_KEY = "pp_track_record_last_seen";
+const TRACK_RECORD_BANNER_SEEN_KEY = "pp_track_record_banner_seen"; // Beta UX polish v2, Task 3c
 
 function trFormatDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -801,6 +812,12 @@ export default function PreviewPanel() {
   const [showNotifPrimer, setShowNotifPrimer] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [historyTab, setHistoryTab] = useState("previews"); // Track Record, Task 3 -- "Previews | Track Record" segmented control
+  // Beta UX polish v2, Task 3c -- day-one claim banner. Shown at most once
+  // ever per identity (localStorage TRACK_RECORD_BANNER_SEEN_KEY, set the
+  // moment it's first shown, not just on dismiss -- "the banner never
+  // returns after first view or dismiss").
+  const [showClaimBanner, setShowClaimBanner] = useState(false);
+  const [claimBannerCount, setClaimBannerCount] = useState(0);
   const [history, setHistory] = useState(loadHistory);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadProgressIndeterminate, setUploadProgressIndeterminate] = useState(false);
@@ -899,22 +916,30 @@ export default function PreviewPanel() {
   };
   useEffect(() => { refreshInviteStatus(); }, [userId]);
 
-  // Track Record -- unseen-graded badge on the segmented control (Task 3).
-  // A lightweight, independent fetch of the same endpoint TrackRecordPanel
+  // Track Record -- unseen-graded badge on the segmented control (Task 3),
+  // and (Beta UX polish v2, Task 3) the always-on History button's
+  // populated-state signal + the smart-default-segment decision. A
+  // lightweight, independent fetch of the same endpoint TrackRecordPanel
   // itself calls when opened -- cheap and idempotent (no scoring spend, see
   // gradeTrackRecordForUser), so the small duplication when the tab is
   // later opened for real is an acceptable v1 tradeoff against lifting this
   // fetch's state all the way down into the panel component.
-  const [trackRecordUnseen, setTrackRecordUnseen] = useState(0);
-  useEffect(() => {
-    if (!userId) return;
+  const [trackRecordSummary, setTrackRecordSummary] = useState(null);
+  const refreshTrackRecordSummary = () => {
+    if (!userId) return Promise.resolve(null);
     const lastSeenAt = localStorage.getItem(TRACK_RECORD_LAST_SEEN_KEY) || "";
     const qs = new URLSearchParams({ userId, ...(lastSeenAt ? { lastSeenAt } : {}) });
-    fetch(`${API_BASE}/api/track-record?${qs}`)
+    return fetch(`${API_BASE}/api/track-record?${qs}`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((json) => { if (json?.unseenGradedCount) setTrackRecordUnseen(json.unseenGradedCount); })
-      .catch(() => {});
-  }, [userId]);
+      .then((json) => { if (json) setTrackRecordSummary(json); return json; })
+      .catch(() => null);
+  };
+  useEffect(() => { refreshTrackRecordSummary(); }, [userId]);
+  // "Populated" = there's real Track Record content beyond the bare
+  // connect-a-handle/no-posts-yet states -- drives both the History
+  // button's badge (3a) and which segment opening History defaults to (3b).
+  const trackRecordHasContent = trackRecordSummary
+    && trackRecordSummary.state !== "no_handle" && trackRecordSummary.state !== "no_posts_yet";
 
   // Re-check after the connect modal closes -- catches a handle the user
   // just added, so an already-shown nudge won't outlive a real connection.
@@ -1493,7 +1518,28 @@ export default function PreviewPanel() {
         <div style={{ position: "fixed", inset: 0, background: B.bg, zIndex: 200 }} />
       )}
       {inviteStatus && !inviteStatus.bound && (
-        <InviteGateScreen userId={userId} onBound={() => { refreshInviteStatus(); refreshTiktokConnected(); }} />
+        <InviteGateScreen userId={userId} onBound={(body) => {
+          refreshInviteStatus(); refreshTiktokConnected();
+          // Invite code UX -- the gate overlay doesn't lock background
+          // scroll, so whatever scroll position was left over (e.g. from
+          // a restored session) is still there once it closes. Land the
+          // revealed submit screen at the top every time, not wherever
+          // the page happened to be scrolled to.
+          window.scrollTo(0, 0);
+          // Beta UX polish v2, Task 3c -- a "that's me" claim that attached
+          // >0 rows gets a one-time day-one spotlight banner. Refetch
+          // Track Record now (the redeem call already ran grading
+          // server-side, via the endpoint's own idempotent pass on this
+          // next load) so the banner's count is real, not stale.
+          if (body?.claimed && body.claim?.claimedPostedVideos > 0 && !localStorage.getItem(TRACK_RECORD_BANNER_SEEN_KEY)) {
+            localStorage.setItem(TRACK_RECORD_BANNER_SEEN_KEY, "true");
+            refreshTrackRecordSummary().then((json) => {
+              if (json) { setClaimBannerCount(json.gradedCallCount); setShowClaimBanner(true); }
+            });
+          } else {
+            refreshTrackRecordSummary();
+          }
+        }} />
       )}
 
       {/* Issue #4: Notification primer modal */}
@@ -1535,18 +1581,52 @@ export default function PreviewPanel() {
                   that dead space instead of stacking more space on top of it. */}
               <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto -18px" }} />
-              {/* Issue #9: History button */}
-              {history.length > 0 && (
-                <button onClick={() => setShowHistory(v => !v)} style={{
-                  position: "absolute", top: "10px", right: "0",
-                  background: "#fff", border: `1.5px solid ${B.border}`,
-                  borderRadius: "8px", padding: "6px 10px",
-                  fontSize: "11px", fontWeight: "700", color: B.brown,
-                  cursor: "pointer", fontFamily: "Montserrat, sans-serif",
-                }}>
-                  📋 History ({history.length})
-                </button>
-              )}
+              {/* Issue #9: History button. Beta UX polish v2, Task 3a --
+                  ALWAYS rendered now, even at zero local previews (every
+                  pre-linked invitee starts here) -- Track Record is
+                  otherwise completely unreachable for them. At zero
+                  previews the label drops the misleading "(0)" and
+                  instead signals a populated Track Record, if any:
+                  the unseen-graded count when there's something new,
+                  else the plain graded-call count when it's already been
+                  seen. Task 3b: opening History (not closing it) picks
+                  the segment -- Track Record when there are no local
+                  previews AND Track Record has real content, Previews
+                  otherwise (unchanged regression for anyone WITH local
+                  previews). */}
+              <button onClick={() => {
+                if (!showHistory) {
+                  setHistoryTab(history.length === 0 && trackRecordHasContent ? "trackrecord" : "previews");
+                }
+                setShowHistory(v => !v);
+              }} style={{
+                position: "absolute", top: "10px", right: "0",
+                background: "#fff", border: `1.5px solid ${B.border}`,
+                borderRadius: "8px", padding: "6px 10px",
+                fontSize: "11px", fontWeight: "700", color: B.brown,
+                cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+              }}>
+                {history.length > 0 ? (
+                  `📋 History (${history.length})`
+                ) : (
+                  <>
+                    📋 History
+                    {trackRecordHasContent && trackRecordSummary.unseenGradedCount > 0 && (
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        background: "#E53935", color: "#fff", borderRadius: "999px",
+                        fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+                        padding: "0 3px", marginLeft: "5px",
+                      }}>
+                        {trackRecordSummary.unseenGradedCount}
+                      </span>
+                    )}
+                    {trackRecordHasContent && trackRecordSummary.unseenGradedCount === 0 && trackRecordSummary.gradedCallCount > 0 && (
+                      <span style={{ color: B.grey, fontWeight: "600" }}> · {trackRecordSummary.gradedCallCount} graded</span>
+                    )}
+                  </>
+                )}
+              </button>
               {/* Phase C, Task 1: Connect-accounts trigger */}
               <div style={{ position: "absolute", top: "10px", left: "0" }}>
                 <AccountSettingsTrigger userId={userId} open={showAccountSettings} onOpenChange={handleAccountSettingsOpenChange} />
@@ -1558,10 +1638,41 @@ export default function PreviewPanel() {
               </div>
             )}
 
+            {/* Beta UX polish v2, Task 3c -- day-one claim banner. The
+                permanent path is the always-on History button (3a); this
+                is the one-time spotlight so a fresh "that's me" claim
+                doesn't rely on the tester noticing the button on their
+                own. Shown at most once ever (localStorage flag set the
+                moment it's first shown -- see the onBound handler above). */}
+            {showClaimBanner && (
+              <div style={{
+                background: B.lightBrown, border: `1.5px solid ${VALENCE.split}`, borderRadius: "12px",
+                padding: "12px 14px", marginTop: "12px",
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px",
+              }}>
+                <div
+                  onClick={() => { setShowHistory(true); setHistoryTab("trackrecord"); setShowClaimBanner(false); }}
+                  style={{ fontSize: "13px", fontWeight: "700", color: B.black, cursor: "pointer", lineHeight: "1.4" }}
+                >
+                  Your track record is ready — {claimBannerCount} graded call{claimBannerCount === 1 ? "" : "s"} ·{" "}
+                  <span style={{ color: B.action, textDecoration: "underline" }}>View it</span>
+                </div>
+                <button onClick={() => setShowClaimBanner(false)} style={{
+                  background: "none", border: "none", fontSize: "16px", color: "#aaa",
+                  cursor: "pointer", flexShrink: 0, lineHeight: 1,
+                }}>×</button>
+              </div>
+            )}
+
             {/* History panel -- Track Record, Task 3: "Previews | Track Record"
                 segmented control. Previews = the existing localStorage
                 history (unchanged); Track Record = the new server-backed
-                view (TrackRecordPanel). */}
+                view (TrackRecordPanel). Beta UX polish v2, Task 3e --
+                boundary: Previews shows ONLY this identity's own app
+                preview runs (localStorage, client-side); posted-video
+                history (prospect/study-history/real day-30 outcomes)
+                lives ENTIRELY in Track Record and is never mixed into
+                Previews, even when both are non-empty for the same user. */}
             {showHistory && (
               <div style={{
                 border: `1.5px solid ${B.border}`, borderRadius: "14px",
@@ -1576,7 +1687,13 @@ export default function PreviewPanel() {
                     {[["previews", "Previews"], ["trackrecord", "Track Record"]].map(([id, label]) => (
                       <button key={id} onClick={() => {
                         setHistoryTab(id);
-                        if (id === "trackrecord") setTrackRecordUnseen(0); // opened it -- TrackRecordPanel stamps last_seen_at itself
+                        // opened it -- TrackRecordPanel stamps last_seen_at itself; clear the
+                        // outer summary's count optimistically so this button/badge and the
+                        // always-on History button (3a) don't show a stale unseen count
+                        // until the next full refreshTrackRecordSummary() call.
+                        if (id === "trackrecord" && trackRecordSummary) {
+                          setTrackRecordSummary({ ...trackRecordSummary, unseenGradedCount: 0 });
+                        }
                       }} style={{
                         border: "none", borderRadius: "7px", padding: "7px 12px",
                         fontSize: "12px", fontWeight: "700", cursor: "pointer",
@@ -1587,14 +1704,14 @@ export default function PreviewPanel() {
                         position: "relative",
                       }}>
                         {label}
-                        {id === "trackrecord" && trackRecordUnseen > 0 && (
+                        {id === "trackrecord" && trackRecordSummary?.unseenGradedCount > 0 && (
                           <span style={{
                             position: "absolute", top: "-4px", right: "-4px",
                             background: "#E53935", color: "#fff", borderRadius: "999px",
                             fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
                             display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px",
                           }}>
-                            {trackRecordUnseen}
+                            {trackRecordSummary.unseenGradedCount}
                           </span>
                         )}
                       </button>
@@ -1603,7 +1720,8 @@ export default function PreviewPanel() {
                   <button onClick={() => setShowHistory(false)} style={{ background: "none", border: "none", fontSize: "18px", color: "#aaa", cursor: "pointer" }}>×</button>
                 </div>
                 {historyTab === "previews"
-                  ? <HistoryPanel history={history} onRestore={restoreFromHistory} onClose={() => setShowHistory(false)} />
+                  ? <HistoryPanel history={history} onRestore={restoreFromHistory} onClose={() => setShowHistory(false)}
+                      hasTrackRecord={trackRecordHasContent} onSwitchToTrackRecord={() => setHistoryTab("trackrecord")} />
                   : <TrackRecordPanel userId={userId} onConnectClick={() => setShowAccountSettings(true)} />
                 }
               </div>

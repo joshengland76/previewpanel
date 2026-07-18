@@ -8,9 +8,10 @@ import { B } from "../brand.js";
 // it's the one that actually feeds the prediction-vs-real-outcome
 // comparison this phase. Instagram/YouTube are stored for a future
 // platform validation pass -- no scanning code exists for them yet.
-// Bio-code verification is generated/displayed/stored here, but the actual
-// verification CHECK (confirming the code really is in the user's bio)
-// stays a dormant stub -- nothing reads real bio content in this pass.
+// Bio-code verification: the server still generates/stores a code
+// (users.bio_code) but it's no longer surfaced anywhere in this UI --
+// Beta UX polish v2, Task 2: pre-linked invite codes made it redundant
+// for the beta (see generateBioCode()'s own comment in server.js).
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -158,18 +159,6 @@ function AccountSettingsModal({ userId, onClose }) {
             >
               {saving ? "Saving…" : connected ? "Update" : "Connect"}
             </button>
-
-            {connected?.bio_code && (
-              <div style={{
-                marginTop: 16, padding: "12px 14px", background: B.lightBrown,
-                borderRadius: 12, fontSize: 12.5, color: B.body, lineHeight: 1.5,
-              }}>
-                Your verification code: <b style={{ fontFamily: "monospace", fontSize: 13 }}>{connected.bio_code}</b>
-                <div style={{ marginTop: 4, color: B.grey }}>
-                  We'll ask you to add this to your TikTok bio in a future update — nothing to do with it yet.
-                </div>
-              </div>
-            )}
           </>
         )}
       </div>

@@ -65,7 +65,12 @@ def normalize_handle(raw):
 
 
 def cmd_mint(conn, args):
-    code = args.code or gen_code()
+    # Invite code UX -- codes are case-insensitive end to end; canonical
+    # storage is uppercase (gen_code()'s own alphabet is already
+    # uppercase-only, so this only matters for an operator-supplied
+    # --code). server.js's redeem endpoint uppercases+trims the input
+    # before comparing, so a code minted any-case still matches.
+    code = (args.code or gen_code()).strip().upper()
     tiktok = normalize_handle(args.handle)
     instagram = normalize_handle(args.instagram)
     youtube = normalize_handle(args.youtube)

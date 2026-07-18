@@ -3391,10 +3391,17 @@ function normalizeHandle(raw, platform) {
 }
 
 function generateBioCode() {
-  // Short, human-typeable code for a bio-verification flow. Collision risk
-  // is negligible at this user scale and non-fatal even if it happened
-  // (verification itself is a dormant stub -- nothing currently checks
-  // uniqueness of this code against real bio content).
+  // Beta UX polish v2, Task 2 -- DORMANT. Pre-linked invite codes
+  // (beta gate follow-up) made bio verification redundant for the beta:
+  // an invite already ties a user_id to a known, real handle at
+  // redemption time, so there's no unverified-handle gap left for a bio
+  // code to close. Still generated/stored (users.bio_code) so the column
+  // isn't a migration hazard later, but no longer surfaced anywhere in
+  // the UI (Accounts screen block removed) -- revisit if/when the
+  // auth/paid build needs to verify a handle with no pre-linked code
+  // behind it. Collision risk is negligible at this user scale and
+  // non-fatal even if it happened (nothing checks uniqueness of this
+  // code against real bio content -- it was never live-verified either).
   return crypto.randomBytes(4).toString("hex").toUpperCase();
 }
 
@@ -3668,7 +3675,10 @@ app.get("/api/invite/status", async (req, res) => {
 app.post("/api/invite/redeem", async (req, res) => {
   if (!pgPool) return res.status(503).json({ error: "Database not available" });
   const userId = (req.body.userId || "").toString().trim();
-  const code = (req.body.code || "").toString().trim();
+  // Invite code UX -- case-insensitive end to end. Canonical storage is
+  // uppercase (beta_admin.py mint uppercases too); uppercasing the input
+  // here means a code typed/pasted in any case still matches.
+  const code = (req.body.code || "").toString().trim().toUpperCase();
   const claimIdentity = typeof req.body.claimIdentity === "boolean" ? req.body.claimIdentity : null;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
   if (!code) return res.status(400).json({ error: "Enter an invite code." });
