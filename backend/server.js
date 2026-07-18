@@ -42,6 +42,7 @@ import { getAxisPools, decileFor, invalidateAxisPoolCache } from "./scoring/axis
 import { buildScoringFeatures } from "./scoring/buildFeatures.js";
 import { recordShadowScore } from "./scoring/shadowScore.js";
 import { getScoreDisplay } from "./scoring/scoreDisplay.js";
+import { getPools, midrankPercentile } from "./scoring/percentilePools.js";
 
 const { Pool } = pg;
 
@@ -739,6 +740,29 @@ async function initDb() {
     // render time is wasteful and fragile -- an aged video can go
     // private/deleted between ingest and a later re-render).
     await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS caption TEXT`);
+    // Track Record, Task 1 -- grading engine columns. Verdicts are FROZEN
+    // once written (verdict IS NOT NULL is this row's own idempotency guard
+    // everywhere below) -- a row graded once never gets regraded, even if
+    // the creator's baseline or the overall pool later drifts. That's a
+    // deliberate design choice, not a gap: a "call" is a claim frozen at a
+    // specific moment, and letting it silently reinterpret itself later
+    // would make "called it: 7 of 9" meaningless (which 7 changes over
+    // time). overall_percentile_at_grading is likewise frozen at first
+    // grading -- see gradeTrackRecordForUser's own comment for why this
+    // is computed at GRADING time (using the live percentilePools.js
+    // overall window as it exists then) rather than reconstructed at the
+    // row's original SCORING time: the rolling 1000-row window has already
+    // evicted whatever it looked like back then, so "at scoring time" is
+    // unrecoverable for any row old enough to have an outcome yet -- using
+    // the window at first-grading is the closest available substitute, and
+    // freezing it immediately afterward gives the same never-changes-again
+    // guarantee call_type/verdict already have.
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS call_type TEXT`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS times_typical DOUBLE PRECISION`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS verdict TEXT`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS graded_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS baseline_n_at_grading INTEGER`);
+    await client.query(`ALTER TABLE posted_videos ADD COLUMN IF NOT EXISTS overall_percentile_at_grading DOUBLE PRECISION`);
     // is_posted_video is the load-bearing exclusion flag for percentilePools
     // and personal-history queries (see below) -- posted-video validation
     // rescores must never pollute either pool. source is kept alongside it
@@ -3480,6 +3504,94 @@ async function claimHandleHistory(userId, handle) {
   return { claimedPostedVideos: claimedIds.length, claimedShadowScores: shadowClaimed, skipped };
 }
 
+// ── Track Record — grading engine (Task 1) ────────────────────────────────
+// Design constants -- single source, shared by the grading pass and the
+// /api/track-record endpoint below. Do not derive these differently
+// anywhere else.
+const CALL_STRONG_PCTILE = 70; // >= this overall percentile at grading time -> a "strong" call
+const CALL_WEAK_PCTILE = 30;   // <= this -> a "weak" call; the 30-70 middle is NO CALL (displayed, never graded as hit/miss)
+const BASELINE_MIN = 4;        // a creator needs >= this many collected outcomes before ANY of their rows can be graded
+const AGGREGATE_MIN = 4;       // >= this many graded (hit|miss, excluding no_call) calls before the record line shows
+
+// gradeTrackRecordForUser(userId) -- idempotent, safe to call on every tab
+// load (the /api/track-record call site below) and after the day-30
+// collector writes new outcomes. Only THIS user's own rows are touched.
+// verdict IS NOT NULL is each row's own permanent idempotency guard --
+// once graded, a row is never regraded, even if this same creator's
+// baseline or the overall pool later drifts. That's deliberate: a "call"
+// is a claim frozen at a specific moment, and letting it silently
+// reinterpret itself later would make "called it: 7 of 9" meaningless
+// (which 7 changes over time as the pool moves).
+//
+// No separate webhook/trigger is wired from collect_day30.py/worker.py --
+// "runs on tab load" already covers "and after the collector writes,"
+// since the next time this user opens the tab (which they will, to see
+// the very outcome the collector just wrote) naturally re-runs this pass
+// and picks it up. Adding a push path from the Python collector into this
+// endpoint would be a second trigger for the exact same effect.
+async function gradeTrackRecordForUser(userId) {
+  if (!pgPool || !userId) return;
+  try {
+    // Every one of this creator's collected outcomes -- this IS the
+    // baseline pool ("median WEC_rate of all their collected outcomes at
+    // that moment"), regardless of whether each individual row has been
+    // graded yet. An already-graded row's own outcome still counts toward
+    // a later row's baseline the same as it always did -- freezing a
+    // VERDICT doesn't remove that row's WEC_rate from the shared pool.
+    const { rows: outcomeRows } = await pgPool.query(
+      `SELECT id, day30_wec_rate, verdict FROM posted_videos
+       WHERE user_id = $1 AND status = 'day30_collected' AND day30_wec_rate IS NOT NULL
+         AND test_row IS NOT TRUE`,
+      [userId]
+    );
+    const baselineN = outcomeRows.length;
+    if (baselineN < BASELINE_MIN) return; // not enough data to grade ANYTHING yet -- "baseline forming" state
+
+    const sortedRates = outcomeRows.map((r) => r.day30_wec_rate).sort((a, b) => a - b);
+    const mid = Math.floor(sortedRates.length / 2);
+    const typical = sortedRates.length % 2 === 0
+      ? (sortedRates[mid - 1] + sortedRates[mid]) / 2
+      : sortedRates[mid];
+
+    const ungraded = outcomeRows.filter((r) => r.verdict == null);
+    if (ungraded.length === 0 || !(typical > 0)) return; // typical=0 -- degenerate creator baseline, nothing gradeable yet
+
+    // Same live overall window every other percentile display in the app
+    // reads (percentilePools.js, TTL-cached) -- a posted-video row was
+    // never itself a member of this pool (is_posted_video excludes it from
+    // fetchShadowRows), so no excludeKey/self-exclusion is needed the way
+    // scoreDisplay.js needs one for a live app submission ranking itself.
+    const pools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
+
+    for (const row of ungraded) {
+      const { rows: shadowRows } = await pgPool.query(
+        `SELECT prediction FROM shadow_scores WHERE posted_video_id = $1 AND prediction IS NOT NULL
+         ORDER BY created_at DESC LIMIT 1`,
+        [row.id]
+      );
+      const prediction = shadowRows[0]?.prediction;
+      if (prediction == null) continue; // judging never produced a usable prediction for this row -- can't grade it
+
+      const overallPercentile = midrankPercentile(prediction, pools.overall);
+      const callType = overallPercentile >= CALL_STRONG_PCTILE ? "strong"
+        : overallPercentile <= CALL_WEAK_PCTILE ? "weak" : "none";
+      const timesTypical = row.day30_wec_rate / typical;
+      const verdict = callType === "none" ? "no_call"
+        : callType === "strong" ? (timesTypical >= 1.0 ? "hit" : "miss")
+        : (timesTypical < 1.0 ? "hit" : "miss");
+
+      await queryRW(
+        `UPDATE posted_videos SET call_type = $1, times_typical = $2, verdict = $3, graded_at = now(),
+           baseline_n_at_grading = $4, overall_percentile_at_grading = $5
+         WHERE id = $6 AND verdict IS NULL`,
+        [callType, timesTypical, verdict, baselineN, overallPercentile, row.id]
+      );
+    }
+  } catch (err) {
+    console.error(`[track-record] grading failed for user_id=${userId}: ${err.message}`);
+  }
+}
+
 // ── Beta invite gate (public, unauthenticated -- same trust model as
 // /api/user/connect: the client's own persistent user_id is the only
 // identity here, there is no login/session system). ───────────────────────
@@ -3596,6 +3708,133 @@ app.post("/api/invite/redeem", async (req, res) => {
   } catch (err) {
     console.error(`[invite] redeem failed for user_id=${userId} code=${code}: ${err.message}`);
     res.status(500).json({ error: "Failed to redeem code" });
+  }
+});
+
+// GET /api/track-record?userId=X&lastSeenAt=<ISO> -- Track Record tab
+// (Task 2). Runs the grading pass for this user first (idempotent, see
+// gradeTrackRecordForUser), then reads back the now-current state. Optional
+// safety net: also re-runs claimHandleHistory for a connected handle on
+// every load, in case rows exist unclaimed for a user who connected via the
+// plain manual /api/user/connect path (no pre-linked invite code involved)
+// rather than the beta-gate confirm flow -- idempotent, cheap, so there's
+// no reason to skip it just because THIS user happened to connect a
+// different way.
+app.get("/api/track-record", async (req, res) => {
+  const userId = (req.query.userId || "").toString().trim();
+  const lastSeenAt = (req.query.lastSeenAt || "").toString().trim() || null;
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  if (!userId) return res.json({ state: "no_handle", handle: null });
+
+  try {
+    const { rows: userRows } = await pgPool.query(`SELECT tiktok_handle FROM users WHERE user_id = $1`, [userId]);
+    const handle = userRows[0]?.tiktok_handle || null;
+    if (!handle) return res.json({ state: "no_handle", handle: null });
+
+    // Optional safety net (Task 2) -- idempotent, see claimHandleHistory.
+    await claimHandleHistory(userId, handle);
+    // Idempotent grading pass -- see gradeTrackRecordForUser's own comment
+    // for why "runs on tab load" already covers "and after collector writes."
+    await gradeTrackRecordForUser(userId);
+
+    const { rows: allRows } = await pgPool.query(
+      `SELECT id, posted_at, caption, status, match_tier, day30_wec_rate, day30_views, day30_likes,
+              day30_comments, day30_shares, day30_saves, call_type, times_typical, verdict, graded_at,
+              baseline_n_at_grading, overall_percentile_at_grading
+       FROM posted_videos WHERE user_id = $1 AND test_row IS NOT TRUE ORDER BY posted_at DESC`,
+      [userId]
+    );
+    if (allRows.length === 0) return res.json({ state: "no_posts_yet", handle });
+
+    const collectedRows = allRows.filter((r) => r.status === "day30_collected" && r.day30_wec_rate != null);
+    const pendingRows = allRows.filter((r) => r.status === "scored" || r.status === "matched");
+
+    const snippet = (c) => (c ? (c.length > 90 ? c.slice(0, 90).trim() + "…" : c) : null);
+    const checkInDate = (postedAt) => new Date(new Date(postedAt).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    let pending = [];
+    if (pendingRows.length > 0) {
+      const pendingIds = pendingRows.map((r) => r.id);
+      const { rows: shadowRows } = await pgPool.query(
+        `SELECT posted_video_id, prediction FROM shadow_scores
+         WHERE posted_video_id = ANY($1::int[]) AND prediction IS NOT NULL
+         ORDER BY created_at DESC`,
+        [pendingIds]
+      );
+      const predictionByPostedVideoId = new Map();
+      for (const r of shadowRows) if (!predictionByPostedVideoId.has(r.posted_video_id)) predictionByPostedVideoId.set(r.posted_video_id, r.prediction);
+      const pools = pendingRows.some((r) => predictionByPostedVideoId.has(r.id)) ? await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows) : null;
+      pending = pendingRows.map((r) => {
+        const prediction = predictionByPostedVideoId.get(r.id);
+        return {
+          postedVideoId: r.id,
+          postedAt: r.posted_at,
+          captionSnippet: snippet(r.caption),
+          overallPercentile: prediction != null && pools ? midrankPercentile(prediction, pools.overall) : null,
+          checkInDate: checkInDate(r.posted_at),
+          previewed: r.match_tier != null && r.match_tier <= 2,
+        };
+      });
+    }
+
+    const graded = collectedRows.filter((r) => r.verdict != null).map((r) => ({
+      postedVideoId: r.id,
+      postedAt: r.posted_at,
+      captionSnippet: snippet(r.caption),
+      callType: r.call_type,
+      timesTypical: r.times_typical,
+      verdict: r.verdict,
+      overallPercentile: r.overall_percentile_at_grading,
+      gradedAt: r.graded_at,
+      previewed: r.match_tier != null && r.match_tier <= 2,
+    }));
+
+    const ungradedResolved = collectedRows.filter((r) => r.verdict == null).map((r) => ({
+      postedVideoId: r.id,
+      postedAt: r.posted_at,
+      captionSnippet: snippet(r.caption),
+      rawEngagement: {
+        views: r.day30_views, likes: r.day30_likes, comments: r.day30_comments,
+        shares: r.day30_shares, saves: r.day30_saves, wecRate: r.day30_wec_rate,
+      },
+      baselineN: collectedRows.length, // current count -- this row simply hasn't cleared BASELINE_MIN yet (or has no usable prediction)
+      previewed: r.match_tier != null && r.match_tier <= 2,
+    }));
+
+    const hitOrMiss = graded.filter((g) => g.verdict === "hit" || g.verdict === "miss");
+    let aggregates = null;
+    if (hitOrMiss.length >= AGGREGATE_MIN) {
+      const strong = graded.filter((g) => g.callType === "strong" && (g.verdict === "hit" || g.verdict === "miss"));
+      const weak = graded.filter((g) => g.callType === "weak" && (g.verdict === "hit" || g.verdict === "miss"));
+      const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b.timesTypical, 0) / arr.length : null;
+      aggregates = {
+        hits: hitOrMiss.filter((g) => g.verdict === "hit").length,
+        graded: hitOrMiss.length,
+        avgTimesTypicalStrong: avg(strong),
+        avgTimesTypicalWeak: avg(weak),
+      };
+    }
+
+    let unseenGradedCount = 0;
+    if (lastSeenAt) {
+      const cutoff = new Date(lastSeenAt);
+      unseenGradedCount = graded.filter((g) => g.gradedAt && new Date(g.gradedAt) > cutoff).length;
+    } else {
+      unseenGradedCount = graded.length; // never opened the tab before -- every graded row is "unseen"
+    }
+
+    const state = collectedRows.length === 0 ? "pending_only"
+      : collectedRows.length < BASELINE_MIN ? "baseline_forming"
+      : "active";
+
+    res.json({
+      state, handle, pending, graded, ungradedResolved, aggregates,
+      gradedCallCount: hitOrMiss.length, // hit|miss count regardless of the AGGREGATE_MIN gate -- feeds the sub-threshold "N calls on the books" copy
+      unseenGradedCount, baselineMin: BASELINE_MIN, aggregateMin: AGGREGATE_MIN,
+    });
+  } catch (err) {
+    console.error(`[track-record] fetch failed for user_id=${userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to load track record" });
   }
 });
 

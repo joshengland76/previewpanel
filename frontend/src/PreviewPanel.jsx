@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import TikTokLogo from "./components/TikTokLogo";
 import InstagramLogo from "./components/InstagramLogo";
 import YouTubeLogo from "./components/YouTubeLogo";
-import { B, JUDGES } from "./brand.js";
+import { B, JUDGES, VALENCE } from "./brand.js";
 import { VerdictPanel } from "./components/VerdictHero.jsx";
 import { WhatsWorkingFixes } from "./components/WhatsWorkingFixes.jsx";
 import { DisagreementCard } from "./components/DisagreementCard.jsx";
@@ -425,6 +425,226 @@ function HistoryPanel({ history, onRestore, onClose }) {
   );
 }
 
+// ── Track Record tab — the Performance Preview, live in the app ────────────
+// Server does the grading (see server.js's gradeTrackRecordForUser +
+// GET /api/track-record); this component is purely display. State enum
+// (no_handle | no_posts_yet | pending_only | baseline_forming | active)
+// drives which sections render -- pending_only/baseline_forming/active all
+// share the same two-section layout below, differing only in what data is
+// available to show in each.
+const TRACK_RECORD_LAST_SEEN_KEY = "pp_track_record_last_seen";
+
+function trFormatDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function TrackRecordPreviewedBadge() {
+  return (
+    <span style={{
+      fontSize: "9.5px", fontWeight: "700", color: B.brown, background: B.lightBrown,
+      borderRadius: "5px", padding: "2px 6px", marginLeft: "6px", whiteSpace: "nowrap",
+    }}>
+      YOU PREVIEWED THIS
+    </span>
+  );
+}
+
+function TrackRecordPendingRow({ row }) {
+  return (
+    <div style={{
+      background: "#fff", border: `1.5px solid ${VALENCE.split}55`, borderLeft: `4px solid ${VALENCE.split}`,
+      borderRadius: "10px", padding: "12px 14px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
+        <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
+          {row.captionSnippet || "Posted video"}
+        </span>
+        {row.previewed && <TrackRecordPreviewedBadge />}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+        {row.overallPercentile != null ? (
+          <span style={{
+            fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
+            borderRadius: "999px", padding: "3px 10px",
+          }}>
+            Beats {Math.round(row.overallPercentile)}% overall
+          </span>
+        ) : <span />}
+        <span style={{ fontSize: "11px", color: VALENCE.split, fontWeight: "700" }}>
+          Check-in {trFormatDate(row.checkInDate)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TrackRecordGradedRow({ row }) {
+  const isHit = row.verdict === "hit";
+  const isMiss = row.verdict === "miss";
+  return (
+    <div style={{
+      background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
+      padding: "12px 14px", display: "flex", alignItems: "center", gap: "12px",
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
+          <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
+            {row.captionSnippet || "Posted video"}
+          </span>
+          {row.previewed && <TrackRecordPreviewedBadge />}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+          <span style={{
+            fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
+            borderRadius: "999px", padding: "3px 10px",
+          }}>
+            Beats {Math.round(row.overallPercentile)}% overall
+          </span>
+          {row.verdict !== "no_call" && (
+            <span style={{ fontSize: "11px", color: "#888" }}>
+              {row.timesTypical.toFixed(2)}× your typical
+            </span>
+          )}
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, fontSize: "20px", fontWeight: "800" }}>
+        {isHit && <span style={{ color: "#43A047" }}>✓</span>}
+        {isMiss && <span style={{ color: "#bbb" }}>✗</span>}
+        {row.verdict === "no_call" && <span style={{ fontSize: "11px", fontStyle: "italic", color: "#aaa" }}>no call</span>}
+      </div>
+    </div>
+  );
+}
+
+function TrackRecordBaselineFormingRow({ row, baselineMin }) {
+  return (
+    <div style={{
+      background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
+      padding: "12px 14px",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
+        <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
+          {row.captionSnippet || "Posted video"}
+        </span>
+        {row.previewed && <TrackRecordPreviewedBadge />}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+        <span style={{ fontSize: "11px", color: "#888" }}>
+          {row.rawEngagement.views != null ? `${row.rawEngagement.views.toLocaleString()} views` : "Engagement collected"}
+        </span>
+        <span style={{ fontSize: "11px", color: "#aaa", fontStyle: "italic" }}>
+          baseline forming ({row.baselineN} of {baselineMin})
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TrackRecordPanel({ userId, onConnectClick }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    setData(null); setError(null);
+    const lastSeenAt = localStorage.getItem(TRACK_RECORD_LAST_SEEN_KEY) || "";
+    const qs = new URLSearchParams({ userId, ...(lastSeenAt ? { lastSeenAt } : {}) });
+    fetch(`${API_BASE}/api/track-record?${qs}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("failed"))))
+      .then((json) => { if (!cancelled) setData(json); })
+      .catch(() => { if (!cancelled) setError("Couldn't load your Track Record — try again."); });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  // Stamp "seen" once loaded -- clears the unseen-graded badge for next time.
+  useEffect(() => {
+    if (data) localStorage.setItem(TRACK_RECORD_LAST_SEEN_KEY, new Date().toISOString());
+  }, [data]);
+
+  if (error) return <div style={{ padding: "24px", textAlign: "center", color: "#C0392B", fontSize: "13px" }}>{error}</div>;
+  if (!data) return <div style={{ padding: "24px", textAlign: "center", color: "#aaa", fontSize: "13px" }}>Loading…</div>;
+
+  if (data.state === "no_handle") {
+    return (
+      <div style={{ padding: "24px", textAlign: "center" }}>
+        <div style={{ fontSize: "13px", color: "#666", lineHeight: "1.6", marginBottom: "16px" }}>
+          Connect your TikTok to start your Track Record — we'll match your posts back to the
+          previews you scored here and show you how the calls held up.
+        </div>
+        <button onClick={onConnectClick} style={{
+          background: B.action, border: "none", borderRadius: "10px", color: "#fff",
+          fontSize: "13.5px", fontWeight: "800", padding: "10px 20px", cursor: "pointer",
+          fontFamily: "Montserrat, sans-serif",
+        }}>
+          Connect TikTok
+        </button>
+      </div>
+    );
+  }
+
+  if (data.state === "no_posts_yet") {
+    return (
+      <div style={{ padding: "24px", textAlign: "center", color: "#666", fontSize: "13px", lineHeight: "1.6" }}>
+        Connected — once you post a video after previewing it here, it'll show up on your Track Record.
+      </div>
+    );
+  }
+
+  const gradedRows = [...data.graded, ...data.ungradedResolved].sort(
+    (a, b) => new Date(b.postedAt) - new Date(a.postedAt)
+  );
+
+  return (
+    <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
+      {data.aggregates ? (
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "17px", fontWeight: "800", color: B.black }}>
+            Called it: {data.aggregates.hits} of {data.aggregates.graded}
+          </div>
+          <div style={{ fontSize: "11.5px", color: "#888", marginTop: "2px" }}>
+            study-wide, our top-tier picks beat typical ~2 in 3
+          </div>
+        </div>
+      ) : data.state !== "pending_only" && data.state !== "baseline_forming" ? (
+        <div style={{ textAlign: "center", fontSize: "12.5px", color: "#888" }}>
+          Building your track record — {data.gradedCallCount} call{data.gradedCallCount === 1 ? "" : "s"} on the books.
+        </div>
+      ) : null}
+
+      {data.pending.length > 0 && (
+        <div>
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: VALENCE.split, letterSpacing: "0.05em", marginBottom: "8px" }}>
+            ON THE RECORD
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {data.pending.map((row) => <TrackRecordPendingRow key={row.postedVideoId} row={row} />)}
+          </div>
+        </div>
+      )}
+
+      {gradedRows.length > 0 && (
+        <div>
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
+            GRADED
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {gradedRows.map((row) => row.verdict
+              ? <TrackRecordGradedRow key={row.postedVideoId} row={row} />
+              : <TrackRecordBaselineFormingRow key={row.postedVideoId} row={row} baselineMin={data.baselineMin} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {data.pending.length === 0 && gradedRows.length === 0 && (
+        <div style={{ padding: "8px 0 0", textAlign: "center", color: "#aaa", fontSize: "13px" }}>
+          Nothing on the record yet.
+        </div>
+      )}
+    </div>
+  );
+}
 
 
 // ── Issue #5 & #6: Big waiting banner ────────────────────────
@@ -580,6 +800,7 @@ export default function PreviewPanel() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showNotifPrimer, setShowNotifPrimer] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyTab, setHistoryTab] = useState("previews"); // Track Record, Task 3 -- "Previews | Track Record" segmented control
   const [history, setHistory] = useState(loadHistory);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadProgressIndeterminate, setUploadProgressIndeterminate] = useState(false);
@@ -677,6 +898,23 @@ export default function PreviewPanel() {
     }
   };
   useEffect(() => { refreshInviteStatus(); }, [userId]);
+
+  // Track Record -- unseen-graded badge on the segmented control (Task 3).
+  // A lightweight, independent fetch of the same endpoint TrackRecordPanel
+  // itself calls when opened -- cheap and idempotent (no scoring spend, see
+  // gradeTrackRecordForUser), so the small duplication when the tab is
+  // later opened for real is an acceptable v1 tradeoff against lifting this
+  // fetch's state all the way down into the panel component.
+  const [trackRecordUnseen, setTrackRecordUnseen] = useState(0);
+  useEffect(() => {
+    if (!userId) return;
+    const lastSeenAt = localStorage.getItem(TRACK_RECORD_LAST_SEEN_KEY) || "";
+    const qs = new URLSearchParams({ userId, ...(lastSeenAt ? { lastSeenAt } : {}) });
+    fetch(`${API_BASE}/api/track-record?${qs}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => { if (json?.unseenGradedCount) setTrackRecordUnseen(json.unseenGradedCount); })
+      .catch(() => {});
+  }, [userId]);
 
   // Re-check after the connect modal closes -- catches a handle the user
   // just added, so an already-shown nudge won't outlive a real connection.
@@ -1320,7 +1558,10 @@ export default function PreviewPanel() {
               </div>
             )}
 
-            {/* History panel */}
+            {/* History panel -- Track Record, Task 3: "Previews | Track Record"
+                segmented control. Previews = the existing localStorage
+                history (unchanged); Track Record = the new server-backed
+                view (TrackRecordPanel). */}
             {showHistory && (
               <div style={{
                 border: `1.5px solid ${B.border}`, borderRadius: "14px",
@@ -1328,13 +1569,43 @@ export default function PreviewPanel() {
                 animation: "pp-fade 0.2s ease",
               }}>
                 <div style={{
-                  padding: "14px 16px", borderBottom: `1px solid ${B.border}`,
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "12px 16px", borderBottom: `1px solid ${B.border}`,
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px",
                 }}>
-                  <div style={{ fontWeight: "800", fontSize: "14px", color: B.black }}>Recent Results</div>
+                  <div style={{ display: "flex", gap: "6px", background: B.bg, borderRadius: "9px", padding: "3px" }}>
+                    {[["previews", "Previews"], ["trackrecord", "Track Record"]].map(([id, label]) => (
+                      <button key={id} onClick={() => {
+                        setHistoryTab(id);
+                        if (id === "trackrecord") setTrackRecordUnseen(0); // opened it -- TrackRecordPanel stamps last_seen_at itself
+                      }} style={{
+                        border: "none", borderRadius: "7px", padding: "7px 12px",
+                        fontSize: "12px", fontWeight: "700", cursor: "pointer",
+                        fontFamily: "Montserrat, sans-serif",
+                        background: historyTab === id ? "#fff" : "transparent",
+                        color: historyTab === id ? B.black : "#999",
+                        boxShadow: historyTab === id ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                        position: "relative",
+                      }}>
+                        {label}
+                        {id === "trackrecord" && trackRecordUnseen > 0 && (
+                          <span style={{
+                            position: "absolute", top: "-4px", right: "-4px",
+                            background: "#E53935", color: "#fff", borderRadius: "999px",
+                            fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+                            display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px",
+                          }}>
+                            {trackRecordUnseen}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                   <button onClick={() => setShowHistory(false)} style={{ background: "none", border: "none", fontSize: "18px", color: "#aaa", cursor: "pointer" }}>×</button>
                 </div>
-                <HistoryPanel history={history} onRestore={restoreFromHistory} onClose={() => setShowHistory(false)} />
+                {historyTab === "previews"
+                  ? <HistoryPanel history={history} onRestore={restoreFromHistory} onClose={() => setShowHistory(false)} />
+                  : <TrackRecordPanel userId={userId} onConnectClick={() => setShowAccountSettings(true)} />
+                }
               </div>
             )}
 

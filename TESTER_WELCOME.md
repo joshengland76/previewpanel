@@ -9,8 +9,7 @@ Thanks for helping test this out.
 PreviewPanel. It's tied to you; if you clear your browser or switch
 devices, just enter the same code again to get back in. *(Include only if
 this tester's code was minted with `--handle`:)* Your invite is pre-linked
-to @[HANDLE], so your history and track record start populated the moment
-you're in.
+to @[HANDLE], so your Track Record tab starts populated the moment you're in.
 
 **What it does.** Upload a video before you post it, and a panel of AI
 judges scores it — hook strength, pacing, how it's likely to land — and
