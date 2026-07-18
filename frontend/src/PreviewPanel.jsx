@@ -1632,20 +1632,20 @@ export default function PreviewPanel() {
           .pp-sticky-wrap > * { pointer-events: auto; }
         }
         /* Header collision, Task 2 -- at narrow widths the centered logo's
-           rendered width (height-locked, ~1.83:1 aspect ratio) leaves too
-           little clearance on either side for the absolutely-positioned
-           History/Accounts buttons, especially once History carries a
-           badge. Converting the graded-count suffix from inline text
-           ("· 9 graded") to a compact numeric badge (done in the JSX,
-           unconditionally, not just here) already removes most of the
-           overflow; this media query adds a reduced logo as a second,
-           belt-and-suspenders margin of safety specifically for 375-390px
-           phones, verified against the logo's real ~1.83:1 aspect ratio
-           (98px tall renders ~179px wide; 72px tall renders ~132px wide,
-           leaving ~121px clear on each side at a 375px viewport). */
+           rendered width (height-locked, ~1.83:1 aspect ratio, ~179px at
+           98px tall) leaves ~98px clearance on each side of a 375px
+           viewport for the absolutely-positioned History/Accounts
+           buttons -- razor-thin once History carries a badge. Logo size
+           is left untouched (explicit direction: don't shrink it) --
+           fixed entirely on the button side instead: converting the
+           graded-count suffix from inline text ("· 9 graded") to a
+           compact numeric badge (done in the JSX, unconditionally, not
+           just here) already removed most of the overflow (measured:
+           ~99px at default styles, including a 2-digit badge); this media
+           query compacts both header buttons further at narrow widths for
+           real margin, not just a near-miss. */
         @media (max-width: 400px) {
-          .pp-header-logo { height: 72px !important; margin: 0 auto -13px !important; }
-          .pp-header-btn { font-size: 10px !important; padding: 5px 8px !important; }
+          .pp-header-btn, .pp-header-btn button { font-size: 10px !important; padding: 5px 8px !important; }
         }
       `}</style>
 
@@ -1731,7 +1731,7 @@ export default function PreviewPanel() {
                   wordmark at this render height (measured: 19.8% of the source
                   image's height) -- negative margin pulls real content up into
                   that dead space instead of stacking more space on top of it. */}
-              <img src="/owl-logo.png?v=3" alt="PreviewPanel" className="pp-header-logo"
+              <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto -18px" }} />
               {/* Issue #9: History button. Beta UX polish v2, Task 3a --
                   ALWAYS rendered now, even at zero local previews (every
@@ -1803,7 +1803,7 @@ export default function PreviewPanel() {
                 )}
               </button>
               {/* Phase C, Task 1: Connect-accounts trigger */}
-              <div style={{ position: "absolute", top: "10px", left: "0" }}>
+              <div style={{ position: "absolute", top: "10px", left: "0" }} className="pp-header-btn">
                 <AccountSettingsTrigger userId={userId} open={showAccountSettings} onOpenChange={handleAccountSettingsOpenChange} />
               </div>
             </div>
@@ -2255,7 +2255,7 @@ export default function PreviewPanel() {
 
             {/* Top bar */}
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "0", position: "relative" }}>
-              <img src="/owl-logo.png?v=3" alt="PreviewPanel" className="pp-header-logo"
+              <img src="/owl-logo.png?v=3" alt="PreviewPanel"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto -18px" }} />
               {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{
