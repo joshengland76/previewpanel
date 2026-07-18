@@ -1398,7 +1398,12 @@ def main():
     niche_line = objective if mode == "objective" else args.descriptor
     RECRUITMENT_DIR.mkdir(exist_ok=True)
     date_tag = datetime.now(timezone.utc).strftime("%Y%m%d")
-    stem = f"preview_@{handle}_{mode}_{date_tag}"
+    # Source mode in the filename -- without it, a --study and a --prospect
+    # render of the same handle/objective on the same day share a filename
+    # and silently overwrite each other (observed live during the
+    # Enhancements verification pass, PREVIEW_SPECSCORER_READOUT.md Task 5).
+    source_mode = "study" if is_study else "prospect"
+    stem = f"preview_@{handle}_{source_mode}_{mode}_{date_tag}"
     html_path = RECRUITMENT_DIR / f"{stem}.html"
     pdf_path = RECRUITMENT_DIR / f"{stem}.pdf"
 

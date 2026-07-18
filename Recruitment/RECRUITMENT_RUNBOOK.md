@@ -319,7 +319,11 @@ to be guessed from the verdict alone.
 
 ## Output paths
 
-`Recruitment/preview_@<handle>_<objective|overall>_<YYYYMMDD>.{html,pdf}`
+`Recruitment/preview_@<handle>_<study|prospect>_<objective|overall>_<YYYYMMDD>.{html,pdf}`
 — gitignored (generated output, not source; only
-`performance_preview_template.html` itself is tracked). Re-running the
-same handle/mode/day overwrites in place.
+`performance_preview_template.html` itself is tracked). The `study`/
+`prospect` segment keeps the two data sources from colliding — without
+it, a `--study` and a `--prospect` render of the same handle/objective on
+the same day shared a filename and silently overwrote each other
+(observed live, `PREVIEW_SPECSCORER_READOUT.md` Task 5). Re-running the
+same handle/source/mode/day still overwrites in place, as before.
