@@ -737,7 +737,18 @@ def study_section_a(db, creator_id, oof_preds, mode, objective):
 # reconnect guard duplication in Hotfix v2.
 DOWNLOAD_DIR = HERE / "_downloads"
 YTDLP_DOWNLOAD_TIMEOUT_S = 300
-INGEST_TIMEOUT_S = 8 * 60
+# Follow-up fix (found during live verification): the server's own
+# /api/validation/ingest handler caps its internal wait at 8 minutes
+# (waitForJobCompletion's maxWaitMs) before it EITHER responds successfully
+# OR gives up server-side -- either way it resolves by then. A client
+# timeout equal to that cap can race it under real load (confirmed live:
+# a jamieegabrielle run's ingest calls exceeded 8 minutes end-to-end, the
+# client gave up with "Read timed out" while the server kept going and
+# wrote a real, successful shadow_scores row moments later) -- the request
+# hadn't actually failed, the client just stopped waiting too early.
+# Comfortably above the server's own cap so the client never gives up
+# before the server would have answered on its own.
+INGEST_TIMEOUT_S = 12 * 60
 INTER_VIDEO_DELAY_S = 2  # politeness delay between Mac-side fetches, mirrors worker.py's own constant
 
 
@@ -1302,8 +1313,19 @@ def main():
     # Polish v3, Tasks 2-3: "Section-A start date" is the single date both
     # the meta line and the dynamic hero sentence hang off of -- the
     # OLDEST Section-A video specifically (not blended with Section B).
+    # Follow-up fix (found rendering marisjones, whose Section A is
+    # genuinely empty -- zero OOF coverage): a bare "—" placeholder here
+    # collided with hero_opening_sentence's OWN "since {date} —" template,
+    # rendering the visibly broken "since — —" (double dash). Falls back to
+    # Section B's own earliest date when Section A has none at all, rather
+    # than a placeholder with nothing sensible to substitute into a
+    # sentence that assumes a real date exists.
     section_a_dates = [v["posted_at"] for v in section_a if v.get("posted_at")]
-    section_a_start = fmt_date(min(section_a_dates)) if section_a_dates else "—"
+    if section_a_dates:
+        section_a_start = fmt_date(min(section_a_dates))
+    else:
+        section_b_dates = [v["posted_at"] for v in section_b if v.get("posted_at")]
+        section_a_start = fmt_date(min(section_b_dates)) if section_b_dates else "recently"
     render_date = fmt_date(datetime.now(timezone.utc))
 
     # Transport hotfix, Task 2 -- coverage-honest copy. A Section-A gap only
