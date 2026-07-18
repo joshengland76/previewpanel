@@ -1596,7 +1596,15 @@ export default function PreviewPanel() {
                   previews). */}
               <button onClick={() => {
                 if (!showHistory) {
-                  setHistoryTab(history.length === 0 && trackRecordHasContent ? "trackrecord" : "previews");
+                  const landingOnTrackRecord = history.length === 0 && trackRecordHasContent;
+                  setHistoryTab(landingOnTrackRecord ? "trackrecord" : "previews");
+                  // Landing directly on Track Record via the smart default
+                  // (3b) is just as much "opening it" as clicking the inner
+                  // segmented tab -- clear the badge the same way, so it
+                  // doesn't show stale until the next full summary refresh.
+                  if (landingOnTrackRecord && trackRecordSummary) {
+                    setTrackRecordSummary({ ...trackRecordSummary, unseenGradedCount: 0 });
+                  }
                 }
                 setShowHistory(v => !v);
               }} style={{
