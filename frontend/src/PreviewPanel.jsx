@@ -1670,10 +1670,23 @@ export default function PreviewPanel() {
           // Track Record now (the redeem call already ran grading
           // server-side, via the endpoint's own idempotent pass on this
           // next load) so the banner's count is real, not stale.
+          //
+          // Bug fix (found live, Track Record v2 verification): the "seen"
+          // flag used to be set BEFORE confirming the fetch actually
+          // succeeded with a real count -- a transient failure or a grading
+          // race (gradedCallCount still 0 right at claim time) permanently
+          // suppressed the banner even though it was never shown. Now the
+          // flag is only set once there's an actual non-zero count to
+          // display; onBound only fires once per redemption, so there's no
+          // second chance for this specific tester, but a future claim
+          // won't silently lose its banner to the same race.
           if (body?.claimed && body.claim?.claimedPostedVideos > 0 && !localStorage.getItem(TRACK_RECORD_BANNER_SEEN_KEY)) {
-            localStorage.setItem(TRACK_RECORD_BANNER_SEEN_KEY, "true");
             refreshTrackRecordSummary().then((json) => {
-              if (json) { setClaimBannerCount(json.gradedCallCount); setShowClaimBanner(true); }
+              if (json?.gradedCallCount > 0) {
+                localStorage.setItem(TRACK_RECORD_BANNER_SEEN_KEY, "true");
+                setClaimBannerCount(json.gradedCallCount);
+                setShowClaimBanner(true);
+              }
             });
           } else {
             refreshTrackRecordSummary();
