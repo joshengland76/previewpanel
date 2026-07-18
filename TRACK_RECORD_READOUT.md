@@ -307,14 +307,15 @@ explicit-id-list hardening rule with the incident cross-reference.
 ## Git / deploy state
 
 - Commits: `447dbb3` (Tasks 1–4 + initial verification), `18f6e28`
-  (`y_pred` decoupling + Task 3b), on `origin/main`, pushed.
+  (`y_pred` decoupling + Task 3b), `00bb479` (this readout), on
+  `origin/main`, pushed.
 - Deployed — Render (backend): Y, confirmed live via `/version`
   (`18f6e28`) before the `jamieegabrielle` verification pass.
 - Deployed — Vercel (frontend): auto-deployed from the same pushes; all
   Task 5 verification ran via direct API calls against production (the
   same server-side logic the UI calls into), not an independent browser
   session — noted, not claimed otherwise.
-- Research repo: pending commit (this readout's own commit, see below).
+- Research repo: `0b0a17f`, pushed.
 
 ## STOP
 
