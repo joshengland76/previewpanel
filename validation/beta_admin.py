@@ -77,13 +77,14 @@ def cmd_mint(conn, args):
     cur = conn.cursor()
     cur.execute(
         """INSERT INTO invite_codes
-             (code, label, max_redemptions, known_tiktok_handle, known_instagram_handle, known_youtube_handle)
-           VALUES (%s, %s, %s, %s, %s, %s)""",
-        (code, args.label, args.max_redemptions, tiktok, instagram, youtube),
+             (code, label, max_redemptions, known_tiktok_handle, known_instagram_handle, known_youtube_handle, is_internal)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+        (code, args.label, args.max_redemptions, tiktok, instagram, youtube, args.internal),
     )
     cur.close()
     pre_linked = f" pre-linked=@{tiktok}" if tiktok else (f" pre-linked=(ig:{instagram} yt:{youtube})" if (instagram or youtube) else "")
-    print(f"[beta_admin] minted code={code} label={args.label!r} max_redemptions={args.max_redemptions}{pre_linked}")
+    internal_note = " internal=true" if args.internal else ""
+    print(f"[beta_admin] minted code={code} label={args.label!r} max_redemptions={args.max_redemptions}{pre_linked}{internal_note}")
 
     # Track Record, Task 3b -- a TikTok handle that's also an enrolled
     # research creator gets their study history staged automatically, so
@@ -102,7 +103,7 @@ def cmd_list(conn, args):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("""
         SELECT
-            ic.code, ic.label, ic.max_redemptions, ic.created_at,
+            ic.code, ic.label, ic.max_redemptions, ic.created_at, ic.is_internal,
             ic.known_tiktok_handle, ic.known_instagram_handle, ic.known_youtube_handle,
             COUNT(DISTINCT r.user_id) AS redemptions,
             COUNT(e.id) AS total_submissions,
@@ -111,7 +112,7 @@ def cmd_list(conn, args):
         FROM invite_codes ic
         LEFT JOIN redemptions r ON r.code = ic.code
         LEFT JOIN beta_submission_events e ON e.user_id = r.user_id
-        GROUP BY ic.code, ic.label, ic.max_redemptions, ic.created_at,
+        GROUP BY ic.code, ic.label, ic.max_redemptions, ic.created_at, ic.is_internal,
                  ic.known_tiktok_handle, ic.known_instagram_handle, ic.known_youtube_handle
         ORDER BY ic.created_at DESC
     """)
@@ -120,7 +121,7 @@ def cmd_list(conn, args):
     if not rows:
         print("[beta_admin] no invite codes yet")
         return
-    print(f"{'code':10} {'label':24} {'handle':18} {'redemptions':13} {'submissions':12} {'claim':9} created_at")
+    print(f"{'code':10} {'label':24} {'handle':18} {'redemptions':13} {'submissions':12} {'claim':9} {'internal':9} created_at")
     for r in rows:
         handle = r["known_tiktok_handle"] or r["known_instagram_handle"] or r["known_youtube_handle"] or "—"
         if r["known_tiktok_handle"] is None and r["known_instagram_handle"] is None and r["known_youtube_handle"] is None:
@@ -134,7 +135,7 @@ def cmd_list(conn, args):
         print(
             f"{r['code']:10} {(r['label'] or ''):24.24} {handle:18.18} "
             f"{r['redemptions']}/{r['max_redemptions']:<11} "
-            f"{r['total_submissions']:<12} {claim:9} {r['created_at']}"
+            f"{r['total_submissions']:<12} {claim:9} {('yes' if r['is_internal'] else '—'):9} {r['created_at']}"
         )
 
 
@@ -181,6 +182,7 @@ def main():
     p_mint.add_argument("--instagram", default=None, help="pre-link a known Instagram handle")
     p_mint.add_argument("--youtube", default=None, help="pre-link a known YouTube handle")
     p_mint.add_argument("--no-sync", action="store_true", help="skip auto study-history sync even if --handle matches a research creator")
+    p_mint.add_argument("--internal", action="store_true", help="founder/team access -- redeemer's submissions never enter comparison pools, excluded from activity stats")
     p_mint.set_defaults(func=cmd_mint)
 
     p_list = sub.add_parser("list", help="list codes with redemption + usage counts")

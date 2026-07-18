@@ -20,6 +20,17 @@ function PlatformIcon({ id, size }) {
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
+// Track Record v2, Task 4 -- fire-and-forget activity telemetry. Never
+// awaited, never surfaces an error to the UI -- a dropped beacon is not
+// something a real user should ever see or be blocked by.
+function logEvent(userId, event, meta) {
+  if (!userId) return;
+  fetch(`${API_BASE}/api/event`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, event, meta }),
+  }).catch(() => {});
+}
+
 // PushManager.subscribe() wants the VAPID key as a Uint8Array, not the
 // base64url string the server hands back.
 function urlBase64ToUint8Array(base64String) {
@@ -449,6 +460,24 @@ function trFormatDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+// Track Record v2, Task 3c -- the app's standing ORDINAL vocabulary
+// (matches generate_preview.py's own _clamped_ordinal/pill_text_short,
+// the exact copy the Performance Preview PDF uses), not the live score
+// card's "Beats N% of..." framing (scoreDisplayCopy.js) -- Track Record
+// IS the Performance Preview, so it borrows that surface's own words,
+// not the app's. Clamped 1st-99th so a pool's literal best/worst value
+// never reads as an absolute "0th"/"100th" claim (server already clamps
+// at computation; clamped again here defensively, since some legacy
+// synthesized rows predate that server-side fix).
+function trClampedOrdinal(p) {
+  const n = Math.max(1, Math.min(99, Math.round(p)));
+  const suffix = (n % 100 >= 11 && n % 100 <= 13) ? "th" : { 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th";
+  return `${n}${suffix}`;
+}
+function trPillText(p) {
+  return p == null ? null : `${trClampedOrdinal(p)} percentile · all videos`;
+}
+
 function TrackRecordPreviewedBadge() {
   return (
     <span style={{
@@ -460,6 +489,28 @@ function TrackRecordPreviewedBadge() {
   );
 }
 
+// Track Record v2, Task 3c -- CALLED STRONG / CALLED WEAK chips, inline
+// after the pill, on called rows only (call_type strong/weak with a
+// real hit/miss verdict -- never on a no_call row, which gets no chip).
+function TrackRecordCallChip({ callType }) {
+  if (callType !== "strong" && callType !== "weak") return null;
+  const isStrong = callType === "strong";
+  return (
+    <span style={{
+      fontSize: "9.5px", fontWeight: "800", letterSpacing: "0.03em",
+      color: isStrong ? "#2E7D32" : "#8D4B36",
+      background: isStrong ? "#E8F5E9" : "#F5E4DF",
+      borderRadius: "5px", padding: "2px 7px",
+    }}>
+      CALLED {isStrong ? "STRONG" : "WEAK"}
+    </span>
+  );
+}
+
+function trRowTitle(row) {
+  return row.captionSnippet || `Posted ${trFormatDate(row.postedAt)}`;
+}
+
 function TrackRecordPendingRow({ row }) {
   return (
     <div style={{
@@ -468,7 +519,7 @@ function TrackRecordPendingRow({ row }) {
     }}>
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
         <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
-          {row.captionSnippet || "Posted video"}
+          {trRowTitle(row)}
         </span>
         {row.previewed && <TrackRecordPreviewedBadge />}
       </div>
@@ -478,7 +529,7 @@ function TrackRecordPendingRow({ row }) {
             fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
             borderRadius: "999px", padding: "3px 10px",
           }}>
-            Beats {Math.round(row.overallPercentile)}% overall
+            {trPillText(row.overallPercentile)}
           </span>
         ) : <span />}
         <span style={{ fontSize: "11px", color: VALENCE.split, fontWeight: "700" }}>
@@ -500,7 +551,7 @@ function TrackRecordGradedRow({ row }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
           <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
-            {row.captionSnippet || "Posted video"}
+            {trRowTitle(row)}
           </span>
           {row.previewed && <TrackRecordPreviewedBadge />}
         </div>
@@ -509,8 +560,9 @@ function TrackRecordGradedRow({ row }) {
             fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
             borderRadius: "999px", padding: "3px 10px",
           }}>
-            Beats {Math.round(row.overallPercentile)}% overall
+            {trPillText(row.overallPercentile)}
           </span>
+          <TrackRecordCallChip callType={row.callType} />
           {row.verdict !== "no_call" && (
             <span style={{ fontSize: "11px", color: "#888" }}>
               {row.timesTypical.toFixed(2)}× your typical
@@ -535,7 +587,7 @@ function TrackRecordBaselineFormingRow({ row, baselineMin }) {
     }}>
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
         <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
-          {row.captionSnippet || "Posted video"}
+          {trRowTitle(row)}
         </span>
         {row.previewed && <TrackRecordPreviewedBadge />}
       </div>
@@ -602,9 +654,20 @@ function TrackRecordPanel({ userId, onConnectClick }) {
     );
   }
 
-  const gradedRows = [...data.graded, ...data.ungradedResolved].sort(
-    (a, b) => new Date(b.postedAt) - new Date(a.postedAt)
-  );
+  // Track Record v2, Task 3b -- SCORE-DESCENDING within the graded section
+  // (mirrors the PDF's own Section-A ranking), not posted-date order.
+  // ungradedResolved rows have no percentile at all (never graded) --
+  // appended after the score-sorted graded ones, in posted-date order,
+  // same as before.
+  const gradedSorted = [...data.graded].sort((a, b) => (b.overallPercentile ?? -1) - (a.overallPercentile ?? -1));
+  const ungradedSorted = [...data.ungradedResolved].sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
+  const gradedRows = [...gradedSorted, ...ungradedSorted];
+
+  // Track Record v2, Task 3d -- averages sub-stat needs its OWN floor
+  // (>=2 of EACH type graded), independent of AGGREGATE_MIN gating the
+  // record line itself.
+  const showAverages = data.aggregates
+    && data.aggregates.strongCount >= 2 && data.aggregates.weakCount >= 2;
 
   return (
     <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -613,6 +676,12 @@ function TrackRecordPanel({ userId, onConnectClick }) {
           <div style={{ fontSize: "17px", fontWeight: "800", color: B.black }}>
             Called it: {data.aggregates.hits} of {data.aggregates.graded}
           </div>
+          {showAverages && (
+            <div style={{ fontSize: "12px", color: B.brown, fontWeight: "600", marginTop: "4px" }}>
+              Strong calls averaged {data.aggregates.avgTimesTypicalStrong.toFixed(1)}x your typical ·
+              {" "}weak calls {data.aggregates.avgTimesTypicalWeak.toFixed(1)}x
+            </div>
+          )}
           <div style={{ fontSize: "11.5px", color: "#888", marginTop: "2px" }}>
             study-wide, our top-tier picks beat typical ~2 in 3
           </div>
@@ -623,6 +692,26 @@ function TrackRecordPanel({ userId, onConnectClick }) {
         </div>
       ) : null}
 
+      {/* Track Record v2, Task 3b -- structure mirrors the PDF: predicted-
+          vs-happened (graded) THEN on-the-record (pending), hero first. */}
+      {gradedRows.length > 0 && (
+        <div>
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
+            WHAT WE PREDICTED VS. WHAT HAPPENED
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {gradedRows.map((row) => row.verdict
+              ? <TrackRecordGradedRow key={row.postedVideoId} row={row} />
+              : <TrackRecordBaselineFormingRow key={row.postedVideoId} row={row} baselineMin={data.baselineMin} />
+            )}
+          </div>
+          {/* Task 3c -- one legend line at list end. */}
+          <div style={{ fontSize: "10.5px", color: "#aaa", marginTop: "8px", lineHeight: "1.5" }}>
+            ✓/✗ = whether our strong/weak calls matched above-/below-typical results · middle scores: no call
+          </div>
+        </div>
+      )}
+
       {data.pending.length > 0 && (
         <div>
           <div style={{ fontSize: "11.5px", fontWeight: "800", color: VALENCE.split, letterSpacing: "0.05em", marginBottom: "8px" }}>
@@ -630,20 +719,6 @@ function TrackRecordPanel({ userId, onConnectClick }) {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {data.pending.map((row) => <TrackRecordPendingRow key={row.postedVideoId} row={row} />)}
-          </div>
-        </div>
-      )}
-
-      {gradedRows.length > 0 && (
-        <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
-            GRADED
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {gradedRows.map((row) => row.verdict
-              ? <TrackRecordGradedRow key={row.postedVideoId} row={row} />
-              : <TrackRecordBaselineFormingRow key={row.postedVideoId} row={row} baselineMin={data.baselineMin} />
-            )}
           </div>
         </div>
       )}
@@ -755,8 +830,30 @@ const OBJECTIVE_OPTIONS = [
 ];
 
 export default function PreviewPanel() {
+  // Scroll-to-top, for real (Track Record v2, Task 1) -- the prior fix
+  // (a single window.scrollTo(0,0) on gate close) didn't survive real
+  // iPhone testing. Root cause: iOS Safari's scroll-position restoration
+  // on load/back-forward-cache-restore re-applies whatever scrollY the
+  // page had at a PREVIOUS visit, and does so AFTER React has already
+  // mounted/rendered -- a scrollTo call at mount time can still get
+  // stomped by Safari's own restoration running slightly later. Desktop
+  // Chrome at a narrow viewport width never reproduced this because that
+  // restoration behavior is iOS-Safari-specific, not a function of
+  // viewport size -- mobile-width testing on desktop was never going to
+  // catch it. Fix: explicitly opt OUT of the browser's own scroll
+  // restoration (history.scrollRestoration = "manual", the standard way
+  // to disable it) so nothing auto-restores a stale position in the
+  // first place, on top of (not instead of) explicit scrollTo(0,0) calls
+  // at every real screen transition.
+  useEffect(() => {
+    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";
+    window.scrollTo(0, 0);
+  }, []);
+
   const [userId] = useState(getOrCreateUserId); // Phase C, Task 1 -- generated once, stable for component lifetime
   const [showAccountSettings, setShowAccountSettings] = useState(false);
+  // Track Record v2, Task 4 -- accounts_view, each time the modal opens.
+  useEffect(() => { if (showAccountSettings) logEvent(userId, "accounts_view"); }, [showAccountSettings, userId]);
   const [tiktokConnected, setTiktokConnected] = useState(null); // Sweep D -- null = not yet checked
   // Beta metering, Task 1 -- null = not yet checked (blocks render behind a
   // blank cover so an unbound user never sees a flash of the real UI before
@@ -811,7 +908,21 @@ export default function PreviewPanel() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
   const [showNotifPrimer, setShowNotifPrimer] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // Scroll-to-top, for real, Task 1 -- fires on EVERY showHistory
+  // transition (open AND close), regardless of which of the several call
+  // sites triggered it (the main toggle button, the claim banner's "View
+  // it", the panel's own close button, restoreFromHistory) -- a single
+  // effect here is more robust than adding scrollTo calls at each one
+  // individually, since it can't be missed by a future new call site.
+  useEffect(() => { window.scrollTo(0, 0); }, [showHistory]);
   const [historyTab, setHistoryTab] = useState("previews"); // Track Record, Task 3 -- "Previews | Track Record" segmented control
+  // Track Record v2, Task 4 -- previews_view / track_record_view. Fires
+  // each time the respective segment becomes actually visible (History
+  // open AND that tab selected), not just once per load -- unlike
+  // session_open, repeat views are a meaningful engagement signal here.
+  useEffect(() => {
+    if (showHistory) logEvent(userId, historyTab === "trackrecord" ? "track_record_view" : "previews_view");
+  }, [showHistory, historyTab, userId]);
   // Beta UX polish v2, Task 3c -- day-one claim banner. Shown at most once
   // ever per identity (localStorage TRACK_RECORD_BANNER_SEEN_KEY, set the
   // moment it's first shown, not just on dismiss -- "the banner never
@@ -915,6 +1026,18 @@ export default function PreviewPanel() {
     }
   };
   useEffect(() => { refreshInviteStatus(); }, [userId]);
+
+  // Track Record v2, Task 4 -- session_open, once per load, post-gate
+  // (fires the moment inviteStatus.bound first becomes true -- a ref
+  // guard, not a dependency check, since inviteStatus can refetch/change
+  // more than once in a session and this must still only log the once).
+  const sessionOpenLoggedRef = useRef(false);
+  useEffect(() => {
+    if (inviteStatus?.bound && !sessionOpenLoggedRef.current) {
+      sessionOpenLoggedRef.current = true;
+      logEvent(userId, "session_open");
+    }
+  }, [inviteStatus?.bound, userId]);
 
   // Track Record -- unseen-graded badge on the segmented control (Task 3),
   // and (Beta UX polish v2, Task 3) the always-on History button's
@@ -1508,6 +1631,22 @@ export default function PreviewPanel() {
           }
           .pp-sticky-wrap > * { pointer-events: auto; }
         }
+        /* Header collision, Task 2 -- at narrow widths the centered logo's
+           rendered width (height-locked, ~1.83:1 aspect ratio) leaves too
+           little clearance on either side for the absolutely-positioned
+           History/Accounts buttons, especially once History carries a
+           badge. Converting the graded-count suffix from inline text
+           ("· 9 graded") to a compact numeric badge (done in the JSX,
+           unconditionally, not just here) already removes most of the
+           overflow; this media query adds a reduced logo as a second,
+           belt-and-suspenders margin of safety specifically for 375-390px
+           phones, verified against the logo's real ~1.83:1 aspect ratio
+           (98px tall renders ~179px wide; 72px tall renders ~132px wide,
+           leaving ~121px clear on each side at a 375px viewport). */
+        @media (max-width: 400px) {
+          .pp-header-logo { height: 72px !important; margin: 0 auto -13px !important; }
+          .pp-header-btn { font-size: 10px !important; padding: 5px 8px !important; }
+        }
       `}</style>
 
       {/* Beta metering, Task 1 -- invite gate. A blank cover while the
@@ -1579,7 +1718,7 @@ export default function PreviewPanel() {
                   wordmark at this render height (measured: 19.8% of the source
                   image's height) -- negative margin pulls real content up into
                   that dead space instead of stacking more space on top of it. */}
-              <img src="/owl-logo.png?v=3" alt="PreviewPanel"
+              <img src="/owl-logo.png?v=3" alt="PreviewPanel" className="pp-header-logo"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto -18px" }} />
               {/* Issue #9: History button. Beta UX polish v2, Task 3a --
                   ALWAYS rendered now, even at zero local previews (every
@@ -1607,30 +1746,45 @@ export default function PreviewPanel() {
                   }
                 }
                 setShowHistory(v => !v);
-              }} style={{
+              }} className="pp-header-btn" style={{
                 position: "absolute", top: "10px", right: "0",
                 background: "#fff", border: `1.5px solid ${B.border}`,
                 borderRadius: "8px", padding: "6px 10px",
                 fontSize: "11px", fontWeight: "700", color: B.brown,
                 cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+                display: "inline-flex", alignItems: "center", gap: "5px",
               }}>
                 {history.length > 0 ? (
-                  `📋 History (${history.length})`
+                  <span className="pp-header-btn-label">📋 History ({history.length})</span>
                 ) : (
                   <>
-                    📋 History
+                    <span className="pp-header-btn-label">📋 History</span>
+                    {/* Header collision, Task 2 -- a compact numeric badge
+                        (not inline text like "· 9 graded") is the primary
+                        populated-state signal at every width; unseen (red)
+                        takes priority over already-seen (muted grey) count,
+                        same distinction as before, just no longer prose that
+                        can grow long enough to collide with the centered
+                        logo at narrow viewports. */}
                     {trackRecordHasContent && trackRecordSummary.unseenGradedCount > 0 && (
                       <span style={{
                         display: "inline-flex", alignItems: "center", justifyContent: "center",
                         background: "#E53935", color: "#fff", borderRadius: "999px",
                         fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
-                        padding: "0 3px", marginLeft: "5px",
+                        padding: "0 3px", flexShrink: 0,
                       }}>
                         {trackRecordSummary.unseenGradedCount}
                       </span>
                     )}
                     {trackRecordHasContent && trackRecordSummary.unseenGradedCount === 0 && trackRecordSummary.gradedCallCount > 0 && (
-                      <span style={{ color: B.grey, fontWeight: "600" }}> · {trackRecordSummary.gradedCallCount} graded</span>
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        background: B.lightBrown, color: B.brown, borderRadius: "999px",
+                        fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+                        padding: "0 3px", flexShrink: 0,
+                      }}>
+                        {trackRecordSummary.gradedCallCount}
+                      </span>
                     )}
                   </>
                 )}
@@ -2088,7 +2242,7 @@ export default function PreviewPanel() {
 
             {/* Top bar */}
             <div style={{ textAlign: "center", paddingTop: "4px", paddingBottom: "0", position: "relative" }}>
-              <img src="/owl-logo.png?v=3" alt="PreviewPanel"
+              <img src="/owl-logo.png?v=3" alt="PreviewPanel" className="pp-header-logo"
                 style={{ height: "98px", width: "auto", display: "block", margin: "0 auto -18px" }} />
               {(isFinished || jobStatus === "error") && (
                 <button onClick={reset} style={{

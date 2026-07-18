@@ -47,6 +47,18 @@ CALL_STRONG_PCTILE = 70
 CALL_WEAK_PCTILE = 30
 
 
+def clamp_percentile(p):
+    # Track Record v2, Task 3c -- same clamp as scoreDisplayCopy.js's
+    # clampPercentile (JS side) and generate_preview.py's own
+    # _clamped_ordinal: never store/display a raw 0 or 100, which reads as
+    # an absolute "literally the worst/best ever" claim. Clamping only
+    # touches the extreme ends, so it can never flip the >=70/<=30
+    # call-type classification below.
+    if p is None:
+        return None
+    return max(1, min(99, round(p)))
+
+
 def call_type_for(percentile):
     if percentile is None:
         return None
@@ -70,7 +82,7 @@ def run(handle):
     oof_preds = load_oof_predictions()
 
     rows = db.query("""
-        SELECT v.id, v.external_video_id, v.posted_at, m.interval_label, m.weighted_engagement_rate
+        SELECT v.id, v.external_video_id, v.posted_at, v.caption, m.interval_label, m.weighted_engagement_rate
         FROM research_videos v
         LEFT JOIN research_metrics m
           ON m.video_id = v.id AND m.interval_label IN ('day_30', 'backcatalog_day30_equiv_2026_07')
@@ -78,6 +90,25 @@ def run(handle):
           AND v.posted_at <= now() - interval '%s days'
         ORDER BY v.posted_at DESC
     """, (creator_id, AGED_MIN_DAYS), fetch="all", cursor_factory=psycopg2.extras.RealDictCursor)
+
+    # Track Record v2, Task 3a -- one-time backfill for rows a PRIOR run of
+    # this script already synthesized before it captured caption (every
+    # row synced before this fix). Scoped to this handle, keyed on
+    # tiktok_video_id -- idempotent (a row that already has a caption is
+    # untouched by the WHERE clause).
+    backfilled = 0
+    for r in rows:
+        if not r["caption"] or not r["external_video_id"]:
+            continue
+        res = db.query(
+            """UPDATE posted_videos SET caption = %s
+               WHERE tiktok_video_id = %s AND source = 'study_history' AND caption IS NULL
+               RETURNING id""",
+            (r["caption"], r["external_video_id"]), fetch="all",
+        )
+        if res:
+            backfilled += len(res)
+            db.conn.commit()
 
     covered = [r for r in rows if r["id"] in oof_preds and r["weighted_engagement_rate"] is not None and r["external_video_id"]]
     if not covered:
@@ -106,15 +137,15 @@ def run(handle):
         )
         avg_score = float(avg_row[0]) if avg_row and avg_row[0] is not None else None
         is_day30_equiv = r["interval_label"] == "backcatalog_day30_equiv_2026_07"
-        percentile = midrank_percentile(y_pred, pools["overall"])
+        percentile = clamp_percentile(midrank_percentile(y_pred, pools["overall"]))
         call_type = call_type_for(percentile)
 
         db.query("""
             INSERT INTO posted_videos
-              (tiktok_video_id, handle, posted_at, status, y_pred, avg_score, day30_wec_rate,
+              (tiktok_video_id, handle, posted_at, caption, status, y_pred, avg_score, day30_wec_rate,
                is_day30_equiv, source, overall_percentile_at_grading, call_type, collected_at)
-            VALUES (%s, %s, %s, 'day30_collected', %s, %s, %s, %s, 'study_history', %s, %s, now())
-        """, (tiktok_video_id, handle, r["posted_at"], y_pred, avg_score,
+            VALUES (%s, %s, %s, %s, 'day30_collected', %s, %s, %s, %s, 'study_history', %s, %s, now())
+        """, (tiktok_video_id, handle, r["posted_at"], r["caption"], y_pred, avg_score,
               float(r["weighted_engagement_rate"]), is_day30_equiv, percentile, call_type))
         # DB (generate_preview.py) never sets autocommit and never calls
         # commit() itself -- without an explicit commit here, psycopg2 rolls
@@ -125,7 +156,8 @@ def run(handle):
         synced += 1
 
     print(f"[sync_study_history] @{handle}: synthesized {synced} study-history row(s), "
-          f"skipped {skipped} (already present from another source)")
+          f"skipped {skipped} (already present from another source), "
+          f"backfilled caption on {backfilled} pre-existing row(s)")
     db.close()
     return synced
 

@@ -102,6 +102,7 @@ export async function recordShadowScore({
   contentReadAxes = null, // Sweep C -- this row's own {curiosity, inspiration}, for group-mean folding below
   bigPicture = null, // this row's own flattened {judge}_big_{dim}/{judge}_objective_fit_score values
   trendAxes = null, // this row's own {trend_alignment, trending_topic}, for group-mean folding below
+  isInternal = false, // Track Record v2, Task 0 -- founder/team identity; forces pool_eligible=false below
 }) {
   try {
     const spec = loadSpec();
@@ -134,7 +135,10 @@ export async function recordShadowScore({
     const groupMeanTrendAxes = fpGroup && trendAxes
       ? foldGroupMean(trendAxes, fpGroup.existingTrendAxes, groupK)
       : trendAxes;
-    const poolEligible = !fpGroup; // only a group's first row stays eligible
+    // Track Record v2, Task 0 -- internal (founder/team) identities never
+    // enter the comparison pools, regardless of fingerprint-group status --
+    // the original pool-pollution class, closed structurally at write time.
+    const poolEligible = !fpGroup && !isInternal; // only a group's first row stays eligible, and never for an internal user
     // Bug fix: generated up front (not derived from this row's own id after
     // insert) so there is no INSERT-then-UPDATE gap for a concurrent match
     // lookup to read as null -- see the fpGroup doc comment above.

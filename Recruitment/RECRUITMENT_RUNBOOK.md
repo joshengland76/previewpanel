@@ -82,6 +82,10 @@ mint also stages their aged/outcome-resolved study history automatically
 day one instead of waiting on prospect ingest or their own future posts.
 `--no-sync` skips this.
 
+Founder/team access: `mint --internal` (Track Record v2, Task 0) — their
+submissions never enter the comparison pools and their activity is
+excluded from tester engagement stats (`pipeline_status.py`).
+
 ## `--study` workflow (already-enrolled research creator)
 
 One step — render does its own data pulls (Section A from cached OOF,

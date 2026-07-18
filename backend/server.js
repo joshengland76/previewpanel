@@ -43,6 +43,7 @@ import { buildScoringFeatures } from "./scoring/buildFeatures.js";
 import { recordShadowScore } from "./scoring/shadowScore.js";
 import { getScoreDisplay } from "./scoring/scoreDisplay.js";
 import { getPools, midrankPercentile } from "./scoring/percentilePools.js";
+import { clampPercentile } from "./scoring/scoreDisplayCopy.js";
 
 const { Pool } = pg;
 
@@ -546,6 +547,21 @@ async function recordBetaSubmissionEvent(userId) {
   }
 }
 
+// Track Record v2, Task 4 -- preview_run is logged HERE (server-side, at
+// the two real submission-accept call sites) rather than as a frontend
+// beacon, so it can only ever reflect a submission the gate actually
+// accepted -- not something a client-side beacon could fire independent
+// of that. Fire-and-forget: never awaited on the request path, same
+// spirit as runSynthesisForJob/runShadowScoringForJob below.
+async function logUserEvent(userId, event, meta = null) {
+  if (!pgPool || !userId) return;
+  try {
+    await queryRW(`INSERT INTO user_events (user_id, event, meta) VALUES ($1, $2, $3)`, [userId, event, meta ? JSON.stringify(meta) : null]);
+  } catch (err) {
+    console.error(`[user-events] failed to log ${event} for user_id=${userId}: ${err.message}`);
+  }
+}
+
 // Neon's serverless compute can present a transient read-only window right
 // after scaling/resuming from idle (observed 2026-07-04: same host, same
 // connection string, "cannot execute CREATE TABLE in a read-only transaction"
@@ -999,6 +1015,18 @@ async function initDb() {
     // endpoint's own idempotent-already-bound short-circuit (no need to
     // re-ask a bound user).
     await client.query(`ALTER TABLE redemptions ADD COLUMN IF NOT EXISTS identity_choice TEXT`);
+    // Track Record v2, Task 0 -- internal identities (founder/team access,
+    // beta_admin.py mint --internal). Redeeming an internal code sets
+    // users.is_internal=true (see /api/invite/redeem), which forces
+    // pool_eligible=false on every shadow_scores row this user's submissions
+    // write from then on -- founder/team testing must never enter the
+    // comparison pools real testers' percentiles are computed against. This
+    // closes the pool-pollution class structurally (a flag checked at
+    // write time), not by a one-time cleanup like the epoch backfill below.
+    // Also excluded from activity telemetry (Task 4) and validation funnel
+    // counts -- internal usage isn't tester engagement.
+    await client.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS is_internal BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_internal BOOLEAN DEFAULT false`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS beta_submission_events (
         id         BIGSERIAL PRIMARY KEY,
@@ -1008,6 +1036,27 @@ async function initDb() {
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_beta_events_user_id ON beta_submission_events(user_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_beta_events_created_at ON beta_submission_events(created_at)`);
+    // Track Record v2, Task 4 -- activity telemetry. No new PII: user_id is
+    // the same client-generated identity-lite UUID already used everywhere
+    // else, event is a fixed small vocabulary (session_open, previews_view,
+    // track_record_view, accounts_view, preview_run), meta is optional and
+    // never required to carry anything sensitive. Written unconditionally
+    // for every user_id, including internal ones -- is_internal exclusion
+    // happens at the REPORTING layer (pipeline_status.py's per-tester
+    // table), not by skipping the write, matching this codebase's existing
+    // pool_eligible convention (write always, filter at read time).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_events (
+        id         BIGSERIAL PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        event      TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        meta       JSONB
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_events_user_id ON user_events(user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_events_event ON user_events(event)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_events_created_at ON user_events(created_at)`);
 
     // Capstone v2 shadow-scoring (Phase B2, Task 4) — invisible, flags-gated
     // (SHADOW_SCORING/EXTRACT_CDIMS, both default off). Created unconditionally
@@ -3108,6 +3157,16 @@ async function runShadowScoringForJob(jobId) {
     // percentile already ranks the group-mean prediction, not the raw one.
     const fpGroup = await resolveFingerprintGroup(job);
 
+    // Track Record v2, Task 0 -- internal (founder/team) identities force
+    // pool_eligible=false on every shadow_scores row they write. One cheap
+    // lookup per scoring pass; job.userId is null for research/validation
+    // traffic, which is never internal by construction.
+    let isInternalUser = false;
+    if (job.userId) {
+      const { rows: internalRows } = await pgPool.query(`SELECT is_internal FROM users WHERE user_id = $1`, [job.userId]);
+      isInternalUser = !!internalRows[0]?.is_internal;
+    }
+
     const shadowResult = await recordShadowScore({
       queryRW,
       submissionId: job.submissionId ?? null,
@@ -3118,6 +3177,7 @@ async function runShadowScoringForJob(jobId) {
       cdimsStatus,
       platform: job.platform ?? null, // Phase C, Task 0b
       userId: job.userId ?? null, // Phase C, Task 1
+      isInternal: isInternalUser,
       contentReadAxes: ownContentReadAxes, // Sweep C -- folded into group_mean_content_read_axes below when grouped
       bigPicture: ownBigPicture, // folded into group_mean_big_picture below when grouped
       trendAxes: ownTrendAxes, // folded into group_mean_trend_axes below when grouped
@@ -3598,7 +3658,13 @@ async function gradeTrackRecordForUser(userId) {
         const prediction = row.y_pred;
         if (prediction == null) continue; // judging never produced a usable prediction for this row -- can't grade it
         if (!pools) pools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
-        overallPercentile = midrankPercentile(prediction, pools.overall);
+        // Track Record v2, Task 3c -- clamped once here, at computation
+        // (same convention scoreDisplayCopy.js's own clampPercentile
+        // comment documents: every consumer then sees an already-clamped
+        // value, never a raw 0/100 to format defensively). Clamping only
+        // touches the extreme ends (0->1, 100->99) so it can never flip
+        // the >=70/<=30 call-type classification below.
+        overallPercentile = clampPercentile(midrankPercentile(prediction, pools.overall));
         callType = overallPercentile >= CALL_STRONG_PCTILE ? "strong"
           : overallPercentile <= CALL_WEAK_PCTILE ? "weak" : "none";
       }
@@ -3689,7 +3755,7 @@ app.post("/api/invite/redeem", async (req, res) => {
     }
 
     const { rows: codeRows } = await pgPool.query(
-      `SELECT max_redemptions, known_tiktok_handle, known_instagram_handle, known_youtube_handle
+      `SELECT max_redemptions, known_tiktok_handle, known_instagram_handle, known_youtube_handle, is_internal
        FROM invite_codes WHERE code = $1`, [code]
     );
     if (!codeRows[0]) {
@@ -3702,7 +3768,7 @@ app.post("/api/invite/redeem", async (req, res) => {
       return res.status(400).json({ error: "This invite code has reached its redemption limit." });
     }
 
-    const { known_tiktok_handle, known_instagram_handle, known_youtube_handle } = codeRows[0];
+    const { known_tiktok_handle, known_instagram_handle, known_youtube_handle, is_internal } = codeRows[0];
     const isPreLinked = !!(known_tiktok_handle || known_instagram_handle || known_youtube_handle);
 
     if (isPreLinked && claimIdentity === null) {
@@ -3718,6 +3784,19 @@ app.post("/api/invite/redeem", async (req, res) => {
       `INSERT INTO redemptions (user_id, code, identity_choice) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING`,
       [userId, code, isPreLinked ? (claimIdentity ? "claimed" : "declined") : null]
     );
+
+    // Track Record v2, Task 0 -- an internal code marks the user internal
+    // regardless of pre-linked/claim status (team access doesn't require a
+    // known handle). Upsert, since a non-pre-linked internal code redeemer
+    // may have no users row yet.
+    if (is_internal) {
+      await queryRW(
+        `INSERT INTO users (user_id, is_internal) VALUES ($1, true)
+         ON CONFLICT (user_id) DO UPDATE SET is_internal = true`,
+        [userId]
+      );
+      console.log(`[invite] user_id=${userId} redeemed an internal code (${code}) -- flagged is_internal=true`);
+    }
 
     let claimResult = null;
     if (isPreLinked && claimIdentity) {
@@ -3794,7 +3873,7 @@ app.get("/api/track-record", async (req, res) => {
         postedVideoId: r.id,
         postedAt: r.posted_at,
         captionSnippet: snippet(r.caption),
-        overallPercentile: r.y_pred != null && pools ? midrankPercentile(r.y_pred, pools.overall) : null,
+        overallPercentile: r.y_pred != null && pools ? clampPercentile(midrankPercentile(r.y_pred, pools.overall)) : null,
         checkInDate: checkInDate(r.posted_at),
         previewed: r.match_tier != null && r.match_tier <= 2,
       }));
@@ -3833,6 +3912,11 @@ app.get("/api/track-record", async (req, res) => {
       aggregates = {
         hits: hitOrMiss.filter((g) => g.verdict === "hit").length,
         graded: hitOrMiss.length,
+        // Track Record v2, Task 3d -- counts (not just averages) so the
+        // frontend can gate the averages sub-stat on >=2 of EACH type,
+        // not just the combined AGGREGATE_MIN.
+        strongCount: strong.length,
+        weakCount: weak.length,
         avgTimesTypicalStrong: avg(strong),
         avgTimesTypicalWeak: avg(weak),
       };
@@ -3858,6 +3942,31 @@ app.get("/api/track-record", async (req, res) => {
   } catch (err) {
     console.error(`[track-record] fetch failed for user_id=${userId}: ${err.message}`);
     res.status(500).json({ error: "Failed to load track record" });
+  }
+});
+
+// POST /api/event { userId, event, meta? } -- Track Record v2, Task 4.
+// Fire-and-forget activity telemetry from the frontend (session_open,
+// previews_view, track_record_view, accounts_view); preview_run is logged
+// SERVER-SIDE instead, at the two real submission-accept call sites
+// (/api/analyze, /api/fetch-video), not from here -- a client-side beacon
+// for that specific event could fire without a submission actually being
+// accepted (gated out, network failure after the beacon, etc.). A fixed
+// small event vocabulary is enforced so this can never become an
+// arbitrary analytics sink; unrecognized event names are rejected.
+const VALID_USER_EVENTS = new Set(["session_open", "previews_view", "track_record_view", "accounts_view", "preview_run"]);
+app.post("/api/event", async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  const userId = (req.body.userId || "").toString().trim();
+  const event = (req.body.event || "").toString().trim();
+  const meta = req.body.meta && typeof req.body.meta === "object" ? req.body.meta : null;
+  if (!userId || !VALID_USER_EVENTS.has(event)) return res.status(400).json({ error: "Invalid event" });
+  try {
+    await queryRW(`INSERT INTO user_events (user_id, event, meta) VALUES ($1, $2, $3)`, [userId, event, meta ? JSON.stringify(meta) : null]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[event] failed to log ${event} for user_id=${userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to log event" });
   }
 });
 
@@ -4077,6 +4186,7 @@ app.post("/api/fetch-video", async (req, res) => {
 
   console.log(`[${jobId}] Link-fetch job created — platform=${platform} url=${parsed.href} queue position: ${queuePosition}`);
   await recordBetaSubmissionEvent(userId); // counts toward the rolling-30-day allowance + daily cap
+  logUserEvent(userId, "preview_run", { platform }); // fire-and-forget, Track Record v2 Task 4
   res.json({ jobId, queuePosition });
 
   // Same preprocess -> enqueue -> runPipeline sequence /api/analyze uses for
@@ -4166,6 +4276,7 @@ app.post("/api/analyze", (req, res, next) => {
 
     console.log(`[${jobId}] Job created — queue position: ${queuePosition}, browser_upload_ms: ${req.browserUploadMs ?? "null"} — sending jobId to client`);
     await recordBetaSubmissionEvent(userId); // counts toward the rolling-30-day allowance + daily cap
+    logUserEvent(userId, "preview_run", { platform }); // fire-and-forget, Track Record v2 Task 4
     res.json({ jobId, queuePosition });
 
     // ── Preprocess file outside the queue ─────────────────────────────────────
