@@ -751,8 +751,20 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
             continue
 
         print(f"[generate_preview] live link-fetch: {r['source_url']}")
-        job_id = _fetch_video(r["source_url"], objective if mode == "objective" else "")
-        result = _poll_status(job_id)
+        # Hotfix v2 follow-up (found during live verification): a single
+        # video that genuinely can't be fetched (e.g. yt-dlp IP-blocked for
+        # that specific post -- a real, transient, video-specific failure,
+        # not a bug) used to raise straight out of _fetch_video/_poll_status
+        # and crash the WHOLE script, defeating this hotfix's own point --
+        # per-video resumability means one bad video shouldn't cost the
+        # other N-1. Treat any request-layer failure the same as an
+        # explicit non-done/partial status: log and move on.
+        try:
+            job_id = _fetch_video(r["source_url"], objective if mode == "objective" else "")
+            result = _poll_status(job_id)
+        except (requests.exceptions.RequestException, TimeoutError) as e:
+            print(f"[generate_preview]   FAILED ({e}) -- skipping this video", file=sys.stderr)
+            continue
         if result.get("status") not in ("done", "partial"):
             print(f"[generate_preview]   FAILED (status={result.get('status')}) -- skipping this video", file=sys.stderr)
             continue
