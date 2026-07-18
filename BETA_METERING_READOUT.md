@@ -162,11 +162,9 @@ posted-video tracking against their own receipts).
 
 ## Git / deploy state
 
-- Commit: `6aca2fb` (Tasks 1-5), on `origin/main`, pushed.
-- Research repo: `PreviewPanel_Operations_and_Roadmap.md` §1a/§4 edits
-  made; not yet committed as of this readout (Task 7 doc work, see
-  below) — commit left to the user's own convention for the research
-  repo, same as every prior dispatch in this session.
+- Commit: `6aca2fb` (Tasks 1-5), `e623255` (this readout), on
+  `origin/main`, pushed.
+- Research repo: `1379e99` (§1a item 10 + §4 trigger line), pushed.
 - Deployed — Render (backend): Y, confirmed live via `/version`
   (`6aca2fb`) before Task 6 began; env vars temporarily forced to
   `BETA_ALLOWANCE=1` then `DAILY_SUBMISSION_CAP=1` for the live
