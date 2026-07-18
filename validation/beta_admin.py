@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
+import sync_study_history
+
 BETA_ALLOWANCE = int(os.environ.get("BETA_ALLOWANCE", "15"))
 
 # Excludes visually-ambiguous characters (0/O, 1/I/L) -- these codes get
@@ -77,6 +79,18 @@ def cmd_mint(conn, args):
     cur.close()
     pre_linked = f" pre-linked=@{tiktok}" if tiktok else (f" pre-linked=(ig:{instagram} yt:{youtube})" if (instagram or youtube) else "")
     print(f"[beta_admin] minted code={code} label={args.label!r} max_redemptions={args.max_redemptions}{pre_linked}")
+
+    # Track Record, Task 3b -- a TikTok handle that's also an enrolled
+    # research creator gets their study history staged automatically, so
+    # their Track Record tab opens populated the moment they redeem rather
+    # than waiting on prospect ingest or their own future posts. No-op
+    # (prints plainly, mint still succeeds) for a non-study handle or one
+    # with no OOF-covered/outcome-resolved aged videos -- sync_study_history
+    # itself reports that case; --no-sync skips this entirely.
+    if tiktok and not args.no_sync:
+        synced = sync_study_history.run(tiktok)
+        if synced:
+            print(f"[beta_admin] synthesized {synced} study-history row(s) for @{tiktok}")
 
 
 def cmd_list(conn, args):
@@ -161,6 +175,7 @@ def main():
     p_mint.add_argument("--handle", default=None, help="pre-link a known TikTok handle (e.g. thecolorfulpantry)")
     p_mint.add_argument("--instagram", default=None, help="pre-link a known Instagram handle")
     p_mint.add_argument("--youtube", default=None, help="pre-link a known YouTube handle")
+    p_mint.add_argument("--no-sync", action="store_true", help="skip auto study-history sync even if --handle matches a research creator")
     p_mint.set_defaults(func=cmd_mint)
 
     p_list = sub.add_parser("list", help="list codes with redemption + usage counts")

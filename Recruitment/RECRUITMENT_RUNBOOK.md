@@ -76,6 +76,12 @@ redemption flow.
 ./_venv/bin/python3 beta_admin.py mint --label "Name" --handle theirhandle
 ```
 
+For an already-enrolled research creator (an OOF-covered `--study` handle),
+mint also stages their aged/outcome-resolved study history automatically
+(`sync_study_history.py`, Track Record Task 3b) — their tab opens ACTIVE
+day one instead of waiting on prospect ingest or their own future posts.
+`--no-sync` skips this.
+
 ## `--study` workflow (already-enrolled research creator)
 
 One step — render does its own data pulls (Section A from cached OOF,

@@ -3539,7 +3539,7 @@ async function gradeTrackRecordForUser(userId) {
     // a later row's baseline the same as it always did -- freezing a
     // VERDICT doesn't remove that row's WEC_rate from the shared pool.
     const { rows: outcomeRows } = await pgPool.query(
-      `SELECT id, day30_wec_rate, verdict FROM posted_videos
+      `SELECT id, day30_wec_rate, verdict, y_pred, call_type, overall_percentile_at_grading FROM posted_videos
        WHERE user_id = $1 AND status = 'day30_collected' AND day30_wec_rate IS NOT NULL
          AND test_row IS NOT TRUE`,
       [userId]
@@ -3561,20 +3561,40 @@ async function gradeTrackRecordForUser(userId) {
     // never itself a member of this pool (is_posted_video excludes it from
     // fetchShadowRows), so no excludeKey/self-exclusion is needed the way
     // scoreDisplay.js needs one for a live app submission ranking itself.
-    const pools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
+    // Only fetched lazily (below) if at least one ungraded row actually
+    // needs it -- a study-history sync already pre-computed both fields
+    // for every row it wrote, so an all-study-history batch never touches
+    // this at all.
+    let pools = null;
 
     for (const row of ungraded) {
-      const { rows: shadowRows } = await pgPool.query(
-        `SELECT prediction FROM shadow_scores WHERE posted_video_id = $1 AND prediction IS NOT NULL
-         ORDER BY created_at DESC LIMIT 1`,
-        [row.id]
-      );
-      const prediction = shadowRows[0]?.prediction;
-      if (prediction == null) continue; // judging never produced a usable prediction for this row -- can't grade it
-
-      const overallPercentile = midrankPercentile(prediction, pools.overall);
-      const callType = overallPercentile >= CALL_STRONG_PCTILE ? "strong"
-        : overallPercentile <= CALL_WEAK_PCTILE ? "weak" : "none";
+      // Track Record, Task 3b -- validation/sync_study_history.py
+      // pre-computes call_type + overall_percentile_at_grading at SYNC
+      // time (its own Python port of this exact pool math, self-excluding
+      // the creator, same as generate_preview.py --study's Section A) for
+      // any row it writes, so this grading pass does NOT recompute or
+      // overwrite them here -- it only derives times_typical/verdict from
+      // whatever's already stored. Recomputing against THIS pool (live,
+      // right now) instead of using the sync-time value would silently
+      // discard the "at sync time" pool the sync script's own comment
+      // documents as its honest limitation, and would disagree with
+      // whatever a --study/--prospect PDF rendered for the same video.
+      let overallPercentile = row.overall_percentile_at_grading;
+      let callType = row.call_type;
+      if (overallPercentile == null || callType == null) {
+        // posted_videos.y_pred is written from the exact same shadowResult.
+        // prediction value at ingest time (see the /api/validation/ingest
+        // write-back) -- reading it directly here means grading has no
+        // dependency on the shadow_scores row surviving (it's a separate
+        // table with its own lifecycle; this row is the one Track Record
+        // actually owns and displays).
+        const prediction = row.y_pred;
+        if (prediction == null) continue; // judging never produced a usable prediction for this row -- can't grade it
+        if (!pools) pools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
+        overallPercentile = midrankPercentile(prediction, pools.overall);
+        callType = overallPercentile >= CALL_STRONG_PCTILE ? "strong"
+          : overallPercentile <= CALL_WEAK_PCTILE ? "weak" : "none";
+      }
       const timesTypical = row.day30_wec_rate / typical;
       const verdict = callType === "none" ? "no_call"
         : callType === "strong" ? (timesTypical >= 1.0 ? "hit" : "miss")
@@ -3740,7 +3760,7 @@ app.get("/api/track-record", async (req, res) => {
     const { rows: allRows } = await pgPool.query(
       `SELECT id, posted_at, caption, status, match_tier, day30_wec_rate, day30_views, day30_likes,
               day30_comments, day30_shares, day30_saves, call_type, times_typical, verdict, graded_at,
-              baseline_n_at_grading, overall_percentile_at_grading
+              baseline_n_at_grading, overall_percentile_at_grading, y_pred
        FROM posted_videos WHERE user_id = $1 AND test_row IS NOT TRUE ORDER BY posted_at DESC`,
       [userId]
     );
@@ -3752,29 +3772,22 @@ app.get("/api/track-record", async (req, res) => {
     const snippet = (c) => (c ? (c.length > 90 ? c.slice(0, 90).trim() + "…" : c) : null);
     const checkInDate = (postedAt) => new Date(new Date(postedAt).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
+    // y_pred is read directly off posted_videos (written at ingest time from
+    // the same shadowResult.prediction shadow_scores itself stores) rather
+    // than joined from shadow_scores -- this is the row Track Record
+    // actually owns and displays, so its percentile pill shouldn't depend on
+    // a separate table's row surviving.
     let pending = [];
     if (pendingRows.length > 0) {
-      const pendingIds = pendingRows.map((r) => r.id);
-      const { rows: shadowRows } = await pgPool.query(
-        `SELECT posted_video_id, prediction FROM shadow_scores
-         WHERE posted_video_id = ANY($1::int[]) AND prediction IS NOT NULL
-         ORDER BY created_at DESC`,
-        [pendingIds]
-      );
-      const predictionByPostedVideoId = new Map();
-      for (const r of shadowRows) if (!predictionByPostedVideoId.has(r.posted_video_id)) predictionByPostedVideoId.set(r.posted_video_id, r.prediction);
-      const pools = pendingRows.some((r) => predictionByPostedVideoId.has(r.id)) ? await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows) : null;
-      pending = pendingRows.map((r) => {
-        const prediction = predictionByPostedVideoId.get(r.id);
-        return {
-          postedVideoId: r.id,
-          postedAt: r.posted_at,
-          captionSnippet: snippet(r.caption),
-          overallPercentile: prediction != null && pools ? midrankPercentile(prediction, pools.overall) : null,
-          checkInDate: checkInDate(r.posted_at),
-          previewed: r.match_tier != null && r.match_tier <= 2,
-        };
-      });
+      const pools = pendingRows.some((r) => r.y_pred != null) ? await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows) : null;
+      pending = pendingRows.map((r) => ({
+        postedVideoId: r.id,
+        postedAt: r.posted_at,
+        captionSnippet: snippet(r.caption),
+        overallPercentile: r.y_pred != null && pools ? midrankPercentile(r.y_pred, pools.overall) : null,
+        checkInDate: checkInDate(r.posted_at),
+        previewed: r.match_tier != null && r.match_tier <= 2,
+      }));
     }
 
     const graded = collectedRows.filter((r) => r.verdict != null).map((r) => ({
