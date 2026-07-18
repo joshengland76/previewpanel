@@ -3920,6 +3920,49 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
 
     if (!pgPool) { cleanupTempFile(); return res.status(503).json({ error: "Database not available" }); }
 
+    // Enhancements, Task 4 -- ingest idempotency guard. Closes the root-cause
+    // hypothesis behind a real duplicate-scoring anomaly (Transport hotfix,
+    // Task 6): this endpoint is synchronous (it awaits full judging before
+    // responding, see waitForJobCompletion below), and its client's timeout
+    // used to sit almost exactly at the server's own internal cap -- under
+    // real load the client gave up and the caller retried (or a second
+    // script invocation ran) while the FIRST request was still quietly
+    // finishing server-side, and both eventually succeeded, writing two
+    // shadow_scores rows for the same video minutes apart. NOT applied to
+    // /api/fetch-video: that endpoint returns a jobId immediately and the
+    // caller polls /api/status separately -- it never blocks a client
+    // connection across the judging window, so it doesn't share this
+    // specific race. Only fires when the caller supplies sourceUrl (the
+    // only reliable per-video identity here); a matching, already-scored
+    // row from the last 24h short-circuits the ENTIRE judging/scoring
+    // pipeline and returns its result directly, no re-scoring.
+    if (sourceUrl) {
+      const { rows: existingRows } = await pgPool.query(
+        `SELECT s.posted_video_id FROM shadow_scores s
+         WHERE s.source_url = $1 AND s.prediction IS NOT NULL
+           AND s.created_at > now() - interval '24 hours'
+         ORDER BY s.created_at DESC LIMIT 1`,
+        [sourceUrl]
+      );
+      const existingPostedVideoId = existingRows[0]?.posted_video_id;
+      if (existingPostedVideoId != null) {
+        cleanupTempFile();
+        const { rows: pvRows } = await pgPool.query(
+          `SELECT status, y_pred, avg_score FROM posted_videos WHERE id = $1`,
+          [existingPostedVideoId]
+        );
+        console.log(`[validation] idempotent hit for sourceUrl=${sourceUrl} -- returning existing `
+          + `posted_video_id=${existingPostedVideoId}, no re-scoring`);
+        return res.status(200).json({
+          postedVideoId: existingPostedVideoId,
+          status: pvRows[0]?.status ?? "scored",
+          yPred: pvRows[0]?.y_pred ?? null,
+          avgScore: pvRows[0]?.avg_score ?? null,
+          idempotent: true,
+        });
+      }
+    }
+
     // Borrow the matched preview's objective (there is no user-submitted
     // objective for a posted video) -- null for an unmatched (Tier 3) video,
     // which the scoring pipeline already handles gracefully. An explicit

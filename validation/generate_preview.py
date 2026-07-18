@@ -86,6 +86,8 @@ import psycopg2
 import psycopg2.extras
 import requests
 
+import spec_scorer
+
 HERE = pathlib.Path(__file__).resolve().parent
 BACKEND_SCORING = HERE.parent / "backend" / "scoring"
 TIERS_PATH = BACKEND_SCORING / "tiers_v2_2.json"
@@ -823,41 +825,138 @@ def _reused_row_for_url(db, source_url, objective, mode, reuse_within_hours):
     """, params, fetch="one", cursor_factory=psycopg2.extras.RealDictCursor)
 
 
+SUBMISSION_FEATURE_COLUMNS = """
+    critic_score, trendsetter_score, connector_score, avg_score,
+    critic_objective_fit_score, trendsetter_objective_fit_score, connector_objective_fit_score,
+    critic_big_funny, critic_big_compelling, critic_big_authentic, critic_big_novel,
+    critic_big_visually_engaging, critic_big_emotionally_resonant, critic_big_useful,
+    critic_big_surprising, critic_big_relatable, critic_big_emotion_intensity,
+    trendsetter_big_funny, trendsetter_big_compelling, trendsetter_big_authentic, trendsetter_big_novel,
+    trendsetter_big_visually_engaging, trendsetter_big_emotionally_resonant, trendsetter_big_useful,
+    trendsetter_big_surprising, trendsetter_big_relatable, trendsetter_big_emotion_intensity,
+    connector_big_funny, connector_big_compelling, connector_big_authentic, connector_big_novel,
+    connector_big_visually_engaging, connector_big_emotionally_resonant, connector_big_useful,
+    connector_big_surprising, connector_big_relatable, connector_big_emotion_intensity,
+    tiktok_rewatch_potential, tiktok_seo_strength,
+    risk_sexual_suggestive, risk_violence_shock, risk_hate_harassment,
+    risk_profanity, risk_outrage_inflammatory, risk_dangerous_acts,
+    duration_secs
+"""
+CDIMS_FEATURE_COLUMNS = """
+    big_funny, big_compelling, big_authentic, big_novel, big_visually_engaging,
+    big_emotionally_resonant, big_useful, big_surprising, big_relatable, big_polished,
+    hook_strength_visual, hook_strength_audio, emotion_primary_intensity, emotion_secondary_intensity,
+    trending_topic_likelihood, trending_alignment_signals, cover_text_promises_value,
+    cta_present, direct_address, audio_likely_trending, caption_tone, hook_style, cta_type,
+    emotion_targeted, emotion_primary, emotion_secondary, text_overlay_density, text_overlay_role,
+    specificity, emotion_combination
+"""
+
+
+def _stored_research_features(db, research_video_id, file_name):
+    """Enhancements, Task 2 -- looks up this video's ALREADY-scored judge
+    data and C_dims, both written by the research pipeline's own morning
+    chain (submit_to_pp.py submits active creators' videos through the
+    live judging path; parser.py's Stage-D Claude call extracts C_dims),
+    entirely independent of this script and at no marginal cost to it.
+    Judge scores/dimensions live in the app's own `submissions` table,
+    joined via file_name -- the SAME join key submit_to_pp.py's own
+    DISCOVERY_QUERY uses (research_videos.file_name ==
+    submissions.file_name; there is no FK id linking them). C_dims lives
+    in `research_pp_runs_claude`, joined via video_id (a real FK).
+    Returns (submission_row, cdims_row) -- either may be None."""
+    submission = db.query(
+        f"SELECT {SUBMISSION_FEATURE_COLUMNS} FROM submissions WHERE file_name = %s ORDER BY created_at DESC LIMIT 1",
+        (file_name,), fetch="one", cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+    cdims = db.query(
+        f"SELECT {CDIMS_FEATURE_COLUMNS} FROM research_pp_runs_claude WHERE video_id = %s ORDER BY created_at DESC LIMIT 1",
+        (research_video_id,), fetch="one", cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+    return submission, cdims
+
+
 def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=24):
-    """Videos posted <30 days ago: scored FRESH via the Mac-side transport
-    (Transport hotfix, Task 1) -- download locally + /api/validation/ingest,
-    the SAME pattern worker.py's --prospect mode already uses. Replaces the
-    old Render-side /api/fetch-video link-fetch, which ran from a
-    datacenter IP TikTok can and does block per-video (the marisjones
-    incident: 3 of 5 candidates 422'd from Render while every one of them
-    downloaded cleanly from this machine). Per-video reuse (Hotfix v2,
-    Task 2) unchanged: default reuse_within_hours=24, pass 0 to disable.
-    Returns (out, attempted, succeeded) -- Transport hotfix, Task 2's
-    coverage tracking (attempted = candidates in the <30-day window;
-    succeeded = how many ended up with a real score, reused or fresh)."""
+    """Videos posted <30 days ago. THREE tiers, cheapest first (Enhancements,
+    Task 2):
+      1. Stored research features ($0) -- if the morning chain's own
+         pipeline (submit_to_pp.py + parser.py's Stage-D) already scored
+         this exact video for an ACTIVE creator, judge data + C_dims are
+         already sitting in `submissions`/`research_pp_runs_claude` --
+         score locally via spec_scorer.py, no network call at all.
+         Requires >=2 of 3 judges present AND a C_dims row -- a partial-
+         judge or C_dims-less row isn't "complete features," falls through.
+      2. Per-video reuse (Hotfix v2) -- an existing shadow_scores row for
+         this exact URL within reuse_within_hours, from a PRIOR run of
+         THIS script.
+      3. Mac-side live fetch (Transport hotfix, Task 1) -- download
+         locally + /api/validation/ingest, immune to the Render-datacenter
+         IP block that /api/fetch-video hit (the marisjones incident).
+
+    Day-30 check-in dates are unchanged (posted_at + 30d) regardless of
+    which tier scored a video -- an active creator's real day-30 outcome
+    also arrives independently via the research pipeline's own
+    day30_metrics.py capture, same as any other research_videos row;
+    nothing about THIS script's check-in date depends on which tier
+    supplied the prediction.
+
+    Returns (out, attempted, succeeded) -- coverage tracking (Transport
+    hotfix, Task 2): attempted = candidates in the <30-day window;
+    succeeded = how many ended up with a real score, via any tier."""
     rows = db.query("""
-        SELECT id AS video_id, posted_at, caption, source_url, external_video_id
+        SELECT id AS video_id, posted_at, caption, source_url, external_video_id,
+               file_name, is_sponsored, sponsored_brand
         FROM research_videos
         WHERE creator_id = %s AND posted_at IS NOT NULL
           AND posted_at > now() - interval '%s days' AND source_url IS NOT NULL
         ORDER BY posted_at DESC
     """, (creator_id, AGED_MIN_DAYS), fetch="all", cursor_factory=psycopg2.extras.RealDictCursor)
 
-    # Determine the reuse/fetch split UP FRONT (before any live fetches
-    # start) so the honest "reusing K of N; fetching N-K" line prints as a
-    # plan, not a running tally -- same operator-facing shape the old
-    # batch-level log line had.
+    # Tier 1: stored research features. Checked for EVERY candidate up
+    # front (free -- two indexed reads, no network) before any reuse
+    # lookup or live fetch is even considered.
+    stored = {}
+    for r in rows:
+        submission, cdims = _stored_research_features(db, r["video_id"], r["file_name"])
+        judge_count = sum(1 for v in (
+            submission.get("critic_score") if submission else None,
+            submission.get("trendsetter_score") if submission else None,
+            submission.get("connector_score") if submission else None,
+        ) if v is not None)
+        if submission and judge_count >= 2 and cdims is not None:
+            features = spec_scorer.build_features_from_stored(
+                submission=submission, cdims=cdims,
+                is_sponsored=r.get("is_sponsored"), sponsored_brand=r.get("sponsored_brand"),
+            )
+            stored[r["video_id"]] = {
+                "prediction": spec_scorer.score_features(features),
+                "axis_scores": axis_scores_from_input_features(features),
+            }
+
+    # Tier 2: per-video reuse -- only for candidates Tier 1 didn't cover.
+    # Determined UP FRONT (before any live fetches start) so the honest
+    # "reusing K of N; fetching N-K" line prints as a plan, not a running
+    # tally -- same operator-facing shape the old batch-level log line had.
+    remaining = [r for r in rows if r["video_id"] not in stored]
     hits = {}
-    if reuse_within_hours:
-        for r in rows:
+    if reuse_within_hours and remaining:
+        for r in remaining:
             hit = _reused_row_for_url(db, r["source_url"], objective, mode, reuse_within_hours)
             if hit and hit.get("prediction") is not None:
                 hits[r["video_id"]] = hit
-        print(f"[generate_preview] reusing {len(hits)} of {len(rows)}; fetching {len(rows) - len(hits)}")
+        print(f"[generate_preview] reusing {len(hits)} of {len(remaining)}; fetching {len(remaining) - len(hits)}")
 
     out = []
+    unfetchable = 0
     DOWNLOAD_DIR.mkdir(exist_ok=True)
     for r in rows:
+        if r["video_id"] in stored:
+            out.append({
+                "posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
+                **stored[r["video_id"]],
+            })
+            continue
+
         hit = hits.get(r["video_id"])
         if hit is not None:
             out.append({
@@ -870,6 +969,7 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
         tiktok_video_id = r.get("external_video_id")
         if not tiktok_video_id:
             print(f"[generate_preview]   FAILED (no external_video_id on record) -- skipping {r['source_url']}", file=sys.stderr)
+            unfetchable += 1
             continue
 
         print(f"[generate_preview] Mac-side fetch: {r['source_url']}")
@@ -879,6 +979,7 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
             ok, err = _download_video_local(r["source_url"], local_path)
             if not ok:
                 print(f"[generate_preview]   FAILED (download: {err}) -- skipping this video", file=sys.stderr)
+                unfetchable += 1
                 continue
             try:
                 resp = _ingest_video_local(
@@ -887,6 +988,7 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
                 )
             except (requests.exceptions.RequestException, TimeoutError) as e:
                 print(f"[generate_preview]   FAILED (ingest: {e}) -- skipping this video", file=sys.stderr)
+                unfetchable += 1
                 continue
         finally:
             local_path.unlink(missing_ok=True)  # cleanup convention -- never accumulate downloads on disk
@@ -894,6 +996,7 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
         if resp.status_code != 200:
             print(f"[generate_preview]   FAILED (ingest {resp.status_code}: {resp.text[:200]}) -- skipping this video",
                   file=sys.stderr)
+            unfetchable += 1
             continue
         posted_video_id = resp.json().get("postedVideoId")
 
@@ -911,6 +1014,7 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
         """, (posted_video_id,), fetch="one", cursor_factory=psycopg2.extras.RealDictCursor)
         if not pred_row or pred_row.get("prediction") is None:
             print("[generate_preview]   no shadow_scores row landed -- skipping", file=sys.stderr)
+            unfetchable += 1
             continue
         out.append({
             "posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
@@ -918,6 +1022,9 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
             "axis_scores": axis_scores_from_input_features(pred_row["input_features"]),
         })
         time.sleep(INTER_VIDEO_DELAY_S)  # politeness delay between Mac-side fetches
+
+    live_fetched = len(out) - len(stored)
+    print(f"[generate_preview] stored-features: {len(stored)}, live-fetched: {live_fetched}, unfetchable: {unfetchable}")
     return out, len(rows), len(out)
 
 

@@ -114,6 +114,29 @@ link-fetch. Render's datacenter IP can be (and has been) blocked by
 TikTok on a per-video basis — this transport is immune to that, since
 the fetch never leaves this Mac.
 
+**Active-creator renders are the cheapest of all** (Enhancements,
+Task 2). If the handle is an active creator, its own daily morning chain
+(`submit_to_pp.py` + parser.py's Stage-D) usually already scored a
+Section-B video through the real live path BEFORE you ever run this
+script — judge data sits in `submissions`, C_dims in
+`research_pp_runs_claude`. When that's true (≥2 of 3 judges + a C_dims
+row), `spec_scorer.py` (a pure-Python port of the same
+`scoring_spec_v2.json` the app itself scores with, golden-vector-verified
+to ≤1e-9) scores it **locally, at $0, no network call at all** — cheaper
+than even a reused row, since nothing touches the DB write path or
+Render. Per-video reuse and the Mac-side live fetch are still there as
+the next two tiers, in that order, for whatever the morning chain hasn't
+covered yet. The console always reports the three-way split:
+
+```
+[generate_preview] stored-features: 8, live-fetched: 1, unfetchable: 0
+```
+
+An active creator with a full recent posting history can render for
+**$0 or close to it** — the "typical cost" table below is really the
+worst case (a --study handle with NO morning-chain coverage at all, or a
+brand-new --prospect ingest).
+
 ## `--study` says no OOF coverage
 
 Before spending anything on Section B, the script checks whether this
