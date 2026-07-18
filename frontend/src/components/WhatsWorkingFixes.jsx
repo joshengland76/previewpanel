@@ -7,10 +7,11 @@ import { B, VALENCE, JUDGE_BY_CANON } from "../brand.js";
 // Timeline + grouped lists from synthesis.takeaways: [{ kind:"strength"|
 // "watchout"|"fix", text, judges:[canon], t_seconds, impact, takes:[{judge,text}] }].
 //
-//   • timeline marks = one plain dot per distinct point in time. Several
-//     takeaways landing on (or very near) the same point collapse into that
-//     SAME single dot -- no stacking, no per-kind icon, no count -- the kind/
-//     judge/impact detail lives in the grouped lists below, not the timeline.
+//   • timeline marks = one plain dot per DISTINCT timestamp, at its true
+//     position -- dots may visually overlap rather than merge. Only
+//     takeaways sharing the exact same t_seconds collapse into one dot --
+//     no stacking, no per-kind icon, no count -- the kind/judge/impact
+//     detail lives in the grouped lists below, not the timeline.
 //   • grouped lists below — What's working / Watch-outs / Fixes — each row's text
 //     + per-judge attribution icons (same metaphor) + (fixes) impact chip.
 //   • tap a row (or its dot) to reveal a line per attributed judge; a dot
@@ -25,7 +26,6 @@ const IMPACT = {
 };
 
 const VB_W = 600, VB_H = 88, PAD = 56, BASE = 44;
-const STACK_GAP = 22; // x-distance under which marks count as the SAME point
 const WRENCH_D = "M507.73 109.1c-2.24-9.03-13.54-12.09-20.12-5.51l-74.36 74.36-67.88-11.31-11.31-67.88 74.36-74.36c6.62-6.62 3.43-17.9-5.66-20.16-47.38-11.74-99.55.91-136.58 37.93-39.64 39.64-50.55 97.1-34.05 147.2L18.74 402.76c-24.99 24.99-24.99 65.51 0 90.5 24.99 24.99 65.51 24.99 90.5 0l213.21-213.21c50.12 16.71 107.47 5.68 147.37-34.22 37.07-37.07 49.7-89.32 37.91-136.73z";
 
 function fmt(sec) { const s = Math.max(0, Math.round(Number(sec) || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
@@ -88,21 +88,18 @@ export function WhatsWorkingFixes({ synthesis, duration }) {
   const maxT = onTrack.reduce((m, t) => Math.max(m, t.t_seconds), 0);
   const trackMax = Math.max(Number(duration) || 0, maxT, 1);
   const xOf = (t, r) => Math.max(PAD + r, Math.min(VB_W - PAD - r, PAD + (t / trackMax) * (VB_W - PAD * 2)));
-  // One dot per distinct point in time. Several takeaways landing on (or very
-  // near) the same point collapse into that same dot -- deliberately no
-  // stacking or per-kind marker; which kinds/judges are involved is left to
-  // the grouped lists below.
-  const sortedMarks = onTrack.map((t) => ({ t, x0: xOf(t.t_seconds, 5) })).sort((a, b) => a.x0 - b.x0);
-  const clusters = [];
-  sortedMarks.forEach((m) => {
-    const g = clusters[clusters.length - 1];
-    if (g && m.x0 - g[g.length - 1].x0 < STACK_GAP) g.push(m);
-    else clusters.push([m]);
+  // One dot per DISTINCT timestamp, placed at its true position on the
+  // timeline -- even if that means two dots visually overlap. Only
+  // takeaways sharing the EXACT same t_seconds collapse into one dot;
+  // proximity alone is no longer grounds to merge (that used to average
+  // nearby-but-different timestamps into a single misleading position).
+  const groups = new Map(); // t_seconds -> { x, ids }
+  onTrack.forEach((t) => {
+    const key = t.t_seconds;
+    if (!groups.has(key)) groups.set(key, { x: xOf(t.t_seconds, 5), ids: [] });
+    groups.get(key).ids.push(t.i);
   });
-  const placed = clusters.map((g) => ({
-    x: g.reduce((s, m) => s + m.x0, 0) / g.length,
-    ids: g.map((m) => m.t.i),
-  }));
+  const placed = [...groups.values()];
   const toggle = (i) => setOpen((s) => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
   // A dot may cover several takeaways -- toggle them as a group: open every
   // one that isn't already open, or (if all are already open) close them all.

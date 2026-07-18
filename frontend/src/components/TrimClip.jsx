@@ -26,6 +26,24 @@ const NUDGE = 3;     // seconds each handle may move from the suggestion
 const STEP = 0.1;    // stepper increment
 const GAP = 0.3;     // minimum clip length
 
+// Save-behavior differs by platform for a blob URL + <a download> (how the
+// finished clip is delivered, see `download` below): iOS/iPadOS Safari does
+// not reliably honor the `download` attribute for a blob -- it very often
+// opens the video in a new tab instead of saving it, so the user has to
+// fall back to the Share sheet. Android Chrome (and Chromium-based Android
+// browsers generally) DOES honor it -- the clip downloads straight to the
+// device like any other file, no Share-sheet step needed, though on some
+// devices there's a brief delay before it shows up. Desktop browsers also
+// just download it normally, so no tip is shown there at all.
+const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+const IS_IOS = /iPad|iPhone|iPod/.test(ua);
+const IS_ANDROID = /Android/.test(ua);
+const SAVE_TIP = IS_IOS
+  ? "Tapping Download may open the clip in a new tab instead of saving it — tap the Share icon, then Save Video, to keep it."
+  : IS_ANDROID
+  ? "The clip downloads straight to your device — check your notification shade or Downloads folder if you don't see it right away."
+  : null;
+
 const toSecs = (v) => {
   if (typeof v === "number") return v;
   const p = String(v).split(":").map(Number);
@@ -258,6 +276,19 @@ export default function TrimClip({ clip, trim }) {
             </button>
           </div>
 
+          {/* Save-behavior tip -- moved here (right before the button whose
+              result it explains) instead of sitting as tiny print below
+              everything, where it was easy to miss until after the user had
+              already tapped Download and gone looking for the file. */}
+          {SAVE_TIP && (
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-start", marginTop: 10,
+              background: EDITOR.color + "0d", border: `1px solid ${EDITOR.color}30`, borderRadius: 8,
+              padding: "7px 9px", fontSize: 11, lineHeight: 1.4, color: "#5c544a" }}>
+              <span style={{ flexShrink: 0 }}>📥</span>
+              <span>{SAVE_TIP}</span>
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
             <button type="button" onClick={download} disabled={status === "working" || !(end > start)}
               style={{ position: "relative", overflow: "hidden", flex: 1, fontSize: 13, fontWeight: 800, color: "#fff", background: EDITOR.color,
@@ -281,9 +312,6 @@ export default function TrimClip({ clip, trim }) {
             <div style={{ fontSize: 11.5, lineHeight: 1.4, marginTop: 8,
               color: status === "done" ? "#3F7049" : status === "error" ? "#C0392B" : B.grey }}>{msg}</div>
           )}
-          <div style={{ fontSize: 10, color: "#b3a99c", marginTop: 6 }}>
-            On iPhone the clip may open in a new tab — tap Share → Save Video to keep it.
-          </div>
         </div>
       )}
     </div>
