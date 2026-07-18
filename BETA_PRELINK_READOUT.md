@@ -184,14 +184,14 @@ reuse by Track Record, the multi-device limitation).
 
 ## Git / deploy state
 
-- Commit: `2a408e7` (Tasks 0-5), on `origin/main`, pushed.
+- Commit: `2a408e7` (Tasks 0-5), `4e513ee` (this readout), on
+  `origin/main`, pushed.
 - Deployed — Render (backend): Y, confirmed live via `/version`
   (`2a408e7`) before Task 6 began.
 - Deployed — Vercel (frontend): auto-deployed from the same push;
   Task 6 verification ran via direct API calls against production
   (same server-side logic the UI calls into), not a browser session.
-- Research repo: committed and pushed as part of this readout's own
-  commit (see below).
+- Research repo: `dd436c7`, pushed.
 
 ## STOP
 
