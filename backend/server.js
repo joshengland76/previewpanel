@@ -2959,10 +2959,14 @@ async function runShadowScoringForJob(jobId) {
         : "app",
       isPostedVideo: job.source === "validation",
       postedVideoId: job.postedVideoId ?? null,
-      // Hotfix v2, Task 2 -- only link_fetch jobs carry a real URL (job.sourceUrl,
-      // set at /api/fetch-video's job creation); null for everything else, same
-      // as the column already defaults to for every pre-existing row.
-      sourceUrl: job.source === "link_fetch" ? (job.sourceUrl ?? null) : null,
+      // Hotfix v2, Task 2 -- whatever URL (if any) this job carries. Set for
+      // link_fetch jobs (/api/fetch-video) and, as of the transport hotfix,
+      // for /api/validation/ingest callers that pass sourceUrl explicitly
+      // (generate_preview.py --study's Mac-side Section-B transport); null
+      // for everything else, same as the column already defaults to for
+      // every pre-existing row. Not gated on a specific source string --
+      // any caller that knows the real URL can supply it.
+      sourceUrl: job.sourceUrl ?? null,
       fpGroup, // pool hygiene Task 2
     });
 
@@ -3274,6 +3278,21 @@ const LINK_FETCH_RATE_LIMIT = 10; // per user (or per IP, if no userId) per hour
 const LINK_FETCH_RATE_WINDOW_MS = 60 * 60 * 1000;
 const linkFetchAttempts = new Map(); // key (userId or ip) -> timestamp[]
 
+// Transport hotfix, Task 5 -- link-paste visibility. Per-domain fetch-failure
+// counter, log-observable only (no DB row, no dashboard, resets on restart) --
+// exists purely so the real TikTok-block rate on actual user link-paste
+// traffic is visible in Render logs, the same way it was invisible until a
+// creator happened to report a specific silent failure. Counts only genuine
+// fetch failures (the probe or the download itself failing) -- NOT the
+// pre-flight rejections (unsupported platform, rate limit) that never
+// attempted a real fetch at all.
+const linkFetchFailuresByDomain = new Map();
+function logLinkFetchFailure(hostname, reason) {
+  const n = (linkFetchFailuresByDomain.get(hostname) || 0) + 1;
+  linkFetchFailuresByDomain.set(hostname, n);
+  console.warn(`[link-fetch] failure #${n} for ${hostname} (${reason}) this instance since boot`);
+}
+
 function checkLinkFetchRateLimit(key) {
   const now = Date.now();
   const attempts = (linkFetchAttempts.get(key) || []).filter((t) => now - t < LINK_FETCH_RATE_WINDOW_MS);
@@ -3377,6 +3396,7 @@ app.post("/api/fetch-video", async (req, res) => {
   const probe = await runYtDlp(["--dump-json", "--no-warnings", "--skip-download", parsed.href], LINK_FETCH_TIMEOUT_MS);
   if (probe.code !== 0) {
     console.error(`[link-fetch] probe failed for ${parsed.href}: ${probe.stderr.slice(-500)}`);
+    logLinkFetchFailure(parsed.hostname, "probe");
     return res.status(422).json({ error: "Couldn't fetch that link — download the file and upload it instead." });
   }
   let meta;
@@ -3418,6 +3438,7 @@ app.post("/api/fetch-video", async (req, res) => {
   }
   if (download.code !== 0 || !fs.existsSync(destPath)) {
     console.error(`[link-fetch] download failed for ${parsed.href}: ${download.stderr.slice(-500)}`);
+    logLinkFetchFailure(parsed.hostname, "download");
     return res.status(422).json({ error: "Couldn't fetch that link — download the file and upload it instead." });
   }
 
@@ -3878,6 +3899,14 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
     // validation rescores are caption-faithful, matching the study's own
     // input construction instead of the always-empty slot used before.
     const caption = req.body.caption ? req.body.caption.toString().trim().slice(0, 2000) || null : null;
+    // Transport hotfix -- generate_preview.py --study's Mac-side Section-B
+    // transport already knows the video's real URL (research_videos.source_url)
+    // and, in --objective mode, the exact objective to score under (there is
+    // no "matched submission" to borrow it from the way validation rescores
+    // have one -- see the objective derivation below). Both optional; every
+    // existing caller (worker.py) never sends either and is unaffected.
+    const sourceUrl = req.body.sourceUrl ? req.body.sourceUrl.toString().trim().slice(0, 2000) || null : null;
+    const explicitObjective = req.body.objective ? req.body.objective.toString().trim() || null : null;
     // Prospect-report pipeline -- this endpoint now serves two callers:
     // worker.py's real-connected-user scan (source="validation", the
     // original/default behavior) and its --prospect mode (source=
@@ -3893,9 +3922,10 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
 
     // Borrow the matched preview's objective (there is no user-submitted
     // objective for a posted video) -- null for an unmatched (Tier 3) video,
-    // which the scoring pipeline already handles gracefully.
-    let objective = null;
-    if (matchedSubmissionId) {
+    // which the scoring pipeline already handles gracefully. An explicit
+    // objective (transport hotfix) always wins when supplied.
+    let objective = explicitObjective;
+    if (!objective && matchedSubmissionId) {
       const { rows } = await pgPool.query(`SELECT objective FROM submissions WHERE id = $1`, [matchedSubmissionId]);
       objective = rows[0]?.objective ?? null;
     }
@@ -3935,6 +3965,7 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
       fileName: `tiktok_${tiktokVideoId}${path.extname(req.file.originalname || ".mp4")}`,
       browserUploadMs: null,
       caption,
+      sourceUrl, // Transport hotfix -- see recordShadowScore's call site (runShadowScoringForJob)
     };
 
     console.log(`[${jobId}] [validation] Job created — posted_video_id=${postedVideoId} tiktok_video_id=${tiktokVideoId} objective="${objective ?? "—"}" match_tier=${matchTier ?? "—"} caption=${caption ? "yes" : "no"}`);

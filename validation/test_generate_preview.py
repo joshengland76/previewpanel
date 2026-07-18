@@ -17,6 +17,11 @@ calls_tier boundary coverage (incl. exact-threshold tie-break) and
 pick_hero_form's tier-selection tie-break (both non-zero -> averages;
 both zero -> neutral, never averages).
 
+Transport hotfix, Task 2 -- unit tests for hero_opening_sentence's two
+branches (full coverage keeps "every"; any gap drops it) and
+coverage_note's full-coverage/gap-present cases. NEVER "every" over
+partial data is the one hard requirement here.
+
 Usage: ./_venv/bin/python3 test_generate_preview.py
 """
 import sys
@@ -26,6 +31,7 @@ from datetime import datetime, timezone
 from generate_preview import (
     topbottom_metrics, mark_top_bottom_pills, bet_card_fields,
     averages_tier, calls_tier, pick_hero_form, send_check_verdict,
+    hero_opening_sentence, coverage_note,
 )
 
 
@@ -268,11 +274,45 @@ def test_impressiveness_tiers():
     return failures
 
 
+def test_coverage_honest_copy():
+    """Transport hotfix, Task 2 -- hero_opening_sentence NEVER renders
+    "every" over partial data; coverage_note is None at full coverage
+    (including the attempted<=0 edge, where nothing was even eligible to
+    fail) and a formatted gap string otherwise."""
+    failures = []
+
+    full = hero_opening_sentence("Jul 1", full_coverage=True)
+    if "every public video you've posted" not in full:
+        failures.append(f"full_coverage=True: expected the 'every' claim, got {full!r}")
+    if "since Jul 1" not in full or not full.endswith("never seeing a single view count."):
+        failures.append(f"full_coverage=True: unexpected sentence shape, got {full!r}")
+
+    partial = hero_opening_sentence("Jul 1", full_coverage=False)
+    if "every" in partial:
+        failures.append(f"full_coverage=False: 'every' must NEVER appear over partial data, got {partial!r}")
+    if "your public videos posted" not in partial:
+        failures.append(f"full_coverage=False: expected the honest plural claim, got {partial!r}")
+    if "since Jul 1" not in partial or not partial.endswith("never seeing a single view count."):
+        failures.append(f"full_coverage=False: unexpected sentence shape, got {partial!r}")
+
+    # coverage_note: full coverage (including the "nothing attempted" edge)
+    # -> None; a real gap -> the formatted string.
+    if coverage_note("Section B", 7, 7) is not None:
+        failures.append("coverage_note(7,7): expected None (full coverage)")
+    if coverage_note("Section B", 0, 0) is not None:
+        failures.append("coverage_note(0,0): expected None (nothing attempted)")
+    if coverage_note("Section B", 7, 4) != "Section B: 4 of 7 fetchable":
+        failures.append(f"coverage_note(7,4): expected 'Section B: 4 of 7 fetchable', got {coverage_note('Section B', 7, 4)!r}")
+
+    return failures
+
+
 def run():
     failures = []
     failures += test_pills()
     failures += test_bet_card()
     failures += test_impressiveness_tiers()
+    failures += test_coverage_honest_copy()
 
     # n=3: below the n>=4 floor for even a 2-vs-2 split -- must drop entirely.
     rows = make_rows(3)
@@ -340,10 +380,11 @@ def run():
             print(f"  - {f}")
         sys.exit(1)
     print("All topbottom_metrics + mark_top_bottom_pills + bet_card_fields + "
-          "impressiveness-tier/tie-break tests passed "
+          "impressiveness-tier/tie-break + coverage-honest-copy tests passed "
           "(n=3,4,5,6,8 + no-result-rows case, all 4 tick branches at n=8, "
           "bet card empty/non-empty branches, averages/calls tier boundaries, "
-          "pick_hero_form tie-break, send_check_verdict remap).")
+          "pick_hero_form tie-break, send_check_verdict remap, "
+          "hero_opening_sentence both branches, coverage_note full/gap/nothing-attempted).")
 
 
 if __name__ == "__main__":

@@ -25,15 +25,17 @@ cd ~/PreviewPanel/validation
 - **Chrome:** `/Applications/Google Chrome.app/Contents/MacOS/Google
   Chrome` must exist locally (headless PDF rendering) — already the case
   on this Mac, nothing to install.
-- **`PP_API_BASE`:** only needs setting for `--study` mode (Section B's
-  live link-fetch hits a real backend). Defaults to
-  `http://localhost:3001` (local dev server) if unset. For a real
-  document, **export the production URL**:
+- **`PP_API_BASE`:** needs setting for both modes -- `--study` mode's
+  Section B and `--prospect` mode's ingest step (`worker.py`) both POST
+  to `/api/validation/ingest` on a real backend (Transport hotfix,
+  Task 1: `--study` Section B moved onto this SAME Mac-side transport
+  `--prospect` already used, replacing the old Render-side
+  `/api/fetch-video` link-fetch). Defaults to `http://localhost:3001`
+  (local dev server) if unset. For a real document, **export the
+  production URL**:
   ```bash
   export PP_API_BASE=https://previewpanel.onrender.com
   ```
-  `--prospect` mode's ingest step (`worker.py`) needs the same variable
-  for the same reason (it POSTs to `/api/validation/ingest`).
 
 ## `--prospect` workflow (not-yet-enrolled creator)
 
@@ -104,6 +106,36 @@ none of it reuses."
 `research_creators` — it will exit with an error naming the handle if
 not found. (`--prospect` mode has no such requirement, by design.)
 
+**Section B is now Mac-side** (Transport hotfix, Task 1): each un-reused
+video is downloaded locally (this machine's own residential IP) and
+submitted through the same `/api/validation/ingest` path `--prospect`
+mode already uses, instead of the old Render-side `/api/fetch-video`
+link-fetch. Render's datacenter IP can be (and has been) blocked by
+TikTok on a per-video basis — this transport is immune to that, since
+the fetch never leaves this Mac.
+
+## `--study` says no OOF coverage
+
+Before spending anything on Section B, the script checks whether this
+handle has ANY video in the frozen OOF snapshot at all -- Section A
+depends on it entirely, and a creator with zero coverage will always
+render an empty Section A. If none exists:
+
+```
+[generate_preview] --study somehandle: no OOF coverage (large-tier (the OOF
+modeling population is small+mid only; large tier is held out)) -- use
+--prospect somehandle for a full document (~$1.50, scores fresh, works
+for any public creator).
+```
+
+The reason is queried, not guessed -- `large-tier` (held out of the
+small+mid modeling population), `cohort_5` (enrolled after the frozen
+snapshot), or `sub-floor` (in-population tier/cohort, but this creator's
+own videos didn't clear the floor-5 bar). **Use `--prospect` instead** --
+it scores fresh through the live path and works for any public creator,
+enrolled or not. To deliberately proceed anyway (e.g. finishing a
+document already in flight), pass `--force`.
+
 ## If it crashes
 
 Both `generate_preview.py --study` and `worker.py --prospect` hold a
@@ -127,6 +159,18 @@ If it still happens (or happened before this hotfix):
   where the crash left off, at no extra cost for what already completed.
 - This applies to `--study` Section B and to `worker.py --prospect`'s
   video-by-video ingest loop identically.
+
+## Real-app link-paste TikTok failures (context, not a pipeline concern)
+
+The live app's own paste-a-link feature (`/api/fetch-video`, separate
+from this pipeline) runs from Render's datacenter IP, which TikTok can
+and does block on a per-video basis (the same failure this hotfix moved
+Section B off of). **Some TikTok links may fail from our server; the app
+already tells users to upload the file instead** when that happens
+(graceful, existing UX -- not new). A per-domain fetch-failure counter
+now logs each occurrence to Render logs (`[link-fetch] failure #N for
+<domain> (...)`), so the real block rate on actual user traffic is
+observable -- see `PreviewPanel_Operations_and_Roadmap.md` §1a.
 
 ## The 19 canonical objectives (`--objective "<exact string>"`)
 

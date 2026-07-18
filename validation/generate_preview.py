@@ -103,8 +103,6 @@ SECTION_A_MAX_ROWS = 8
 AGED_MIN_DAYS = 30
 
 PP_API_BASE = os.environ.get("PP_API_BASE", "http://localhost:3001")
-STATUS_POLL_INTERVAL_S = 4
-STATUS_POLL_TIMEOUT_S = 20 * 60
 
 # Noun-phrase display labels for the insight line -- distinct from
 # PerformanceRadar.jsx's short axis-chip labels (this is prose, not a
@@ -567,6 +565,59 @@ def send_check_verdict(hero):
     return verdict, detail
 
 
+# ── Transport hotfix, Task 2: coverage-honest copy ──────────────────────────
+def coverage_note(label, attempted, succeeded):
+    """None at full coverage (attempted<=0 counts as full -- nothing was
+    even eligible to attempt); else 'Label: S of A fetchable' for the
+    send-check line. attempted/succeeded come from study_section_a's or
+    study_section_b's own tuple return (or prospect_section_a/b's trivial
+    always-full-coverage one)."""
+    if attempted <= 0 or succeeded >= attempted:
+        return None
+    return f"{label}: {succeeded} of {attempted} fetchable"
+
+
+def hero_opening_sentence(section_a_start, full_coverage):
+    """Transport hotfix, Task 2 -- sentence 1 of the hero, coverage-honest.
+    full_coverage = every attempted video succeeded, across BOTH sections
+    (a --study Section-A OOF gap counts the same as a Section-B fetch
+    gap -- either one means the document isn't actually rating "every"
+    video). At full coverage, keeps the existing absolute claim; ANY gap
+    drops "every" for the honest plural instead. NEVER "every" over
+    partial data -- this is the one place that claim is made, so it's the
+    one place that must never overstate coverage the document doesn't
+    have."""
+    lead = "We rated every public video you've posted" if full_coverage else "We rated your public videos posted"
+    return f"{lead} since {section_a_start} — from content alone, never seeing a single view count."
+
+
+# ── Transport hotfix, Task 3: --study eligibility gate ──────────────────────
+def study_eligibility_reason(db, creator_id, creator_tier, creator_cohort, oof_preds):
+    """Before any Section-B spend, verify this --study handle has ANY OOF
+    coverage at all -- Section A depends on it entirely, and a creator
+    with zero coverage will always render an empty Section A (see the
+    marisjones incident: tier='large', 0/9 aged videos in the frozen OOF
+    snapshot). Returns None when covered (safe to proceed); otherwise the
+    specific reason, queried rather than guessed:
+      - tier == 'large': the OOF/training population is small+mid only
+        (Ops doc §2 -- large tier held out).
+      - cohort == 'cohort_5': enrolled 2026-07-12, after the frozen OOF
+        snapshot (2026-07-07) -- not in ANY OOF snapshot by construction,
+        not a data gap.
+      - otherwise: sub-floor -- in-population tier/cohort, but this
+        creator's own videos didn't clear the floor-5 modeling bar.
+    """
+    video_ids = db.query("SELECT id FROM research_videos WHERE creator_id = %s", (creator_id,), fetch="all")
+    has_oof = any(row[0] in oof_preds for row in video_ids)
+    if has_oof:
+        return None
+    if creator_tier == "large":
+        return "large-tier (the OOF modeling population is small+mid only; large tier is held out)"
+    if creator_cohort == "cohort_5":
+        return "cohort_5 (enrolled after the frozen OOF snapshot -- not yet covered by any OOF re-estimation)"
+    return "sub-floor (doesn't meet the floor-5 minimum-video bar for the modeling population)"
+
+
 def bet_card_fields(section_b, mode, objective):
     """Polish v4, Task 2: the bet card is Section-B ONLY now -- the old
     Section-A fallback (picking the best-scored video across BOTH
@@ -640,7 +691,15 @@ def study_creator_id(db, handle):
 
 def study_section_a(db, creator_id, oof_preds, mode, objective):
     """Videos posted 30+ days ago: OOF ŷ (prediction) + real day-30 result
-    (weighted_engagement_rate) from research_metrics."""
+    (weighted_engagement_rate) from research_metrics.
+
+    Transport hotfix, Task 2 -- returns (windowed, attempted, succeeded) so
+    main() can detect an OOF-coverage gap (some of this creator's aged
+    videos exist but never landed in the frozen OOF snapshot) and render
+    coverage-honest copy instead of silently showing fewer rows. attempted
+    = candidates in the aged window; succeeded = how many actually had an
+    OOF match, BEFORE the size_section_a_window cap -- capping at 8 rows
+    when more than 8 succeeded is normal, by-design windowing, not a gap."""
     rows = db.query("""
         SELECT v.id AS video_id, v.posted_at, v.caption,
                m.weighted_engagement_rate AS wec_rate
@@ -662,29 +721,71 @@ def study_section_a(db, creator_id, oof_preds, mode, objective):
             "prediction": pred, "wec_rate": r["wec_rate"], "axis_scores": None,  # OOF has no per-axis breakdown
         })
     windowed = size_section_a_window(out)
-    return windowed
+    return windowed, len(rows), len(out)
 
 
-def _fetch_video(url, objective):
-    resp = requests.post(
-        f"{PP_API_BASE}/api/fetch-video",
-        json={"url": url, "objective": objective or "", "judges": json.dumps(["critic", "cool", "connector"])},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["jobId"]
+# ── Mac-side Section-B transport (Transport hotfix, Task 1) ────────────────
+# Replaces the old Render-side /api/fetch-video link-fetch (a datacenter IP,
+# blockable by TikTok per-video -- the exact cause of the marisjones
+# incident) with the SAME Mac-side pattern worker.py already uses for
+# --prospect: download locally over this machine's own residential IP, then
+# submit through /api/validation/ingest (source="prospect_report" -- same
+# pool-eligible/not-a-posted-video-rescore semantics --study's fresh,
+# never-before-scored Section-B videos need, exactly what prospect rows
+# already get). Local reimplementation, no import from worker.py -- each
+# validation/ script stays self-contained, same reasoning as the DB
+# reconnect guard duplication in Hotfix v2.
+DOWNLOAD_DIR = HERE / "_downloads"
+YTDLP_DOWNLOAD_TIMEOUT_S = 300
+INGEST_TIMEOUT_S = 8 * 60
+INTER_VIDEO_DELAY_S = 2  # politeness delay between Mac-side fetches, mirrors worker.py's own constant
 
 
-def _poll_status(job_id):
-    deadline = time.time() + STATUS_POLL_TIMEOUT_S
-    while time.time() < deadline:
-        resp = requests.get(f"{PP_API_BASE}/api/status/{job_id}", timeout=30)
-        resp.raise_for_status()
-        body = resp.json()
-        if body.get("status") in ("done", "partial", "error", "timeout"):
-            return body
-        time.sleep(STATUS_POLL_INTERVAL_S)
-    raise TimeoutError(f"job {job_id} did not finish within {STATUS_POLL_TIMEOUT_S}s")
+def _download_video_local(video_url, out_path):
+    """Returns (ok, error_detail). Mirrors worker.py's download_video --
+    same format selector as the live app's own link-fetch (h264 preferred,
+    see the silent-audio bug fix in server.js's /api/fetch-video)."""
+    cmd = ["yt-dlp", "--no-warnings", "-f", "best[vcodec=h264]/mp4/best", "-o", str(out_path), video_url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=YTDLP_DOWNLOAD_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return False, "download timed out"
+    if result.returncode != 0 or not out_path.exists():
+        return False, result.stderr[-300:]
+    return True, None
+
+
+def _ingest_video_local(video_path, tiktok_video_id, handle, posted_at, caption, source_url, objective):
+    """POSTs to the SAME /api/validation/ingest endpoint worker.py uses --
+    synchronous (the endpoint itself awaits full judging + scoring before
+    responding), so unlike the old /api/fetch-video path there is no
+    separate poll step. source="prospect_report": pool-eligible, not
+    flagged is_posted_video (this is genuine first-time-scored content,
+    not a re-score of an existing app preview -- same category prospect
+    rows already are). sourceUrl + an explicit objective override (both
+    added to the endpoint for this transport) are what let per-video reuse
+    and objective-aware scoring work the same as the old transport did."""
+    research_key = get_env("RESEARCH_API_KEY")
+    data = {
+        "tiktokVideoId": tiktok_video_id,
+        "handle": handle or "",
+        "source": "prospect_report",
+        "sourceUrl": source_url,
+    }
+    if caption:
+        data["caption"] = caption
+    if posted_at:
+        data["postedAt"] = posted_at.isoformat()
+    if objective:
+        data["objective"] = objective
+    with open(video_path, "rb") as f:
+        return requests.post(
+            f"{PP_API_BASE}/api/validation/ingest",
+            headers={"Authorization": f"Bearer {research_key}"},
+            data=data,
+            files={"video": f},
+            timeout=INGEST_TIMEOUT_S,
+        )
 
 
 def _reused_row_for_url(db, source_url, objective, mode, reuse_within_hours):
@@ -712,15 +813,19 @@ def _reused_row_for_url(db, source_url, objective, mode, reuse_within_hours):
 
 
 def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=24):
-    """Videos posted <30 days ago: scored FRESH, via the live app's own
-    public link-fetch path (/api/fetch-video) -- fully out-of-sample,
-    byte-identical to a real user's result for that URL. Hotfix v2, Task 2:
-    reuse is now PER-VIDEO and the default (reuse_within_hours=24) -- pass
-    0 (or None) to disable and force a full live re-fetch. A crashed run's
-    partial progress is recovered per-video instead of re-spent wholesale,
-    and a video posted since the last render fetches only itself."""
+    """Videos posted <30 days ago: scored FRESH via the Mac-side transport
+    (Transport hotfix, Task 1) -- download locally + /api/validation/ingest,
+    the SAME pattern worker.py's --prospect mode already uses. Replaces the
+    old Render-side /api/fetch-video link-fetch, which ran from a
+    datacenter IP TikTok can and does block per-video (the marisjones
+    incident: 3 of 5 candidates 422'd from Render while every one of them
+    downloaded cleanly from this machine). Per-video reuse (Hotfix v2,
+    Task 2) unchanged: default reuse_within_hours=24, pass 0 to disable.
+    Returns (out, attempted, succeeded) -- Transport hotfix, Task 2's
+    coverage tracking (attempted = candidates in the <30-day window;
+    succeeded = how many ended up with a real score, reused or fresh)."""
     rows = db.query("""
-        SELECT id AS video_id, posted_at, caption, source_url
+        SELECT id AS video_id, posted_at, caption, source_url, external_video_id
         FROM research_videos
         WHERE creator_id = %s AND posted_at IS NOT NULL
           AND posted_at > now() - interval '%s days' AND source_url IS NOT NULL
@@ -740,6 +845,7 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
         print(f"[generate_preview] reusing {len(hits)} of {len(rows)}; fetching {len(rows) - len(hits)}")
 
     out = []
+    DOWNLOAD_DIR.mkdir(exist_ok=True)
     for r in rows:
         hit = hits.get(r["video_id"])
         if hit is not None:
@@ -750,60 +856,58 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
             })
             continue
 
-        print(f"[generate_preview] live link-fetch: {r['source_url']}")
-        # Hotfix v2 follow-up (found during live verification): a single
-        # video that genuinely can't be fetched (e.g. yt-dlp IP-blocked for
-        # that specific post -- a real, transient, video-specific failure,
-        # not a bug) used to raise straight out of _fetch_video/_poll_status
-        # and crash the WHOLE script, defeating this hotfix's own point --
-        # per-video resumability means one bad video shouldn't cost the
-        # other N-1. Treat any request-layer failure the same as an
-        # explicit non-done/partial status: log and move on.
+        tiktok_video_id = r.get("external_video_id")
+        if not tiktok_video_id:
+            print(f"[generate_preview]   FAILED (no external_video_id on record) -- skipping {r['source_url']}", file=sys.stderr)
+            continue
+
+        print(f"[generate_preview] Mac-side fetch: {r['source_url']}")
+        local_path = DOWNLOAD_DIR / f"{tiktok_video_id}.mp4"
+        resp = None
         try:
-            job_id = _fetch_video(r["source_url"], objective if mode == "objective" else "")
-            result = _poll_status(job_id)
-        except (requests.exceptions.RequestException, TimeoutError) as e:
-            print(f"[generate_preview]   FAILED ({e}) -- skipping this video", file=sys.stderr)
+            ok, err = _download_video_local(r["source_url"], local_path)
+            if not ok:
+                print(f"[generate_preview]   FAILED (download: {err}) -- skipping this video", file=sys.stderr)
+                continue
+            try:
+                resp = _ingest_video_local(
+                    local_path, tiktok_video_id, handle, r["posted_at"], r["caption"],
+                    r["source_url"], objective if mode == "objective" else None,
+                )
+            except (requests.exceptions.RequestException, TimeoutError) as e:
+                print(f"[generate_preview]   FAILED (ingest: {e}) -- skipping this video", file=sys.stderr)
+                continue
+        finally:
+            local_path.unlink(missing_ok=True)  # cleanup convention -- never accumulate downloads on disk
+
+        if resp.status_code != 200:
+            print(f"[generate_preview]   FAILED (ingest {resp.status_code}: {resp.text[:200]}) -- skipping this video",
+                  file=sys.stderr)
             continue
-        if result.get("status") not in ("done", "partial"):
-            print(f"[generate_preview]   FAILED (status={result.get('status')}) -- skipping this video", file=sys.stderr)
-            continue
-        # The scoring write is fire-and-forget relative to /api/status's own
-        # "done" flag (see server.js's runShadowScoringForJob docstring) --
-        # poll a little further for it to land, THEN read it back via
-        # submissions.job_id = job_id (this exact job, deterministic) ->
-        # shadow_scores.submission_id. Bug fix: an earlier version read
-        # "ORDER BY created_at DESC LIMIT 1" with no job filter at all --
-        # this is a call against LIVE PRODUCTION, which has real concurrent
-        # traffic, so that query could silently grab an unrelated real
-        # user's row that happened to land at the same moment, attributing
-        # a stranger's prediction to this creator's video. job_id is unique
-        # per call and already known here -- no reason to guess.
-        #
-        # Hotfix v2, Task 1: THIS read is the confirmed crash site -- it
-        # runs immediately after the video's own multi-minute fetch/judge
-        # cycle above, exactly the idle window Neon can close a held
-        # connection on. db.query() reopens and retries once automatically.
-        pred_row = None
-        for _ in range(15):
-            pred_row = db.query("""
-                SELECT s.prediction, s.input_features FROM shadow_scores s
-                JOIN submissions sub ON sub.id = s.submission_id
-                WHERE sub.job_id = %s
-            """, (job_id,), fetch="one", cursor_factory=psycopg2.extras.RealDictCursor)
-            if pred_row and pred_row["prediction"] is not None:
-                break
-            time.sleep(2)
-        if not pred_row:
+        posted_video_id = resp.json().get("postedVideoId")
+
+        # /api/validation/ingest is synchronous (awaits full judging + the
+        # shadow-score write before responding), so unlike the old
+        # poll-based transport there's no race to wait out. Still goes
+        # through db.query() (Hotfix v2's reconnect guard) -- this read
+        # runs right after the video's own multi-minute judge/score cycle,
+        # the same idle-exposure shape as before, just via a different
+        # transport now.
+        pred_row = db.query("""
+            SELECT s.prediction, s.input_features FROM shadow_scores s
+            WHERE s.posted_video_id = %s
+            ORDER BY s.created_at DESC LIMIT 1
+        """, (posted_video_id,), fetch="one", cursor_factory=psycopg2.extras.RealDictCursor)
+        if not pred_row or pred_row.get("prediction") is None:
             print("[generate_preview]   no shadow_scores row landed -- skipping", file=sys.stderr)
             continue
         out.append({
             "posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
             "prediction": pred_row["prediction"],
             "axis_scores": axis_scores_from_input_features(pred_row["input_features"]),
-            "live_app_score_display": result.get("scoreDisplay"),  # kept for Task 3's consistency check only
         })
-    return out
+        time.sleep(INTER_VIDEO_DELAY_S)  # politeness delay between Mac-side fetches
+    return out, len(rows), len(out)
 
 
 # ── --prospect data source (Task 1's own rows) ──────────────────────────────
@@ -827,11 +931,22 @@ def prospect_rows(db, handle, aged):
 
 
 def prospect_section_a(db, handle):
-    return size_section_a_window(prospect_rows(db, handle, aged=True))
+    """Transport hotfix, Task 2 -- returns (windowed, attempted, succeeded)
+    for the same coverage-tracking shape study_section_a/study_section_b
+    use, but trivially full coverage here: worker.py --prospect already
+    fully scored everything before this render runs, so there's no
+    attempted-vs-succeeded gap possible at render time (unlike --study,
+    which does its own fetching right here and can genuinely fail
+    per-video)."""
+    windowed = size_section_a_window(prospect_rows(db, handle, aged=True))
+    return windowed, len(windowed), len(windowed)
 
 
 def prospect_section_b(db, handle):
-    return prospect_rows(db, handle, aged=False)
+    """Transport hotfix, Task 2 -- same trivial-full-coverage shape as
+    prospect_section_a, for the same reason."""
+    rows = prospect_rows(db, handle, aged=False)
+    return rows, len(rows), len(rows)
 
 
 # ── HTML rendering (edits Josh's template string in place -- structure/CSS
@@ -912,7 +1027,7 @@ def row_b_html(v, checkin_date):
 
 
 def render_html(*, handle, niche_line, prepared_date, render_date, section_a_start,
-                 section_a, section_b, hero, insight, precision_caveat, mode, objective):
+                 section_a, section_b, hero, insight, precision_caveat, mode, objective, full_coverage):
     html = TEMPLATE_PATH.read_text()
 
     # Shared rule: MOCKUP ribbon removed entirely, not just print-hidden.
@@ -935,12 +1050,13 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
 
     all_rows_for_bet = section_a + section_b
     strongest = max(all_rows_for_bet, key=lambda v: v["prediction"]) if all_rows_for_bet else None
-    # Polish v3, Task 3: opening clause is now dynamic and carries the
+    # Polish v3, Task 3: opening clause is dynamic and carries the
     # completeness claim itself ("every public video ... since <date>"),
     # rather than a generic "last two months" -- the actual claim is
     # "since Section A's oldest video," whatever span that really is.
-    opening = (f"We rated every public video you've posted since {section_a_start} — "
-               f"from content alone, never seeing a single view count.")
+    # Transport hotfix, Task 2: that completeness claim is now conditional
+    # on full_coverage -- see hero_opening_sentence's own docstring.
+    opening = hero_opening_sentence(section_a_start, full_coverage)
     # Polish v5, Task 3: sentence 1 (the opening clause above) is unchanged
     # in every form. Sentence 2 is now adaptive -- pick_hero_form is the
     # single source deciding which of the 5 forms below renders (also
@@ -1099,6 +1215,11 @@ def main():
                           "existing scored row for that exact tiktok video URL from within this many hours "
                           "instead of re-fetching it live (default 24; pass 0 to disable and force a full "
                           "live re-fetch of every Section-B video)")
+    ap.add_argument("--force", action="store_true",
+                     help="--study only: proceed even if the eligibility gate finds no OOF coverage for this "
+                          "handle (Section A will render coverage-honest and likely near-empty). For a "
+                          "deliberate, known completion run -- not the default path for a new handle, which "
+                          "should use --prospect instead (see the gate's own guidance line).")
     args = ap.parse_args()
 
     handle = (args.study or args.prospect).lstrip("@")
@@ -1122,15 +1243,34 @@ def main():
     if is_study:
         creator_id = study_creator_id(db, handle)
         oof_preds = load_oof_predictions()
-        section_a_full = study_section_a(db, creator_id, oof_preds, mode, objective)
-        # Section B is scored FRESH by default, via a real (billed) live
-        # link-fetch call per video -- unless --reuse-section-b-hours (per
-        # video, default 24h) finds a matching prior row for that exact URL.
-        section_b = study_section_b(db, creator_id, handle, mode, objective,
-                                     reuse_within_hours=args.reuse_section_b_hours)
+
+        # Transport hotfix, Task 3 -- before any Section-B spend, verify
+        # this handle actually has OOF coverage; Section A depends on it
+        # entirely, and a creator with none will always render an empty
+        # Section A (the marisjones incident). --force bypasses this for a
+        # deliberate, known completion run (e.g. finishing a document
+        # already in flight) -- not the default path for a new handle.
+        creator_row = db.query("SELECT tier, cohort FROM research_creators WHERE id = %s", (creator_id,),
+                                fetch="one", cursor_factory=psycopg2.extras.RealDictCursor)
+        ineligible_reason = study_eligibility_reason(db, creator_id, creator_row["tier"], creator_row["cohort"], oof_preds)
+        if ineligible_reason and not args.force:
+            sys.exit(
+                f"[generate_preview] --study {handle}: no OOF coverage ({ineligible_reason}) -- "
+                f"use --prospect {handle} for a full document (~$1.50, scores fresh, works for any public creator)."
+            )
+        if ineligible_reason:
+            print(f"[generate_preview] NOTE: --study {handle} has no OOF coverage ({ineligible_reason}) -- "
+                  f"proceeding anyway (--force). Section A will render coverage-honest and likely near-empty.")
+
+        section_a_full, section_a_attempted, section_a_succeeded = study_section_a(db, creator_id, oof_preds, mode, objective)
+        # Section B is scored FRESH by default, via a real (billed) Mac-side
+        # fetch per video -- unless --reuse-section-b-hours (per video,
+        # default 24h) finds a matching prior row for that exact URL.
+        section_b, section_b_attempted, section_b_succeeded = study_section_b(
+            db, creator_id, handle, mode, objective, reuse_within_hours=args.reuse_section_b_hours)
     else:
-        section_a_full = prospect_section_a(db, handle)
-        section_b = prospect_section_b(db, handle)
+        section_a_full, section_a_attempted, section_a_succeeded = prospect_section_a(db, handle)
+        section_b, section_b_attempted, section_b_succeeded = prospect_section_b(db, handle)
 
     for v in section_b:
         v["percentile"] = midrank_percentile(v["prediction"], pool)
@@ -1166,11 +1306,22 @@ def main():
     section_a_start = fmt_date(min(section_a_dates)) if section_a_dates else "—"
     render_date = fmt_date(datetime.now(timezone.utc))
 
+    # Transport hotfix, Task 2 -- coverage-honest copy. A Section-A gap only
+    # applies in --study mode (prospect_section_a is trivially full
+    # coverage, see its own docstring); Section-B gaps apply to both modes
+    # by construction, though only --study can genuinely produce one.
+    coverage_notes = [n for n in [
+        coverage_note("Section A", section_a_attempted, section_a_succeeded) if is_study else None,
+        coverage_note("Section B", section_b_attempted, section_b_succeeded),
+    ] if n]
+    full_coverage = not coverage_notes
+
     html, hero_form = render_html(
         handle=handle, niche_line=niche_line, prepared_date=prepared_date,
         render_date=render_date, section_a_start=section_a_start,
         section_a=section_a, section_b=section_b, hero=hero, insight=insight,
         precision_caveat=precision_caveat, mode=mode, objective=objective,
+        full_coverage=full_coverage,
     )
     html_path.write_text(html)
     render_pdf(html_path, pdf_path)
@@ -1186,7 +1337,12 @@ def main():
     # hero form actually rendered (pick_hero_form, single source with the
     # sentence above) -- never just the verdict alone.
     verdict, detail = send_check_verdict(hero)
-    print(f"[generate_preview] SEND-CHECK: {verdict} ({detail}) -- hero form: {hero_form}")
+    # Transport hotfix, Task 2 -- coverage always rides alongside the
+    # verdict when there's a gap (never silent) so an operator glancing at
+    # the console sees exactly what "your public videos" (vs. "every") is
+    # referring to, in the same line as the rest of the send-check read.
+    coverage_str = f" -- coverage: {'; '.join(coverage_notes)}" if coverage_notes else ""
+    print(f"[generate_preview] SEND-CHECK: {verdict} ({detail}) -- hero form: {hero_form}{coverage_str}")
     if verdict == "DO NOT SEND":
         print("[generate_preview]   DO NOT SEND = final -- neither the averages nor the calls signal clears "
               "even the lowest impressiveness tier; do not send this document without a human rewrite.",
