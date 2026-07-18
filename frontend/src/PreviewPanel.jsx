@@ -229,6 +229,12 @@ function InviteGateScreen({ userId, onBound }) {
   const [code, setCode] = useState("");
   const [working, setWorking] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  // Beta gate follow-up, Task 2 -- set only for a pre-linked code (the
+  // server's needsConfirm response), which switches this screen from
+  // code-entry to the "that's me?" confirm step. An ordinary code never
+  // sets this -- submit() below calls onBound() directly on its first
+  // response, byte-identical to the original metering-build single-step flow.
+  const [confirmInfo, setConfirmInfo] = useState(null);
 
   const submit = async () => {
     const trimmed = code.trim();
@@ -240,8 +246,15 @@ function InviteGateScreen({ userId, onBound }) {
         body: JSON.stringify({ userId, code: trimmed }),
       });
       const body = await res.json();
-      if (!res.ok || !body.ok) {
+      if (!res.ok || (!body.ok && !body.needsConfirm)) {
         setErrorMsg(body.error || "That code didn't work — double-check it and try again.");
+        setWorking(false);
+        return;
+      }
+      if (body.needsConfirm) {
+        setConfirmInfo({
+          tiktokHandle: body.tiktokHandle, instagramHandle: body.instagramHandle, youtubeHandle: body.youtubeHandle,
+        });
         setWorking(false);
         return;
       }
@@ -251,6 +264,28 @@ function InviteGateScreen({ userId, onBound }) {
       setWorking(false);
     }
   };
+
+  const decide = async (claimIdentity) => {
+    setWorking(true); setErrorMsg("");
+    try {
+      const res = await fetch(`${API_BASE}/api/invite/redeem`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, code: code.trim(), claimIdentity }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.ok) {
+        setErrorMsg(body.error || "Something went wrong — try again.");
+        setWorking(false);
+        return;
+      }
+      onBound();
+    } catch {
+      setErrorMsg("Couldn't reach the server — check your connection and try again.");
+      setWorking(false);
+    }
+  };
+
+  const confirmHandle = confirmInfo && (confirmInfo.tiktokHandle || confirmInfo.instagramHandle || confirmInfo.youtubeHandle);
 
   return (
     <div style={{
@@ -266,38 +301,72 @@ function InviteGateScreen({ userId, onBound }) {
       }}>
         <img src="/owl-logo.png?v=3" alt="PreviewPanel"
           style={{ height: "64px", width: "auto", margin: "0 auto 18px", display: "block" }} />
-        <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
-          You're invited to the private beta
-        </div>
-        <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
-          PreviewPanel is free while we're testing it — your invite code gets
-          you in. It'll be a paid product at launch; testers get founding
-          terms for helping us get there.
-        </div>
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
-          placeholder="Invite code"
-          disabled={working}
-          style={{
-            width: "100%", height: "48px", borderRadius: "10px",
-            border: `1.5px solid ${B.border}`, padding: "0 14px",
-            fontSize: "16px", fontFamily: "inherit", marginBottom: "12px",
-            textAlign: "center", color: B.black,
-          }}
-        />
-        {errorMsg && (
-          <div style={{ fontSize: "12.5px", color: "#C0392B", marginBottom: "12px" }}>{errorMsg}</div>
+        {confirmInfo ? (
+          <>
+            <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
+              This invite is set up for @{confirmHandle}
+            </div>
+            <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
+              That's you? We'll connect the account automatically and pull in
+              any track record we already have for it — no need to connect it
+              yourself later.
+            </div>
+            {errorMsg && (
+              <div style={{ fontSize: "12.5px", color: "#C0392B", marginBottom: "12px" }}>{errorMsg}</div>
+            )}
+            <button onClick={() => decide(true)} disabled={working} style={{
+              width: "100%", height: "50px", background: B.action, border: "none",
+              borderRadius: "10px", color: "#fff", fontSize: "15px", fontWeight: "800",
+              cursor: working ? "default" : "pointer", fontFamily: "Montserrat, sans-serif",
+              opacity: working ? 0.7 : 1, marginBottom: "10px",
+            }}>
+              {working ? "One sec…" : "That's me"}
+            </button>
+            <button onClick={() => decide(false)} disabled={working} style={{
+              width: "100%", height: "50px", background: "#fff", border: `1.5px solid ${B.border}`,
+              borderRadius: "10px", color: B.brown, fontSize: "15px", fontWeight: "800",
+              cursor: working ? "default" : "pointer", fontFamily: "Montserrat, sans-serif",
+              opacity: working ? 0.7 : 1,
+            }}>
+              Not me
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
+              You're invited to the private beta
+            </div>
+            <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
+              PreviewPanel is free while we're testing it — your invite code gets
+              you in. It'll be a paid product at launch; testers get founding
+              terms for helping us get there.
+            </div>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+              placeholder="Invite code"
+              disabled={working}
+              style={{
+                width: "100%", height: "48px", borderRadius: "10px",
+                border: `1.5px solid ${B.border}`, padding: "0 14px",
+                fontSize: "16px", fontFamily: "inherit", marginBottom: "12px",
+                textAlign: "center", color: B.black,
+              }}
+            />
+            {errorMsg && (
+              <div style={{ fontSize: "12.5px", color: "#C0392B", marginBottom: "12px" }}>{errorMsg}</div>
+            )}
+            <button onClick={submit} disabled={working} style={{
+              width: "100%", height: "50px", background: B.action, border: "none",
+              borderRadius: "10px", color: "#fff", fontSize: "15px", fontWeight: "800",
+              cursor: working ? "default" : "pointer", fontFamily: "Montserrat, sans-serif",
+              opacity: working ? 0.7 : 1,
+            }}>
+              {working ? "Checking…" : "Enter beta"}
+            </button>
+          </>
         )}
-        <button onClick={submit} disabled={working} style={{
-          width: "100%", height: "50px", background: B.action, border: "none",
-          borderRadius: "10px", color: "#fff", fontSize: "15px", fontWeight: "800",
-          cursor: working ? "default" : "pointer", fontFamily: "Montserrat, sans-serif",
-          opacity: working ? 0.7 : 1,
-        }}>
-          {working ? "Checking…" : "Enter beta"}
-        </button>
       </div>
     </div>
   );
@@ -1186,7 +1255,7 @@ export default function PreviewPanel() {
         <div style={{ position: "fixed", inset: 0, background: B.bg, zIndex: 200 }} />
       )}
       {inviteStatus && !inviteStatus.bound && (
-        <InviteGateScreen userId={userId} onBound={refreshInviteStatus} />
+        <InviteGateScreen userId={userId} onBound={() => { refreshInviteStatus(); refreshTiktokConnected(); }} />
       )}
 
       {/* Issue #4: Notification primer modal */}

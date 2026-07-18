@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-beta_admin.py — Beta metering layer, Task 4: Mac-side admin CLI for
-invite_codes/redemptions/beta_submission_events (see backend/server.js's
-"Beta metering layer" section for the schema + gate/allowance/breaker
-logic this data feeds). No web admin UI -- this script is the only way
-to mint codes.
+beta_admin.py — Beta metering layer, Task 4 (+ beta gate follow-up, Task 1):
+Mac-side admin CLI for invite_codes/redemptions/beta_submission_events (see
+backend/server.js's "Beta metering layer" + "Beta gate follow-up" sections
+for the schema + gate/allowance/breaker/pre-linked-identity logic this data
+feeds). No web admin UI -- this script is the only way to mint codes.
 
 Reuses the project-local venv + DATABASE_URL-from-backend/.env pattern
 established by generate_preview.py/worker.py/spec_scorer.py/
@@ -12,6 +12,7 @@ backfill_source_url.py -- no research-repo imports.
 
 Usage:
   ./_venv/bin/python3 beta_admin.py mint --label "friends round 1" [--max-redemptions 3] [--code CUSTOM]
+  ./_venv/bin/python3 beta_admin.py mint --label "Name" --handle theirhandle   # pre-linked (TikTok)
   ./_venv/bin/python3 beta_admin.py list
   ./_venv/bin/python3 beta_admin.py usage <user_id>
 """
@@ -54,15 +55,28 @@ def gen_code(length=8):
     return "".join(secrets.choice(CODE_ALPHABET) for _ in range(length))
 
 
+def normalize_handle(raw):
+    if not raw:
+        return None
+    h = raw.strip().lstrip("@").strip().lower()
+    return h or None
+
+
 def cmd_mint(conn, args):
     code = args.code or gen_code()
+    tiktok = normalize_handle(args.handle)
+    instagram = normalize_handle(args.instagram)
+    youtube = normalize_handle(args.youtube)
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO invite_codes (code, label, max_redemptions) VALUES (%s, %s, %s)",
-        (code, args.label, args.max_redemptions),
+        """INSERT INTO invite_codes
+             (code, label, max_redemptions, known_tiktok_handle, known_instagram_handle, known_youtube_handle)
+           VALUES (%s, %s, %s, %s, %s, %s)""",
+        (code, args.label, args.max_redemptions, tiktok, instagram, youtube),
     )
     cur.close()
-    print(f"[beta_admin] minted code={code} label={args.label!r} max_redemptions={args.max_redemptions}")
+    pre_linked = f" pre-linked=@{tiktok}" if tiktok else (f" pre-linked=(ig:{instagram} yt:{youtube})" if (instagram or youtube) else "")
+    print(f"[beta_admin] minted code={code} label={args.label!r} max_redemptions={args.max_redemptions}{pre_linked}")
 
 
 def cmd_list(conn, args):
@@ -70,12 +84,16 @@ def cmd_list(conn, args):
     cur.execute("""
         SELECT
             ic.code, ic.label, ic.max_redemptions, ic.created_at,
+            ic.known_tiktok_handle, ic.known_instagram_handle, ic.known_youtube_handle,
             COUNT(DISTINCT r.user_id) AS redemptions,
-            COUNT(e.id) AS total_submissions
+            COUNT(e.id) AS total_submissions,
+            BOOL_OR(r.identity_choice = 'claimed') AS claim_fired,
+            BOOL_OR(r.identity_choice = 'declined') AS any_declined
         FROM invite_codes ic
         LEFT JOIN redemptions r ON r.code = ic.code
         LEFT JOIN beta_submission_events e ON e.user_id = r.user_id
-        GROUP BY ic.code, ic.label, ic.max_redemptions, ic.created_at
+        GROUP BY ic.code, ic.label, ic.max_redemptions, ic.created_at,
+                 ic.known_tiktok_handle, ic.known_instagram_handle, ic.known_youtube_handle
         ORDER BY ic.created_at DESC
     """)
     rows = cur.fetchall()
@@ -83,19 +101,28 @@ def cmd_list(conn, args):
     if not rows:
         print("[beta_admin] no invite codes yet")
         return
-    print(f"{'code':10} {'label':24} {'redemptions':13} {'submissions':12} created_at")
+    print(f"{'code':10} {'label':24} {'handle':18} {'redemptions':13} {'submissions':12} {'claim':9} created_at")
     for r in rows:
+        handle = r["known_tiktok_handle"] or r["known_instagram_handle"] or r["known_youtube_handle"] or "—"
+        if r["known_tiktok_handle"] is None and r["known_instagram_handle"] is None and r["known_youtube_handle"] is None:
+            claim = "—"
+        elif r["claim_fired"]:
+            claim = "yes"
+        elif r["any_declined"]:
+            claim = "declined"
+        else:
+            claim = "pending"
         print(
-            f"{r['code']:10} {(r['label'] or ''):24.24} "
+            f"{r['code']:10} {(r['label'] or ''):24.24} {handle:18.18} "
             f"{r['redemptions']}/{r['max_redemptions']:<11} "
-            f"{r['total_submissions']:<12} {r['created_at']}"
+            f"{r['total_submissions']:<12} {claim:9} {r['created_at']}"
         )
 
 
 def cmd_usage(conn, args):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(
-        "SELECT user_id, code, redeemed_at FROM redemptions WHERE user_id = %s",
+        "SELECT user_id, code, redeemed_at, identity_choice FROM redemptions WHERE user_id = %s",
         (args.user_id,),
     )
     redemption = cur.fetchone()
@@ -118,6 +145,7 @@ def cmd_usage(conn, args):
     print(f"[beta_admin] user_id={redemption['user_id']}")
     print(f"  code:            {redemption['code']}")
     print(f"  redeemed_at:     {redemption['redeemed_at']}")
+    print(f"  identity_choice: {redemption['identity_choice'] or '— (ordinary code, nothing to confirm)'}")
     print(f"  used (30d):      {used} of {BETA_ALLOWANCE} (remaining: {remaining})")
     print(f"  lifetime uses:   {lifetime}")
 
@@ -130,6 +158,9 @@ def main():
     p_mint.add_argument("--label", required=True, help="who/what this code is for")
     p_mint.add_argument("--max-redemptions", type=int, default=3)
     p_mint.add_argument("--code", default=None, help="use a specific code instead of generating one")
+    p_mint.add_argument("--handle", default=None, help="pre-link a known TikTok handle (e.g. thecolorfulpantry)")
+    p_mint.add_argument("--instagram", default=None, help="pre-link a known Instagram handle")
+    p_mint.add_argument("--youtube", default=None, help="pre-link a known YouTube handle")
     p_mint.set_defaults(func=cmd_mint)
 
     p_list = sub.add_parser("list", help="list codes with redemption + usage counts")

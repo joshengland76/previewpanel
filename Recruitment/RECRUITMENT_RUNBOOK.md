@@ -65,6 +65,17 @@ ingest) costs money, and it's idempotent on `tiktok_video_id` (a second
 `worker.py --prospect` run on the same handle skips videos it already
 has).
 
+**Step 3 — after ingest + preview send, mint the tester's invite code.**
+A pre-linked code (`--handle`) auto-connects their account and claims the
+`posted_videos`/`shadow_scores` rows Step 1 just wrote the moment they
+confirm "that's me" in-app — their history and track record start
+populated instead of empty. See `BETA_PRELINK_READOUT.md` for the full
+redemption flow.
+
+```bash
+./_venv/bin/python3 beta_admin.py mint --label "Name" --handle theirhandle
+```
+
 ## `--study` workflow (already-enrolled research creator)
 
 One step — render does its own data pulls (Section A from cached OOF,

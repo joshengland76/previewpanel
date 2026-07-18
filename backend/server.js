@@ -956,6 +956,25 @@ async function initDb() {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_redemptions_code ON redemptions(code)`);
+    // Beta gate follow-up -- pre-linked codes. A code minted with a known
+    // handle lets a tester's invite carry their identity: on redemption
+    // confirm ("that's me"), the app auto-connects the account (skipping the
+    // manual connect nudge) and claims their prospect-report history (see
+    // claimHandleHistory below) instead of starting from zero. Nullable --
+    // every existing/ordinary code has none of these set and behaves exactly
+    // as the metering build shipped (see checkBetaGate's call sites, still
+    // unchanged). Stored normalized (lowercase, no leading @), same
+    // convention as users.tiktok_handle via normalizeHandle().
+    await client.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS known_tiktok_handle TEXT`);
+    await client.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS known_instagram_handle TEXT`);
+    await client.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS known_youtube_handle TEXT`);
+    // identity_choice: NULL until asked (ordinary code, or a pre-linked code
+    // not yet redeemed); 'claimed' or 'declined' once the confirm screen has
+    // been answered for a pre-linked code. Read by beta_admin.py's list
+    // command ("has this code's history claim fired?") and by the redeem
+    // endpoint's own idempotent-already-bound short-circuit (no need to
+    // re-ask a bound user).
+    await client.query(`ALTER TABLE redemptions ADD COLUMN IF NOT EXISTS identity_choice TEXT`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS beta_submission_events (
         id         BIGSERIAL PRIMARY KEY,
@@ -3355,33 +3374,38 @@ function generateBioCode() {
   return crypto.randomBytes(4).toString("hex").toUpperCase();
 }
 
+// Shared by the manual connect flow (/api/user/connect) and the beta gate's
+// auto-connect-on-redemption (pre-linked invite codes, "that's me" confirm)
+// -- both are just "attach these handles to this user_id," same upsert.
+async function upsertUserHandles(userId, { tiktokHandle, instagramHandle, youtubeHandle }) {
+  const tiktok = normalizeHandle(tiktokHandle, "tiktok");
+  const instagram = normalizeHandle(instagramHandle, "instagram");
+  const youtube = normalizeHandle(youtubeHandle, "youtube");
+  const { rows: existingRows } = await pgPool.query(`SELECT bio_code FROM users WHERE user_id = $1`, [userId]);
+  const bioCode = existingRows[0]?.bio_code || generateBioCode();
+  const { rows } = await queryRW(
+    `INSERT INTO users (user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, bio_code)
+     VALUES ($1,$2,$3,$4,now(),$5)
+     ON CONFLICT (user_id) DO UPDATE SET
+       tiktok_handle = $2, instagram_handle = $3, youtube_handle = $4, connected_at = now()
+     RETURNING user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, verified, bio_code`,
+    [userId, tiktok, instagram, youtube, bioCode]
+  );
+  return rows[0];
+}
+
 app.post("/api/user/connect", async (req, res) => {
   if (!pgPool) return res.status(503).json({ error: "Database not available" });
   const { userId, tiktokHandle, instagramHandle, youtubeHandle } = req.body || {};
   if (!userId) return res.status(400).json({ error: "userId is required" });
-
-  // Sweep D -- none of the three platforms is mandatory to connect. TikTok
-  // is simply the only one validation scanning (Task 4) reads this phase,
-  // so a TikTok-less connection just won't feed the prediction-vs-real-
-  // outcome comparison yet -- it's still a valid connection to store.
-  const tiktok = normalizeHandle(tiktokHandle, "tiktok");
-  const instagram = normalizeHandle(instagramHandle, "instagram");
-  const youtube = normalizeHandle(youtubeHandle, "youtube");
-
   try {
-    const { rows: existingRows } = await pgPool.query(`SELECT bio_code FROM users WHERE user_id = $1`, [userId]);
-    const bioCode = existingRows[0]?.bio_code || generateBioCode();
-
-    const { rows } = await queryRW(
-      `INSERT INTO users (user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, bio_code)
-       VALUES ($1,$2,$3,$4,now(),$5)
-       ON CONFLICT (user_id) DO UPDATE SET
-         tiktok_handle = $2, instagram_handle = $3, youtube_handle = $4, connected_at = now()
-       RETURNING user_id, tiktok_handle, instagram_handle, youtube_handle, connected_at, verified, bio_code`,
-      [userId, tiktok, instagram, youtube, bioCode]
-    );
-    console.log(`[user] connected user_id=${userId} tiktok=${tiktok ?? "—"} instagram=${instagram ?? "—"} youtube=${youtube ?? "—"}`);
-    res.json(rows[0]);
+    // Sweep D -- none of the three platforms is mandatory to connect. TikTok
+    // is simply the only one validation scanning (Task 4) reads this phase,
+    // so a TikTok-less connection just won't feed the prediction-vs-real-
+    // outcome comparison yet -- it's still a valid connection to store.
+    const row = await upsertUserHandles(userId, { tiktokHandle, instagramHandle, youtubeHandle });
+    console.log(`[user] connected user_id=${userId} tiktok=${row.tiktok_handle ?? "—"} instagram=${row.instagram_handle ?? "—"} youtube=${row.youtube_handle ?? "—"}`);
+    res.json(row);
   } catch (err) {
     console.error(`[user] connect failed for user_id=${userId}: ${err.message}`);
     res.status(500).json({ error: "Failed to save account connection" });
@@ -3402,6 +3426,59 @@ app.get("/api/user/:userId", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch account" });
   }
 });
+
+// Beta gate follow-up, Task 3 -- history claim. Reusable (safe to re-run;
+// the future Track Record build reuses this same function, not a copy).
+//
+// posted_videos.user_id is NULL only for one reason in this codebase:
+// worker.py's prospect-report ingest (--prospect mode) always passes an
+// empty userId (there's no connected user yet for a not-yet-enrolled
+// creator) -- traced via process_one_video/post_ingest in worker.py. Its
+// OTHER caller, run_scan_mode, only ever iterates connected users pulled
+// from `users` (`WHERE tiktok_handle IS NOT NULL`), so a real user's own
+// daily-scan rows always carry their real user_id already and are never
+// touched here. That makes "handle matches AND user_id IS NULL" a precise,
+// safe claim condition -- no need to also gate on source='prospect_report'.
+//
+// Ownership only: ONLY user_id is written here, never pool_eligible, score
+// fields, or anything scoring-related.
+//
+// KNOWN LIMITATION: identity here is a client-generated localStorage UUID,
+// not a real account -- a second device redeeming the same pre-linked code
+// gets its own new user_id (Phase C Task 1's identity-lite has no
+// cross-device sync) and this function will find the handle's history
+// already claimed (user_id NOT NULL), so it claims nothing for that second
+// device -- first redemption owns the history. Real auth resolves this at
+// the paid build.
+async function claimHandleHistory(userId, handle) {
+  const normalizedHandle = normalizeHandle(handle, "tiktok");
+  if (!normalizedHandle) return { claimedPostedVideos: 0, claimedShadowScores: 0, skipped: 0 };
+
+  const { rows: pvRows } = await queryRW(
+    `UPDATE posted_videos SET user_id = $1 WHERE handle = $2 AND user_id IS NULL RETURNING id`,
+    [userId, normalizedHandle]
+  );
+  const claimedIds = pvRows.map((r) => r.id);
+
+  let shadowClaimed = 0;
+  if (claimedIds.length > 0) {
+    const { rows: ssRows } = await queryRW(
+      `UPDATE shadow_scores SET user_id = $1 WHERE posted_video_id = ANY($2::int[]) AND user_id IS NULL RETURNING id`,
+      [userId, claimedIds]
+    );
+    shadowClaimed = ssRows.length;
+  }
+
+  const { rows: skippedRows } = await pgPool.query(
+    `SELECT COUNT(*) AS n FROM posted_videos WHERE handle = $1 AND user_id IS NOT NULL AND user_id != $2`,
+    [normalizedHandle, userId]
+  );
+  const skipped = parseInt(skippedRows[0].n, 10);
+
+  console.log(`[claim] handle=@${normalizedHandle} user_id=${userId} -- claimed ${claimedIds.length} posted_video(s), `
+    + `${shadowClaimed} shadow_scores row(s); skipped ${skipped} (already owned by a different user_id)`);
+  return { claimedPostedVideos: claimedIds.length, claimedShadowScores: shadowClaimed, skipped };
+}
 
 // ── Beta invite gate (public, unauthenticated -- same trust model as
 // /api/user/connect: the client's own persistent user_id is the only
@@ -3432,19 +3509,35 @@ app.get("/api/invite/status", async (req, res) => {
   }
 });
 
-// POST /api/invite/redeem { userId, code } -- binds user_id<->code
-// server-side. Idempotent for an already-bound user_id (returns their
-// EXISTING binding regardless of what code was submitted this time --
-// per spec, "bound users skip the screen," so a redeem call from an
-// already-bound client is treated as a stale retry, not an error).
+// POST /api/invite/redeem { userId, code, claimIdentity? } -- binds
+// user_id<->code server-side. Idempotent for an already-bound user_id
+// (returns their EXISTING binding regardless of what code was submitted
+// this time -- per spec, "bound users skip the screen," so a redeem call
+// from an already-bound client is treated as a stale retry, not an error).
 // redemptions.user_id is the PK, so a genuinely new user_id (cleared
 // storage, per Phase C Task 1's identity-lite) always inserts a fresh row
 // -- "cleared-storage recovery = re-enter the same code" consumes another
 // redemption against that code's max_redemptions, by design.
+//
+// Beta gate follow-up -- pre-linked codes (known_tiktok_handle etc. set).
+// This is a TWO-STEP flow for those codes, ONE endpoint:
+//   1. First call omits `claimIdentity` entirely -- if the code is valid
+//      AND pre-linked, nothing is written yet; responds
+//      {needsConfirm:true, tiktokHandle, instagramHandle, youtubeHandle}
+//      so the client can show the "this you?" confirm screen.
+//   2. Second call repeats the request WITH `claimIdentity` (true/false)
+//      -- NOW the redemption is actually inserted, and if claimIdentity is
+//      true, the account is auto-connected (upsertUserHandles) and history
+//      claimed (claimHandleHistory); if false, the decline is logged
+//      (identity_choice='declined') and nothing is connected/claimed.
+// An ORDINARY (non-pre-linked) code has no handle to confirm, so it skips
+// straight to redemption on the FIRST call, regardless of claimIdentity --
+// byte-identical to the metering build's original single-step behavior.
 app.post("/api/invite/redeem", async (req, res) => {
   if (!pgPool) return res.status(503).json({ error: "Database not available" });
   const userId = (req.body.userId || "").toString().trim();
   const code = (req.body.code || "").toString().trim();
+  const claimIdentity = typeof req.body.claimIdentity === "boolean" ? req.body.claimIdentity : null;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
   if (!code) return res.status(400).json({ error: "Enter an invite code." });
   try {
@@ -3454,7 +3547,8 @@ app.post("/api/invite/redeem", async (req, res) => {
     }
 
     const { rows: codeRows } = await pgPool.query(
-      `SELECT max_redemptions FROM invite_codes WHERE code = $1`, [code]
+      `SELECT max_redemptions, known_tiktok_handle, known_instagram_handle, known_youtube_handle
+       FROM invite_codes WHERE code = $1`, [code]
     );
     if (!codeRows[0]) {
       return res.status(400).json({ error: "That invite code isn't valid." });
@@ -3466,12 +3560,39 @@ app.post("/api/invite/redeem", async (req, res) => {
       return res.status(400).json({ error: "This invite code has reached its redemption limit." });
     }
 
+    const { known_tiktok_handle, known_instagram_handle, known_youtube_handle } = codeRows[0];
+    const isPreLinked = !!(known_tiktok_handle || known_instagram_handle || known_youtube_handle);
+
+    if (isPreLinked && claimIdentity === null) {
+      return res.json({
+        needsConfirm: true,
+        tiktokHandle: known_tiktok_handle,
+        instagramHandle: known_instagram_handle,
+        youtubeHandle: known_youtube_handle,
+      });
+    }
+
     await queryRW(
-      `INSERT INTO redemptions (user_id, code) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING`,
-      [userId, code]
+      `INSERT INTO redemptions (user_id, code, identity_choice) VALUES ($1, $2, $3) ON CONFLICT (user_id) DO NOTHING`,
+      [userId, code, isPreLinked ? (claimIdentity ? "claimed" : "declined") : null]
     );
-    console.log(`[invite] redeemed code=${code} user_id=${userId}`);
-    res.json({ ok: true, code, alreadyBound: false });
+
+    let claimResult = null;
+    if (isPreLinked && claimIdentity) {
+      await upsertUserHandles(userId, {
+        tiktokHandle: known_tiktok_handle,
+        instagramHandle: known_instagram_handle,
+        youtubeHandle: known_youtube_handle,
+      });
+      claimResult = await claimHandleHistory(userId, known_tiktok_handle);
+      console.log(`[invite] redeemed code=${code} user_id=${userId} -- auto-connected + claimed `
+        + `(${claimResult.claimedPostedVideos} posted_video, ${claimResult.claimedShadowScores} shadow_scores)`);
+    } else if (isPreLinked) {
+      console.log(`[invite] redeemed code=${code} user_id=${userId} -- pre-linked code, tester declined ("not me")`);
+    } else {
+      console.log(`[invite] redeemed code=${code} user_id=${userId}`);
+    }
+    res.json({ ok: true, code, alreadyBound: false, claimed: !!(isPreLinked && claimIdentity), claim: claimResult });
   } catch (err) {
     console.error(`[invite] redeem failed for user_id=${userId} code=${code}: ${err.message}`);
     res.status(500).json({ error: "Failed to redeem code" });
