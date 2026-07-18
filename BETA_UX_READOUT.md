@@ -185,13 +185,13 @@ their exact ids.
 ## Git / deploy state
 
 - Commits: `96ce54d` (Tasks 0–3, 5), `d1d9ba9` (self-caught badge-clear
-  polish), on `origin/main`, pushed.
+  polish), `d8a1951` (this readout), on `origin/main`, pushed.
 - Deployed — Render (backend): Y, confirmed live via `/version`
   (`96ce54d`) before live verification began.
 - Deployed — Vercel (frontend): auto-deployed from both pushes; all of
   Task 4's verification ran in a real browser session against
   `previewpanel.vercel.app` (not just API calls) at mobile width.
-- Research repo: pending commit (this readout's own commit, see below).
+- Research repo: `36d0c42`, pushed.
 
 ## STOP
 
