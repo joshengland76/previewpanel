@@ -135,6 +135,49 @@ def db_connect():
     return psycopg2.connect(url.replace("-pooler", ""))
 
 
+# ── Hotfix v2, Task 1: Neon reconnect guard ─────────────────────────────────
+# Local helper, no research-repo imports (each script that needs this defines
+# its own copy -- see worker.py's identical DB class). Confirmed root cause
+# of two production crashes ("SSL connection has been closed unexpectedly"):
+# Neon can idle-close a held connection mid-script, and this script's own
+# Section-B loop holds one across several minutes of per-video fetch/judge/
+# poll network work between DB reads -- exactly the idle window that trips
+# it. DB.query() is the single choke point every query in this script goes
+# through, wrapping EVERY query site in a reopen-and-retry-once on
+# psycopg2.OperationalError, not just the one confirmed crash site (the
+# per-video post-poll read in study_section_b) -- any query following slow
+# network work is equally exposed.
+class DB:
+    def __init__(self):
+        self.conn = db_connect()
+
+    def _reopen(self):
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+        self.conn = db_connect()
+
+    def query(self, sql, params=None, fetch=None, cursor_factory=None):
+        """fetch: None (no result expected), 'one', or 'all'. Retries the
+        whole cursor/execute/fetch sequence once on a dropped connection."""
+        for attempt in (1, 2):
+            try:
+                cur = self.conn.cursor(cursor_factory=cursor_factory)
+                cur.execute(sql, params)
+                result = cur.fetchall() if fetch == "all" else cur.fetchone() if fetch == "one" else None
+                cur.close()
+                return result
+            except psycopg2.OperationalError as e:
+                if attempt == 2:
+                    raise
+                print(f"[generate_preview] DB connection lost ({e}) -- reconnecting and retrying once", file=sys.stderr)
+                self._reopen()
+
+    def close(self):
+        self.conn.close()
+
+
 def _as_dt(v):
     if isinstance(v, datetime):
         return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
@@ -184,20 +227,17 @@ def load_corpus_rows():
     ]
 
 
-def fetch_live_pool_rows(conn):
+def fetch_live_pool_rows(db):
     """Mirrors server.js's SCORE_DISPLAY_FETCHERS.fetchShadowRows query
     exactly, plus posted_videos.handle (join-only addition -- needed for
     self-exclusion and the concentration watch-stat; the live app doesn't
     read this column itself)."""
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
+    rows = db.query("""
         SELECT s.id, s.prediction, s.objective, s.created_at, s.platform, pv.handle
         FROM shadow_scores s
         LEFT JOIN posted_videos pv ON pv.id = s.posted_video_id
         WHERE s.prediction IS NOT NULL AND s.is_posted_video IS NOT TRUE AND s.pool_eligible
-    """)
-    rows = cur.fetchall()
-    cur.close()
+    """, fetch="all", cursor_factory=psycopg2.extras.RealDictCursor)
     return [
         {"key": f"shadow:{r['id']}", "prediction": r["prediction"], "objective": r["objective"],
          "date": r["created_at"], "handle": r["handle"]}
@@ -205,21 +245,18 @@ def fetch_live_pool_rows(conn):
     ]
 
 
-def creator_research_video_ids(conn, handle):
+def creator_research_video_ids(db, handle):
     """research_videos.id values (== corpus_reference_pool.json's video_id
     field) belonging to this creator, for self-exclusion. Empty for a
     --prospect handle -- correct and expected, not a bug: they have no
     research_videos rows at all."""
-    cur = conn.cursor()
-    cur.execute(
+    rows = db.query(
         """SELECT v.id FROM research_videos v
            JOIN research_creators c ON c.id = v.creator_id
            WHERE lower(c.handle) = lower(%s)""",
-        (handle,),
+        (handle,), fetch="all",
     )
-    ids = {row[0] for row in cur.fetchall()}
-    cur.close()
-    return ids
+    return {row[0] for row in rows}
 
 
 def build_pools(corpus_rows, shadow_rows, exclude_video_ids=frozenset(), exclude_handle=None):
@@ -594,21 +631,17 @@ def load_oof_predictions():
     return df.groupby("video_id")["y_pred"].mean().to_dict()
 
 
-def study_creator_id(conn, handle):
-    cur = conn.cursor()
-    cur.execute("SELECT id FROM research_creators WHERE lower(handle) = lower(%s)", (handle,))
-    row = cur.fetchone()
-    cur.close()
+def study_creator_id(db, handle):
+    row = db.query("SELECT id FROM research_creators WHERE lower(handle) = lower(%s)", (handle,), fetch="one")
     if not row:
         sys.exit(f"[generate_preview] --study {handle}: not found in research_creators")
     return row[0]
 
 
-def study_section_a(conn, creator_id, oof_preds, mode, objective):
+def study_section_a(db, creator_id, oof_preds, mode, objective):
     """Videos posted 30+ days ago: OOF ŷ (prediction) + real day-30 result
     (weighted_engagement_rate) from research_metrics."""
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
+    rows = db.query("""
         SELECT v.id AS video_id, v.posted_at, v.caption,
                m.weighted_engagement_rate AS wec_rate
         FROM research_videos v
@@ -617,9 +650,7 @@ def study_section_a(conn, creator_id, oof_preds, mode, objective):
         WHERE v.creator_id = %s AND v.posted_at IS NOT NULL
           AND v.posted_at <= now() - interval '%s days'
         ORDER BY v.posted_at DESC
-    """, (creator_id, AGED_MIN_DAYS))
-    rows = cur.fetchall()
-    cur.close()
+    """, (creator_id, AGED_MIN_DAYS), fetch="all", cursor_factory=psycopg2.extras.RealDictCursor)
 
     out = []
     for r in rows:
@@ -656,71 +687,69 @@ def _poll_status(job_id):
     raise TimeoutError(f"job {job_id} did not finish within {STATUS_POLL_TIMEOUT_S}s")
 
 
-def _recent_reused_section_b_rows(conn, objective, mode, n_needed, reuse_within_hours):
-    """Polish v2, Task 6: 'may reuse existing link-fetch rows -- do not
-    re-fetch'. Pairs the N most recent source='link_fetch' shadow_scores
-    rows (created_at ASC = the order they were originally processed in) to
-    the N candidate research_videos (posted_at DESC = the order
-    study_section_b iterates them in) POSITIONALLY -- sound, not a
-    coincidence: study_section_b always processes candidates in that same
-    posted_at-DESC order, calling _fetch_video sequentially, so the Nth row
-    created is the Nth candidate processed. Returns None (caller falls back
-    to a real live-fetch) unless the count matches exactly -- a mismatch
-    means the reuse window doesn't cleanly cover one prior run, and
-    guessing which subset applies would be worse than just re-fetching."""
-    obj_filter = "s.objective = %s" if mode == "objective" else "TRUE"
-    params = [objective] if mode == "objective" else []
-    params += [reuse_within_hours]
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(f"""
+def _reused_row_for_url(db, source_url, objective, mode, reuse_within_hours):
+    """Hotfix v2, Task 2 -- PER-VIDEO reuse, replaces the old batch-level
+    _recent_reused_section_b_rows (which required the whole batch to match
+    exactly -- a single crash or a single new post since the last render
+    meant re-spending from zero). Looks up the most recent shadow_scores
+    row for THIS EXACT tiktok video URL within reuse_within_hours. Requires
+    source_url to have been populated at score time (shadowScore.js's
+    recordShadowScore, threaded from job.sourceUrl in server.js) -- a row
+    written before that column existed simply won't match and falls
+    through to a live fetch, same as any other cache miss. Returns None
+    (caller fetches live) if nothing matches."""
+    obj_filter = "AND s.objective = %s" if mode == "objective" else ""
+    params = [source_url]
+    if mode == "objective":
+        params.append(objective)
+    params.append(reuse_within_hours)
+    return db.query(f"""
         SELECT s.prediction, s.input_features FROM shadow_scores s
-        WHERE s.source = 'link_fetch' AND {obj_filter}
+        WHERE s.source_url = %s {obj_filter}
           AND s.created_at > now() - interval '%s hours'
-        ORDER BY s.created_at ASC
-    """, params)
-    rows = cur.fetchall()
-    cur.close()
-    if len(rows) != n_needed:
-        return None
-    return rows
+        ORDER BY s.created_at DESC LIMIT 1
+    """, params, fetch="one", cursor_factory=psycopg2.extras.RealDictCursor)
 
 
-def study_section_b(conn, creator_id, handle, mode, objective, reuse_within_hours=None):
+def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=24):
     """Videos posted <30 days ago: scored FRESH, via the live app's own
     public link-fetch path (/api/fetch-video) -- fully out-of-sample,
-    byte-identical to a real user's result for that URL. Unless
-    reuse_within_hours is set and a matching prior batch is found (see
-    _recent_reused_section_b_rows), in which case no new API calls are
-    made at all."""
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute("""
+    byte-identical to a real user's result for that URL. Hotfix v2, Task 2:
+    reuse is now PER-VIDEO and the default (reuse_within_hours=24) -- pass
+    0 (or None) to disable and force a full live re-fetch. A crashed run's
+    partial progress is recovered per-video instead of re-spent wholesale,
+    and a video posted since the last render fetches only itself."""
+    rows = db.query("""
         SELECT id AS video_id, posted_at, caption, source_url
         FROM research_videos
         WHERE creator_id = %s AND posted_at IS NOT NULL
           AND posted_at > now() - interval '%s days' AND source_url IS NOT NULL
         ORDER BY posted_at DESC
-    """, (creator_id, AGED_MIN_DAYS))
-    rows = cur.fetchall()
-    cur.close()
+    """, (creator_id, AGED_MIN_DAYS), fetch="all", cursor_factory=psycopg2.extras.RealDictCursor)
 
-    reused = None
-    if reuse_within_hours is not None:
-        reused = _recent_reused_section_b_rows(conn, objective, mode, len(rows), reuse_within_hours)
-        if reused is not None:
-            print(f"[generate_preview] reusing {len(reused)} existing Section-B row(s) -- $0 marginal API cost")
-            out = []
-            for r, pred_row in zip(rows, reused):
-                out.append({
-                    "posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
-                    "prediction": pred_row["prediction"],
-                    "axis_scores": axis_scores_from_input_features(pred_row["input_features"]),
-                })
-            return out
-        print(f"[generate_preview] no matching prior batch to reuse (need exactly {len(rows)} rows within "
-              f"{reuse_within_hours}h) -- falling back to a live re-fetch", file=sys.stderr)
+    # Determine the reuse/fetch split UP FRONT (before any live fetches
+    # start) so the honest "reusing K of N; fetching N-K" line prints as a
+    # plan, not a running tally -- same operator-facing shape the old
+    # batch-level log line had.
+    hits = {}
+    if reuse_within_hours:
+        for r in rows:
+            hit = _reused_row_for_url(db, r["source_url"], objective, mode, reuse_within_hours)
+            if hit and hit.get("prediction") is not None:
+                hits[r["video_id"]] = hit
+        print(f"[generate_preview] reusing {len(hits)} of {len(rows)}; fetching {len(rows) - len(hits)}")
 
     out = []
     for r in rows:
+        hit = hits.get(r["video_id"])
+        if hit is not None:
+            out.append({
+                "posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
+                "prediction": hit["prediction"],
+                "axis_scores": axis_scores_from_input_features(hit["input_features"]),
+            })
+            continue
+
         print(f"[generate_preview] live link-fetch: {r['source_url']}")
         job_id = _fetch_video(r["source_url"], objective if mode == "objective" else "")
         result = _poll_status(job_id)
@@ -738,16 +767,18 @@ def study_section_b(conn, creator_id, handle, mode, objective, reuse_within_hour
         # user's row that happened to land at the same moment, attributing
         # a stranger's prediction to this creator's video. job_id is unique
         # per call and already known here -- no reason to guess.
+        #
+        # Hotfix v2, Task 1: THIS read is the confirmed crash site -- it
+        # runs immediately after the video's own multi-minute fetch/judge
+        # cycle above, exactly the idle window Neon can close a held
+        # connection on. db.query() reopens and retries once automatically.
         pred_row = None
         for _ in range(15):
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute("""
+            pred_row = db.query("""
                 SELECT s.prediction, s.input_features FROM shadow_scores s
                 JOIN submissions sub ON sub.id = s.submission_id
                 WHERE sub.job_id = %s
-            """, (job_id,))
-            pred_row = cur.fetchone()
-            cur.close()
+            """, (job_id,), fetch="one", cursor_factory=psycopg2.extras.RealDictCursor)
             if pred_row and pred_row["prediction"] is not None:
                 break
             time.sleep(2)
@@ -764,19 +795,16 @@ def study_section_b(conn, creator_id, handle, mode, objective, reuse_within_hour
 
 
 # ── --prospect data source (Task 1's own rows) ──────────────────────────────
-def prospect_rows(conn, handle, aged):
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+def prospect_rows(db, handle, aged):
     status_clause = "pv.is_day30_equiv IS TRUE" if aged else "pv.is_day30_equiv IS NOT TRUE"
-    cur.execute(f"""
+    rows = db.query(f"""
         SELECT pv.posted_at, pv.caption, pv.day30_wec_rate AS wec_rate,
                s.prediction, s.input_features
         FROM posted_videos pv
         JOIN shadow_scores s ON s.posted_video_id = pv.id
         WHERE lower(pv.handle) = lower(%s) AND pv.source = 'prospect_report' AND {status_clause}
         ORDER BY pv.posted_at DESC
-    """, (handle,))
-    rows = cur.fetchall()
-    cur.close()
+    """, (handle,), fetch="all", cursor_factory=psycopg2.extras.RealDictCursor)
     out = [
         {"posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
          "prediction": r["prediction"], "wec_rate": r["wec_rate"] if aged else None,
@@ -786,12 +814,12 @@ def prospect_rows(conn, handle, aged):
     return out
 
 
-def prospect_section_a(conn, handle):
-    return size_section_a_window(prospect_rows(conn, handle, aged=True))
+def prospect_section_a(db, handle):
+    return size_section_a_window(prospect_rows(db, handle, aged=True))
 
 
-def prospect_section_b(conn, handle):
-    return prospect_rows(conn, handle, aged=False)
+def prospect_section_b(db, handle):
+    return prospect_rows(db, handle, aged=False)
 
 
 # ── HTML rendering (edits Josh's template string in place -- structure/CSS
@@ -1054,10 +1082,11 @@ def main():
     pct.add_argument("--overall", action="store_true")
     ap.add_argument("--descriptor", default="multi-niche creator",
                      help="--overall header niche line when no --objective is given")
-    ap.add_argument("--reuse-section-b-hours", type=float, default=None,
-                     help="--study only: reuse an existing link-fetch batch from within this many hours "
-                          "instead of re-fetching Section B live (falls back to a live fetch if no exact-count "
-                          "match is found)")
+    ap.add_argument("--reuse-section-b-hours", type=float, default=24,
+                     help="--study only: per-video Section-B reuse -- for each candidate video, reuse an "
+                          "existing scored row for that exact tiktok video URL from within this many hours "
+                          "instead of re-fetching it live (default 24; pass 0 to disable and force a full "
+                          "live re-fetch of every Section-B video)")
     args = ap.parse_args()
 
     handle = (args.study or args.prospect).lstrip("@")
@@ -1070,26 +1099,26 @@ def main():
     if mode == "objective":
         precision_caveat = check_objective_gate(objective, tiers)
 
-    conn = db_connect()
-    exclude_video_ids = creator_research_video_ids(conn, handle)
+    db = DB()
+    exclude_video_ids = creator_research_video_ids(db, handle)
     corpus_rows = load_corpus_rows()
-    shadow_rows = fetch_live_pool_rows(conn)
+    shadow_rows = fetch_live_pool_rows(db)
     pools = build_pools(corpus_rows, shadow_rows, exclude_video_ids=exclude_video_ids, exclude_handle=handle)
     pool = pools["by_objective"].get(objective, []) if mode == "objective" else pools["overall"]
     report_concentration_watch_stat_for_render(pools, objective, mode)
 
     if is_study:
-        creator_id = study_creator_id(conn, handle)
+        creator_id = study_creator_id(db, handle)
         oof_preds = load_oof_predictions()
-        section_a_full = study_section_a(conn, creator_id, oof_preds, mode, objective)
+        section_a_full = study_section_a(db, creator_id, oof_preds, mode, objective)
         # Section B is scored FRESH by default, via a real (billed) live
-        # link-fetch call per video -- unless --reuse-section-b-hours finds
-        # a matching prior batch, in which case it's free.
-        section_b = study_section_b(conn, creator_id, handle, mode, objective,
+        # link-fetch call per video -- unless --reuse-section-b-hours (per
+        # video, default 24h) finds a matching prior row for that exact URL.
+        section_b = study_section_b(db, creator_id, handle, mode, objective,
                                      reuse_within_hours=args.reuse_section_b_hours)
     else:
-        section_a_full = prospect_section_a(conn, handle)
-        section_b = prospect_section_b(conn, handle)
+        section_a_full = prospect_section_a(db, handle)
+        section_b = prospect_section_b(db, handle)
 
     for v in section_b:
         v["percentile"] = midrank_percentile(v["prediction"], pool)
@@ -1154,7 +1183,7 @@ def main():
     print(f"[generate_preview] wrote {html_path}")
     print(f"[generate_preview] wrote {pdf_path} ({pages} page(s))")
 
-    conn.close()
+    db.close()
 
 
 if __name__ == "__main__":

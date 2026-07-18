@@ -75,24 +75,58 @@ export PP_API_BASE=https://previewpanel.onrender.com
 ./_venv/bin/python3 generate_preview.py --study somehandle --objective "Aesthetic/Vibes"
 ```
 
-Section B (last-30-days videos) is scored **fresh, live, real cost**
-every time you run this — there is no free re-render for `--study`
-Section B the way there is for `--prospect`, *unless* you know a
-matching batch was already scored recently:
+Section B (last-30-days videos) reuse is now **PER-VIDEO and on by
+default** (Hotfix v2, Task 2): for each Section-B candidate, the script
+checks whether *that exact tiktok video* was already scored within the
+last 24 hours (`--reuse-section-b-hours`, default `24`) and only fetches
+the ones that aren't. A crashed run's partial progress is recovered
+instead of re-spent from zero, and a video posted since your last render
+fetches only itself — no more "the whole batch has to match exactly or
+none of it reuses."
 
 ```bash
-# Re-render without re-spending on Section B, IF the same handle/objective
-# was rendered within the lookback window you give it. Falls back to a
-# live re-fetch automatically if the row count doesn't match exactly (a
-# different set of "last 30 days" videos, unrelated traffic, etc.) --
-# never guesses, never silently uses stale/wrong rows.
+./_venv/bin/python3 generate_preview.py --study somehandle --objective "Aesthetic/Vibes"
+#   default behavior: reuses any Section-B video already scored in the
+#   last 24h, fetches (real cost) only the rest. Prints the honest split
+#   up front, e.g.:
+#   [generate_preview] reusing 2 of 7; fetching 5
+
+# Widen or narrow the reuse window:
 ./_venv/bin/python3 generate_preview.py --study somehandle --objective "Aesthetic/Vibes" \
-  --reuse-section-b-hours 24
+  --reuse-section-b-hours 72
+
+# Force a full live re-fetch of every Section-B video (explicit 0 disables reuse):
+./_venv/bin/python3 generate_preview.py --study somehandle --objective "Aesthetic/Vibes" \
+  --reuse-section-b-hours 0
 ```
 
 `--study` mode requires the handle to already exist in
 `research_creators` — it will exit with an error naming the handle if
 not found. (`--prospect` mode has no such requirement, by design.)
+
+## If it crashes
+
+Both `generate_preview.py --study` and `worker.py --prospect` hold a
+database connection across each video's multi-minute fetch/judge/poll
+cycle. Neon can idle-close that connection mid-run — you'll see:
+
+```
+psycopg2.OperationalError: SSL connection has been closed unexpectedly
+```
+
+As of Hotfix v2 (Task 1), every query in both scripts reopens the
+connection and retries once automatically, so this should now be rare.
+If it still happens (or happened before this hotfix):
+
+- **The SSL message means a timeout during scoring, not a scoring
+  failure or bad data.** Any video that already finished scoring before
+  the crash is safe and already in the database.
+- **Just re-run the exact same command.** Section-B's per-video reuse
+  (above) means already-scored videos from the crashed attempt are
+  recognized and reused, not re-fetched — the re-run picks up exactly
+  where the crash left off, at no extra cost for what already completed.
+- This applies to `--study` Section B and to `worker.py --prospect`'s
+  video-by-video ingest loop identically.
 
 ## The 19 canonical objectives (`--objective "<exact string>"`)
 
@@ -141,7 +175,7 @@ flag. If a Dancing creator needs a document, use `--overall` instead
 | `worker.py --prospect` (per video, real live-path scoring) | ~$0.10/video | ~1 min/video (TwelveLabs judges + C_dims), so a full 12-aged + 4-fresh batch runs ~15-18 min end to end, politeness delays included |
 | `generate_preview.py --study` Section B (per video, live link-fetch) | ~$0.10/video | ~1 min/video; a typical last-30-days batch (3-5 videos) runs ~4-6 min |
 | `generate_preview.py --prospect` (either mode) | **$0** | seconds — pure DB read + PDF render, no scoring |
-| `generate_preview.py --study` with `--reuse-section-b-hours` (cache hit) | **$0** | seconds |
+| `generate_preview.py --study` Section B, per video (default, reused within 24h) | **$0** | seconds per reused video -- only the un-reused remainder costs/takes anything |
 | PDF render itself (headless Chrome) | $0 | ~2-3 sec |
 
 (TwelveLabs $0.0262/min + C_dims ~$0.028/video — the same constants as

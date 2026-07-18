@@ -652,6 +652,14 @@ async function initDb() {
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS source TEXT`);
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS is_posted_video BOOLEAN DEFAULT false`);
     await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS posted_video_id INTEGER`);
+    // Hotfix v2, Task 2 -- populated only for link_fetch jobs (job.sourceUrl,
+    // the raw TikTok URL the user/script pasted). Lets generate_preview.py's
+    // Section-B reuse match "have we already scored THIS exact video" per
+    // video instead of only as an all-or-nothing batch; null for every other
+    // source (uploads have no URL at all), and for any row written before
+    // this column existed -- those rows just don't match, same as a normal
+    // cache miss, no backfill needed for the mechanism to work going forward.
+    await client.query(`ALTER TABLE shadow_scores ADD COLUMN IF NOT EXISTS source_url TEXT`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_shadow_scores_is_posted_video ON shadow_scores(is_posted_video)`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS analyze_tasks (
@@ -2951,6 +2959,10 @@ async function runShadowScoringForJob(jobId) {
         : "app",
       isPostedVideo: job.source === "validation",
       postedVideoId: job.postedVideoId ?? null,
+      // Hotfix v2, Task 2 -- only link_fetch jobs carry a real URL (job.sourceUrl,
+      // set at /api/fetch-video's job creation); null for everything else, same
+      // as the column already defaults to for every pre-existing row.
+      sourceUrl: job.source === "link_fetch" ? (job.sourceUrl ?? null) : null,
       fpGroup, // pool hygiene Task 2
     });
 

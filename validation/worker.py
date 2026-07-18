@@ -99,6 +99,51 @@ def db_connect():
     return psycopg2.connect(url.replace("-pooler", ""))
 
 
+# ── Hotfix v2, Task 1: Neon reconnect guard ─────────────────────────────────
+# Local helper, no research-repo imports -- identical in spirit to
+# generate_preview.py's own DB class (each script stays self-contained).
+# Scoped to run_prospect_mode's long loop: --prospect processes one video at
+# a time (download, judge, ingest -- several minutes of network work each),
+# holding a connection across that whole span the same way generate_preview.py
+# does, and equally exposed to Neon idle-closing it ("SSL connection has been
+# closed unexpectedly"). Every query run_prospect_mode's own loop and its
+# helpers (capture_day30_equivalent, report_concentration_watch_stat) make
+# goes through DB.query(), which reopens and retries once on
+# psycopg2.OperationalError.
+class DB:
+    def __init__(self):
+        self.conn = db_connect()
+
+    def _reopen(self):
+        try:
+            self.conn.close()
+        except Exception:
+            pass
+        self.conn = db_connect()
+
+    def query(self, sql, params=None, fetch=None, cursor_factory=None, commit=False):
+        """fetch: None, 'one', or 'all'. commit=True for INSERT/UPDATE.
+        Retries the whole cursor/execute/fetch/commit sequence once on a
+        dropped connection."""
+        for attempt in (1, 2):
+            try:
+                cur = self.conn.cursor(cursor_factory=cursor_factory)
+                cur.execute(sql, params)
+                result = cur.fetchall() if fetch == "all" else cur.fetchone() if fetch == "one" else None
+                if commit:
+                    self.conn.commit()
+                cur.close()
+                return result
+            except psycopg2.OperationalError as e:
+                if attempt == 2:
+                    raise
+                print(f"[worker] DB connection lost ({e}) -- reconnecting and retrying once", file=sys.stderr)
+                self._reopen()
+
+    def close(self):
+        self.conn.close()
+
+
 # ── yt-dlp interactions (minimal reimplementation, no research-repo import) ──
 def _is_likely_carousel(video_json: dict) -> bool:
     """TikTok photo-carousel posts have no downloadable video stream --
@@ -373,7 +418,7 @@ def select_prospect_videos(videos, max_aged, max_fresh):
     return aged[:max_aged], fresh[:max_fresh]
 
 
-def capture_day30_equivalent(conn, posted_video_id, handle, tiktok_video_id, age_days):
+def capture_day30_equivalent(db, posted_video_id, handle, tiktok_video_id, age_days):
     """Phase5c license: an already-30-100-day-old video's CURRENT public
     counters are a valid day-30 equivalent, no need to wait a real 30 days.
     Writes the exact same day30_* fields collect_day30.py's write_day30_row
@@ -395,23 +440,24 @@ def capture_day30_equivalent(conn, posted_video_id, handle, tiktok_video_id, age
     shares = metadata.get("repost_count")
     saves = metadata.get("save_count")
     wec_rate = day30.compute_wec_rate(views, likes, shares, saves)
-    cur = conn.cursor()
-    cur.execute(
+    # Hotfix v2, Task 1: this UPDATE runs immediately after the fetch_current_metrics
+    # HTTP call above -- the same "query right after slow network work" shape as the
+    # confirmed crash site in generate_preview.py. db.query() reopens/retries once.
+    db.query(
         """UPDATE posted_videos SET
              day30_views=%s, day30_likes=%s, day30_comments=%s, day30_shares=%s, day30_saves=%s,
              day30_wec_rate=%s, collected_at=now(), video_age_days_at_collection=%s,
              status='day30_collected', is_day30_equiv=true
            WHERE id=%s""",
         (views, likes, comments, shares, saves, wec_rate, age_days, posted_video_id),
+        commit=True,
     )
-    conn.commit()
-    cur.close()
     print(f"[worker] prospect {tiktok_video_id}: day30-equivalent captured -- "
           f"views={views} likes={likes} shares={shares} saves={saves} "
           f"wec_rate={wec_rate} age_days={age_days}")
 
 
-def report_concentration_watch_stat(conn):
+def report_concentration_watch_stat(db):
     """Post-ingest watch-stat, not a gate. Reports the max single-creator
     share of the LIVE portion of the overall percentile pool (last 1,000
     pool-eligible, non-posted-video shadow_scores rows -- mirrors
@@ -422,8 +468,10 @@ def report_concentration_watch_stat(conn):
     prospects have no objective at ingest time (this mode's whole point),
     so there is no niche pool yet; recompute once one is assigned at
     render time."""
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    cur.execute(
+    # Hotfix v2, Task 1: runs at the very end of the whole prospect batch,
+    # after every video's own multi-minute processing -- the longest
+    # possible idle gap in the script, so the most exposed query site of all.
+    top = db.query(
         """WITH window_rows AS (
              SELECT id, posted_video_id FROM shadow_scores
              WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE AND pool_eligible
@@ -432,15 +480,15 @@ def report_concentration_watch_stat(conn):
            SELECT pv.handle, COUNT(*) AS n
            FROM window_rows w JOIN posted_videos pv ON pv.id = w.posted_video_id
            WHERE pv.handle IS NOT NULL
-           GROUP BY pv.handle ORDER BY n DESC LIMIT 1"""
+           GROUP BY pv.handle ORDER BY n DESC LIMIT 1""",
+        fetch="one", cursor_factory=psycopg2.extras.RealDictCursor,
     )
-    top = cur.fetchone()
-    cur.execute(
+    total_row = db.query(
         """SELECT LEAST(COUNT(*), 1000) AS n FROM shadow_scores
-           WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE AND pool_eligible"""
+           WHERE prediction IS NOT NULL AND is_posted_video IS NOT TRUE AND pool_eligible""",
+        fetch="one", cursor_factory=psycopg2.extras.RealDictCursor,
     )
-    total = cur.fetchone()["n"]
-    cur.close()
+    total = total_row["n"]
     if not top or not total:
         print("[worker] concentration watch-stat: no handle-linked pool rows yet")
         return
@@ -455,7 +503,7 @@ def run_prospect_mode(args):
     max_aged = args.max_aged if args.max_aged is not None else PROSPECT_MAX_AGED_DEFAULT
     max_fresh = args.max_fresh if args.max_fresh is not None else PROSPECT_MAX_FRESH_DEFAULT
     DOWNLOAD_DIR.mkdir(exist_ok=True)
-    conn = db_connect()
+    db = DB()
 
     print(f"[worker] prospect mode: @{handle} (max_aged={max_aged}, max_fresh={max_fresh})")
     videos = list_recent_videos(handle, playlist_end=PROSPECT_YTDLP_PLAYLIST_END)
@@ -471,10 +519,11 @@ def run_prospect_mode(args):
 
             # Idempotent on tiktok_video_id, same pre-check run_scan_mode uses
             # (the ingest route's own ON CONFLICT is a second backstop).
-            cur = conn.cursor()
-            cur.execute("SELECT id, status FROM posted_videos WHERE tiktok_video_id = %s", (tiktok_video_id,))
-            existing = cur.fetchone()
-            cur.close()
+            # Hotfix v2, Task 1: this read runs right after the PREVIOUS
+            # video's full processing cycle (loop-carried exposure to the
+            # same idle-close risk), so it goes through db.query() too.
+            existing = db.query("SELECT id, status FROM posted_videos WHERE tiktok_video_id = %s",
+                                 (tiktok_video_id,), fetch="one")
             if existing:
                 print(f"[worker] prospect {tiktok_video_id}: already ingested (status={existing[1]}) -- skipping")
                 continue
@@ -485,7 +534,14 @@ def run_prospect_mode(args):
             caption = fetch_caption(v["url"])
 
             try:
-                ok = process_one_video(conn, None, handle, tiktok_video_id, v["posted_at"], local_path,
+                # process_one_video's own conn param is unused on this call
+                # path (user_id is always None for a prospect, so its only
+                # conn-consuming branch -- fetch_candidate_fingerprints --
+                # short-circuits) -- pass db.conn (always the CURRENT live
+                # connection, even if a reconnect happened earlier this
+                # iteration) rather than widening process_one_video's own
+                # signature for a param it wouldn't use here.
+                ok = process_one_video(db.conn, None, handle, tiktok_video_id, v["posted_at"], local_path,
                                         caption=caption, source="prospect_report")
             finally:
                 local_path.unlink(missing_ok=True)  # never accumulate downloaded videos on disk
@@ -494,12 +550,14 @@ def run_prospect_mode(args):
             scored_count += 1
 
             if bucket_name == "aged":
-                cur = conn.cursor()
-                cur.execute("SELECT id FROM posted_videos WHERE tiktok_video_id = %s", (tiktok_video_id,))
-                row = cur.fetchone()
-                cur.close()
+                # Hotfix v2, Task 1 -- THIS is the direct analogue of
+                # generate_preview.py's confirmed crash site: a DB read
+                # immediately after process_one_video's multi-minute
+                # download+judge+ingest cycle above.
+                row = db.query("SELECT id FROM posted_videos WHERE tiktok_video_id = %s",
+                                (tiktok_video_id,), fetch="one")
                 if row:
-                    capture_day30_equivalent(conn, row[0], handle, tiktok_video_id, v["age_days"])
+                    capture_day30_equivalent(db, row[0], handle, tiktok_video_id, v["age_days"])
 
             time.sleep(INTER_VIDEO_DELAY_S)
 
@@ -507,8 +565,8 @@ def run_prospect_mode(args):
     print(f"[worker] prospect ingest done -- {scored_count} video(s) scored, "
           f"~${cost:.2f} estimated cost ({scored_count} x ${PROSPECT_COST_PER_VIDEO:.2f}/video)")
 
-    report_concentration_watch_stat(conn)
-    conn.close()
+    report_concentration_watch_stat(db)
+    db.close()
 
 
 def main():

@@ -97,6 +97,7 @@ function foldGroupMean(own, existingArray, groupK) {
 export async function recordShadowScore({
   queryRW, submissionId, features, objective, pegasusModel, promptVersion, cdimsStatus, platform, userId,
   source, isPostedVideo, postedVideoId, // Phase C, Task 3
+  sourceUrl = null, // Hotfix v2, Task 2 -- link_fetch jobs' raw URL, for generate_preview.py's per-video reuse
   fpGroup = null, // pool hygiene Task 2
   contentReadAxes = null, // Sweep C -- this row's own {curiosity, inspiration}, for group-mean folding below
   bigPicture = null, // this row's own flattened {judge}_big_{dim}/{judge}_objective_fit_score values
@@ -143,16 +144,16 @@ export async function recordShadowScore({
       `INSERT INTO shadow_scores
         (submission_id, model_version, prompt_version, pegasus_model, spec_hash,
          input_features, prediction, calibrated_percentile, tier_at_score_time, extract_cdims_status,
-         objective, platform, user_id, source, is_posted_video, posted_video_id,
+         objective, platform, user_id, source, is_posted_video, posted_video_id, source_url,
          pool_eligible, fp_group_key, group_k, group_mean_prediction, group_mean_content_read_axes,
          group_mean_big_picture, group_mean_trend_axes)
-       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+       VALUES ($1,'v2_capstone',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
        RETURNING id`,
       [
         submissionId ?? null, promptVersion ?? null, pegasusModel ?? null, specHash(),
         JSON.stringify(features), prediction, calibratedPercentile, tierAtScoreTime,
         cdimsStatus ?? null, objective ?? null, platform ?? null, userId ?? null,
-        source ?? "app", isPostedVideo ?? false, postedVideoId ?? null,
+        source ?? "app", isPostedVideo ?? false, postedVideoId ?? null, sourceUrl ?? null,
         poolEligible, fpGroupKey, groupK, groupMeanPrediction,
         groupMeanContentReadAxes ? JSON.stringify(groupMeanContentReadAxes) : null,
         groupMeanBigPicture ? JSON.stringify(groupMeanBigPicture) : null,
