@@ -265,7 +265,7 @@ root cause, TR v2's structure, telemetry events).
 
 - Commits: `efd990a` (Tasks 0-4, 6), `7b59533` (claim-banner fix, found
   during Task 5), `6acfca3` (header-collision revision, logo untouched
-  per direction), on `origin/main`, pushed.
+  per direction), `4868f94` (this readout), on `origin/main`, pushed.
 - Deployed — Render (backend): Y, confirmed live via `/version`
   (`efd990a`) before Task 5 began; `7b59533`/`6acfca3` are frontend-only,
   no backend redeploy needed.
@@ -273,7 +273,7 @@ root cause, TR v2's structure, telemetry events).
   Task 5 verification ran in a real browser session against
   `previewpanel.vercel.app`, screenshots confirmed for the structural/
   copy requirements.
-- Research repo: pending commit (this readout's own commit, see below).
+- Research repo: `7843935`, pushed.
 
 ## STOP
 
