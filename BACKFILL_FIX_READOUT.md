@@ -143,10 +143,8 @@ production data; no fixture or throwaway `user_id` was involved.
 - No backend/frontend code changed — this is a Mac-side validation
   script only, no deploy needed (consistent with this session's own
   precedent for Python-only fixes).
-- Commit: pending (this readout + the script fix, to be committed
-  together) on `origin/main`.
-- Research repo: pending commit (the §1e correction, alongside this
-  readout).
+- Commit: `35ff01e`, on `origin/main`, pushed.
+- Research repo: `55f42dd`, pushed.
 
 ## STOP
 
