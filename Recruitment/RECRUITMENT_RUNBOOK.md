@@ -164,30 +164,57 @@ rather than starting a new one alongside it.
 ## Reading the send-check verdict
 
 Printed after every render — **advisory only, never blocks the file
-from being written**:
+from being written**. Polish v5 remap: the hero sentence itself now
+sometimes leads with the panel's **calls record** instead of the
+**averages gap** (whichever is the more impressive of the two — see
+"Reading the adaptive hero" below), so the verdict tracks whichever
+signal is actually the stronger one, not the averages gap alone:
 
 ```
-[generate_preview] SEND-CHECK: STRONG (top=1.36x bottom=0.64x gap=+0.71x)
+[generate_preview] SEND-CHECK: MIXED (averages: top=1.24x bottom=1.26x gap=-0.02x (tier 0) | calls: 4 of 6 (tier 2) | max_tier=2) -- hero form: calls
 ```
 
-- **STRONG** (top ≥ bottom + 0.5×): a real, visible contrast between this
-  creator's highest- and lowest-rated work. Safe to send as-is.
-- **WEAK** (top > bottom, but by less than 0.5×): a real but modest
-  contrast. Still an honest document — the numbers are what they are —
-  but worth a second look at whether this creator's own spread just
-  happens to be tight, versus this particular render being close to a
-  wash.
-- **INVERTED (top < bottom): DO NOT SEND without a human look.** The
-  panel's highest-scored picks actually under-performed the lowest-scored
-  ones on this creator's real 30-day numbers. Not necessarily a bug (this
-  is real 30-day WEC data, and reversals happen — see e.g.
-  `thecolorfulpantry --objective "Food & Drinks/Cooking"`, gap=-0.02×, a
-  near-tie two individual misses produced) — but a document making a
-  "we call the direction right" claim while showing a real inversion
-  needs a human to read the actual table before it goes to a prospect,
-  not an automatic pass.
+Both metrics (averages gap AND calls record) and which hero form
+actually rendered are always printed together — never just the verdict.
+
+- **STRONG** (either signal reaches its top impressiveness tier — averages
+  gap ≥ 0.5×, or the panel called 6/6 or 5/6 on a 6-call board / 4/4 on a
+  4-call board): a real, visible contrast or a genuinely strong hit rate.
+  Safe to send as-is.
+- **MIXED** (some positive signal, but neither clears the top tier):
+  **read the doc before sending.** Still an honest document — the numbers
+  are what they are — but worth a second look at which of the two
+  signals is actually carrying the sentence, and whether it holds up.
+- **DO NOT SEND** (both signals are at the bottom tier — averages
+  inverted or flat, AND the calls record is weak): **final, no override.**
+  Not necessarily a bug (this is real 30-day WEC data, and reversals
+  happen — see e.g. `thecolorfulpantry --objective "Food & Drinks/Cooking"`,
+  gap=-0.02× against a genuine calls tier of only 2 — a near-tie two
+  individual misses produced) — but neither signal is strong enough to
+  lead an honest sentence with, so the document needs a human rewrite
+  before it goes to a prospect, not an automatic pass.
 - **N/A** (fewer than 4 Section-A videos with a real result): no contrast
   was computed at all — nothing to check, not a red flag.
+
+## Reading the adaptive hero
+
+Sentence 1 (the opening "We rated every public video…" claim) never
+changes. Sentence 2 picks whichever of two forms is more impressive,
+tiered 0–3 on each (see `generate_preview.py`'s `averages_tier`/
+`calls_tier` for the exact boundaries) — a tie goes to the **averages**
+form (more visceral), except when both are tier 0, which gets a neutral
+line instead of a fabricated boast:
+
+- **Averages form**: `"Your N highest-rated averaged X× your typical
+  engagement. Your N lowest-rated averaged Y×."`
+- **Calls form**: `"We made calls on your N highest- and N lowest-rated —
+  and got C of 2N right."` (bold; green only when C/2N ≥ .67)
+- **Neutral form** (both tiers 0): `"Every call — hit and miss — is in
+  the table below."`
+
+The console SEND-CHECK line always names which form rendered
+(`hero form: averages|calls|neutral|best_bet|pending`) so this never has
+to be guessed from the verdict alone.
 
 ## Output paths
 

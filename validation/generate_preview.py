@@ -314,7 +314,7 @@ def size_section_a_window(videos_most_recent_first, max_rows=SECTION_A_MAX_ROWS)
 
 def _topbottom_k(n):
     """Single source of truth for 'how many rows count as top/bottom at
-    this n', shared by hero_contrast and mark_top_bottom_pills so the
+    this n', shared by topbottom_metrics and mark_top_bottom_pills so the
     hero sentence and the Section-A pills can never disagree about it.
     n>=6 -> 3; n in {4,5} -> 2 (a k=3 read at n=5 would pull the
     middle-ranked row into BOTH groups -- overlapping sets are worse than
@@ -340,23 +340,28 @@ def mark_top_bottom_pills(section_a):
     else ✗ (a top-scored video that under-performed -- a real miss).
     BOTTOM row: ✓ iff result_x<1.0, else ✗. Middle (non-pill) rows get
     neither a pill nor a mark -- their ranking wasn't confident enough to
-    be one of the panel's actual calls."""
+    be one of the panel's actual calls.
+
+    Polish v5, Task 1: the top/bottom split itself now comes from
+    topbottom_metrics -- the SAME computation the adaptive hero sentence
+    and send-check verdict read -- rather than re-sorting/re-selecting
+    independently, so the pills and the hero/verdict can never disagree
+    about which rows are top/bottom or whether a call was right."""
     for v in section_a:
         v["pill_kind"] = None
         v["pill_group"] = None
         v["pill_tick"] = None
 
-    usable = [v for v in section_a if v.get("result_x") is not None]
-    k = _topbottom_k(len(usable))
-    if k is None:
+    metrics = topbottom_metrics(section_a)
+    if metrics is None:
         return section_a
 
-    by_score = sorted(usable, key=lambda v: v["prediction"], reverse=True)
-    for v in by_score[:k]:
+    k = metrics["k"]
+    for v in metrics["top_rows"]:
         v["pill_kind"] = "top"
         v["pill_group"] = f"Top {k}"
         v["pill_tick"] = v["result_x"] >= 1.0
-    for v in by_score[-k:]:
+    for v in metrics["bottom_rows"]:
         v["pill_kind"] = "bottom"
         v["pill_group"] = f"Bottom {k}"
         v["pill_tick"] = v["result_x"] < 1.0
@@ -384,45 +389,145 @@ def score_section_a(videos, pool):
     return videos
 
 
-def hero_contrast(section_a_scored):
-    """Tiered by n (usable = has a real result_x, i.e. a real 30-day
-    result exists) via _topbottom_k -- same tiering mark_top_bottom_pills
-    uses for the Section-A pills. n<4 -> None, caller drops the contrast
-    and leads with the best-bet framing instead. Sets never overlap by
-    construction: 2*k <= n holds at every tier _topbottom_k chooses.
-    Returns {"k": 2|3, "top": mean, "bottom": mean} or None."""
+def topbottom_metrics(section_a_scored):
+    """Polish v5, Task 1 -- single source of truth for the top-N/bottom-N
+    split and everything derived from it, shared by mark_top_bottom_pills
+    (the row pills' kind/tick), the adaptive hero sentence, and the
+    send-check verdict -- none of them can ever disagree about which rows
+    count, whether a call was right, or the resulting averages, because
+    they all read from THIS one computation rather than each re-deriving
+    it independently. Supersedes the old hero_contrast (same tiering via
+    _topbottom_k, same 2*k<=n no-overlap guarantee), extended with the
+    calls-record fields Polish v5's adaptive hero/verdict need.
+
+    n (usable = has a real result_x, i.e. a real 30-day result exists)
+    tiered via _topbottom_k -- same tiering mark_top_bottom_pills uses for
+    the Section-A pills. n<4 -> None, caller drops the contrast and leads
+    with the best-bet framing instead.
+
+    Returns None or a dict:
+      k                        -- 2 or 3, the N in "Top N / Bottom N"
+      top_rows / bottom_rows   -- the actual row dicts (exposed so
+        mark_top_bottom_pills doesn't re-sort/re-select independently)
+      top_avg / bottom_avg     -- mean result_x within each group
+      gap                      -- top_avg - bottom_avg
+      calls_correct            -- rows where the panel's call matched
+        (TOP: result_x>=1.0, BOTTOM: result_x<1.0), out of...
+      calls_total              -- 2*k
+    """
     usable = [v for v in section_a_scored if v.get("result_x") is not None]
     k = _topbottom_k(len(usable))
     if k is None:
         return None
     by_score = sorted(usable, key=lambda v: v["prediction"], reverse=True)
-    top = statistics.mean(v["result_x"] for v in by_score[:k])
-    bottom = statistics.mean(v["result_x"] for v in by_score[-k:])
-    return {"k": k, "top": top, "bottom": bottom}
+    top_rows = by_score[:k]
+    bottom_rows = by_score[-k:]
+    top_avg = statistics.mean(v["result_x"] for v in top_rows)
+    bottom_avg = statistics.mean(v["result_x"] for v in bottom_rows)
+    calls_correct = (sum(1 for v in top_rows if v["result_x"] >= 1.0)
+                     + sum(1 for v in bottom_rows if v["result_x"] < 1.0))
+    return {
+        "k": k, "top_rows": top_rows, "bottom_rows": bottom_rows,
+        "top_avg": top_avg, "bottom_avg": bottom_avg, "gap": top_avg - bottom_avg,
+        "calls_correct": calls_correct, "calls_total": 2 * k,
+    }
 
 
-SEND_CHECK_STRONG_GAP = 0.5
+# Polish v5, Task 2 -- impressiveness tier thresholds. Named constants
+# (rather than inlining 0.5/0.2) so send_check_verdict, averages_tier, and
+# its own tests all reference the identical boundary values.
+AVG_TIER_STRONG_GAP = 0.5
+AVG_TIER_GOOD_GAP = 0.2
+
+
+def averages_tier(gap):
+    """Polish v5, Task 2 -- deterministic impressiveness tier from the
+    top/bottom AVERAGES gap. Each named threshold is its bucket's
+    INCLUSIVE lower bound, so an exact boundary value (0.5, 0.2, or 0.0)
+    always resolves to the higher tier named for that threshold -- never
+    ambiguous. gap<0 (top's average actually below bottom's) -> 0."""
+    if gap >= AVG_TIER_STRONG_GAP:
+        return 3
+    if gap >= AVG_TIER_GOOD_GAP:
+        return 2
+    if gap >= 0.0:
+        return 1
+    return 0
+
+
+def calls_tier(calls_correct, calls_total):
+    """Polish v5, Task 2 -- deterministic impressiveness tier from the
+    top/bottom CALLS record. Two separate scales depending on calls_total
+    (4 when k=2, 6 when k=3 -- the only two values _topbottom_k ever
+    produces, since calls_total == 2*k)."""
+    if calls_total == 6:
+        if calls_correct >= 5:
+            return 3
+        if calls_correct == 4:
+            return 2
+        if calls_correct == 3:
+            return 1
+        return 0
+    if calls_total == 4:
+        if calls_correct == 4:
+            return 3
+        if calls_correct == 3:
+            return 2
+        if calls_correct == 2:
+            return 1
+        return 0
+    # calls_total is always 4 or 6 in practice (2*k, k in {2,3}) -- degrade
+    # to the most conservative tier rather than raising if it somehow isn't.
+    return 0
+
+
+def pick_hero_form(hero, strongest):
+    """Polish v5, Task 3 -- which hero sentence-2 form to render, single
+    source for both render_html's own branch and the console SEND-CHECK
+    log (so what's printed always matches what's actually in the
+    document). Picks the HIGHER impressiveness tier (averages vs calls);
+    a tie goes to averages (more visceral, per spec) EXCEPT when both are
+    tier 0, which gets the dedicated neutral copy instead of averages
+    phrasing -- averages wording would read as a fabricated boast on a
+    genuinely flat/inverted result, and "no boast is fabricated, ever."
+    'best_bet' / 'pending' cover the pre-existing n<4 branches (hero is
+    None) so this stays the single place that decides the rendered form."""
+    if hero is None:
+        return "best_bet" if strongest else "pending"
+    avg_t = averages_tier(hero["gap"])
+    call_t = calls_tier(hero["calls_correct"], hero["calls_total"])
+    if avg_t == 0 and call_t == 0:
+        return "neutral"
+    return "averages" if avg_t >= call_t else "calls"
 
 
 def send_check_verdict(hero):
-    """Polish v3, Task 7 -- advisory only, printed after every render,
-    never blocks it. STRONG: top beats bottom by >=0.5x (a real, visible
-    contrast). WEAK: top beats bottom, but by less than 0.5x (the model's
-    own ranking barely separated these videos' real outcomes). INVERTED:
-    top's average result is actually BELOW bottom's -- the panel's top
-    picks under-performed its bottom picks on THIS creator's real 30-day
-    numbers, worth a human look before this document goes out. N/A when
-    hero is None (n<4, no contrast computed at all)."""
+    """Polish v5, Task 4 -- remap: replaces the old STRONG/WEAK/INVERTED
+    (averages-gap-only) verdict with one that also accounts for the
+    calls-tier, since the hero sentence itself now sometimes leads with
+    calls instead of averages (Task 3) -- the send-check should track
+    whichever signal is actually the stronger one, same as the hero does
+    (max tier), not just the averages gap. STRONG: max tier is 3 (either
+    signal is genuinely impressive). MIXED: max tier is 1 or 2 (some
+    positive signal, but read the doc before sending). DO NOT SEND: both
+    tiers are 0 -- final, no override. N/A when hero is None (n<4, no
+    contrast computed at all)."""
     if hero is None:
         return "N/A", "fewer than 4 Section-A videos with a real result -- no contrast to check"
-    gap = hero["top"] - hero["bottom"]
-    if gap < 0:
-        verdict = "INVERTED"
-    elif gap >= SEND_CHECK_STRONG_GAP:
+    avg_t = averages_tier(hero["gap"])
+    call_t = calls_tier(hero["calls_correct"], hero["calls_total"])
+    max_tier = max(avg_t, call_t)
+    if max_tier == 3:
         verdict = "STRONG"
+    elif max_tier == 0:
+        verdict = "DO NOT SEND"
     else:
-        verdict = "WEAK"
-    return verdict, f"top={hero['top']:.2f}x bottom={hero['bottom']:.2f}x gap={gap:+.2f}x"
+        verdict = "MIXED"
+    detail = (f"averages: top={hero['top_avg']:.2f}x bottom={hero['bottom_avg']:.2f}x "
+              f"gap={hero['gap']:+.2f}x (tier {avg_t}) | "
+              f"calls: {hero['calls_correct']} of {hero['calls_total']} (tier {call_t}) | "
+              f"max_tier={max_tier}")
+    return verdict, detail
 
 
 def bet_card_fields(section_b, mode, objective):
@@ -796,24 +901,50 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     # "since Section A's oldest video," whatever span that really is.
     opening = (f"We rated every public video you've posted since {section_a_start} — "
                f"from content alone, never seeing a single view count.")
-    if hero:
+    # Polish v5, Task 3: sentence 1 (the opening clause above) is unchanged
+    # in every form. Sentence 2 is now adaptive -- pick_hero_form is the
+    # single source deciding which of the 5 forms below renders (also
+    # logged to the console, see main()), so the document and the
+    # send-check log can never describe two different sentences.
+    hero_form = pick_hero_form(hero, strongest)
+    if hero_form == "averages":
         word = {2: "2", 3: "3"}[hero["k"]]
         thesis_h1 = (
             f'{opening} '
-            f'Your <b>{word} highest-rated</b> averaged <b class="up">{hero["top"]:.1f}×</b> your typical engagement. '
-            f'Your <b>{word} lowest-rated</b> averaged <b class="down">{hero["bottom"]:.1f}×</b>.'
+            f'Your <b>{word} highest-rated</b> averaged <b class="up">{hero["top_avg"]:.1f}×</b> your typical engagement. '
+            f'Your <b>{word} lowest-rated</b> averaged <b class="down">{hero["bottom_avg"]:.1f}×</b>.'
         )
-    elif strongest:
+    elif hero_form == "calls":
+        # Calls form: leads with the panel's hit rate instead of the raw
+        # averages -- picked over averages when the CALLS tier outranks
+        # the AVERAGES tier (see pick_hero_form). Bold "C of 2N"; green
+        # only when the hit rate clears 2/3, same bar as an easy pass on a
+        # 6-call board would be a real accomplishment (>=.67), not a bare
+        # majority.
+        word = {2: "2", 3: "3"}[hero["k"]]
+        ratio = hero["calls_correct"] / hero["calls_total"]
+        calls_b = (f'<b class="up">{hero["calls_correct"]} of {hero["calls_total"]}</b>' if ratio >= 0.67
+                   else f'<b>{hero["calls_correct"]} of {hero["calls_total"]}</b>')
+        thesis_h1 = (
+            f'{opening} '
+            f'We made calls on your {word} highest- and {word} lowest-rated — and got {calls_b} right.'
+        )
+    elif hero_form == "neutral":
+        # Neither the averages gap nor the calls record clears even the
+        # lowest impressiveness tier -- no boast is fabricated, ever; the
+        # table itself is the honest account.
+        thesis_h1 = f'{opening} Every call — hit and miss — is in the table below.'
+    elif hero_form == "best_bet":
         # Hero-contrast guard: fewer than 4 Section-A rows with a real
         # result isn't enough spread for an honest top-vs-bottom split
-        # (see hero_contrast's own docstring) -- lead with the best bet
+        # (see pick_hero_form/topbottom_metrics) -- lead with the best bet
         # instead of forcing a noisy contrast.
         thesis_h1 = (
             f'{opening} '
             f'Your strongest bet so far: <b>"{truncate_caption(strongest["caption"])}"</b>, '
             f'<b class="up">{strongest.get("pill") or "—"}</b>.'
         )
-    else:
+    else:  # "pending"
         thesis_h1 = (
             f'{opening} '
             '<b>Day-30 results are still pending</b> on this batch — check back after the day-30 window closes.'
@@ -878,7 +1009,11 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
             f"Predictions, not promises. {precision_caveat}",
         )
 
-    return html
+    # Polish v5, Task 4: hero_form is returned alongside the html (not just
+    # used internally above) so main() can print it next to the send-check
+    # verdict -- "which hero form rendered" always describes what's
+    # actually in THIS document, not a separately-recomputed guess.
+    return html, hero_form
 
 
 # ── Headless print → one-page PDF ───────────────────────────────────────────
@@ -981,7 +1116,7 @@ def main():
     if len(section_a) < SECTION_A_MAX_ROWS:
         print(f"[generate_preview] NOTE: only {len(section_a)}/{SECTION_A_MAX_ROWS} Section-A videos exist "
               f"within this mode's lookback window -- rendering what exists, not padding or erroring.")
-    hero = hero_contrast(section_a)
+    hero = topbottom_metrics(section_a)
     insight = insight_line(section_a + section_b)
     # Polish v3, Tasks 2-3: "Section-A start date" is the single date both
     # the meta line and the dynamic hero sentence hang off of -- the
@@ -990,7 +1125,7 @@ def main():
     section_a_start = fmt_date(min(section_a_dates)) if section_a_dates else "—"
     render_date = fmt_date(datetime.now(timezone.utc))
 
-    html = render_html(
+    html, hero_form = render_html(
         handle=handle, niche_line=niche_line, prepared_date=prepared_date,
         render_date=render_date, section_a_start=section_a_start,
         section_a=section_a, section_b=section_b, hero=hero, insight=insight,
@@ -1005,11 +1140,16 @@ def main():
               f"fit one page at this layout; shipping as-is per the fit rule (row counts and type size are "
               f"fixed by spec, not adjustable to force a 1-page fit).")
 
+    # Polish v5, Task 4: always print BOTH metrics (averages gap + calls
+    # record, both baked into send_check_verdict's `detail`) and which
+    # hero form actually rendered (pick_hero_form, single source with the
+    # sentence above) -- never just the verdict alone.
     verdict, detail = send_check_verdict(hero)
-    print(f"[generate_preview] SEND-CHECK: {verdict} ({detail})")
-    if verdict == "INVERTED":
-        print("[generate_preview]   INVERTED = do not send without a human look -- the panel's top picks "
-              "under-performed its bottom picks on this creator's real numbers.", file=sys.stderr)
+    print(f"[generate_preview] SEND-CHECK: {verdict} ({detail}) -- hero form: {hero_form}")
+    if verdict == "DO NOT SEND":
+        print("[generate_preview]   DO NOT SEND = final -- neither the averages nor the calls signal clears "
+              "even the lowest impressiveness tier; do not send this document without a human rewrite.",
+              file=sys.stderr)
 
     print(f"[generate_preview] wrote {html_path}")
     print(f"[generate_preview] wrote {pdf_path} ({pages} page(s))")

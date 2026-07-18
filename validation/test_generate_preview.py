@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-Polish v2, Task 5 -- unit tests for hero_contrast's tiered guard
+Polish v2, Task 5 -- unit tests for topbottom_metrics's tiered guard
 (n>=6 -> 3-vs-3, n in {4,5} -> 2-vs-2, n<4 -> None), covering n=3,4,5,6,8
 per the prompt's explicit list. No DB/network required -- pure function
 over synthetic rows.
 
 Polish v3, Task 5 -- extended with the same n=3,4,5,6,8 coverage for
 mark_top_bottom_pills (the TOP-N/BOTTOM-N pill + ✓/✗ logic that replaced
-the hairline divider), sharing _topbottom_k with hero_contrast so both
+the hairline divider), sharing _topbottom_k with topbottom_metrics so both
 are exercised against the same tiering rule.
+
+Polish v5, Task 2 -- topbottom_metrics renamed from hero_contrast (same
+tiering, extended with calls_correct/calls_total) when the adaptive hero
+(Task 3) and send-check remap (Task 4) were built. Added averages_tier/
+calls_tier boundary coverage (incl. exact-threshold tie-break) and
+pick_hero_form's tier-selection tie-break (both non-zero -> averages;
+both zero -> neutral, never averages).
 
 Usage: ./_venv/bin/python3 test_generate_preview.py
 """
@@ -16,7 +23,10 @@ import sys
 
 from datetime import datetime, timezone
 
-from generate_preview import hero_contrast, mark_top_bottom_pills, bet_card_fields
+from generate_preview import (
+    topbottom_metrics, mark_top_bottom_pills, bet_card_fields,
+    averages_tier, calls_tier, pick_hero_form, send_check_verdict,
+)
 
 
 def make_rows(n):
@@ -156,20 +166,123 @@ def test_bet_card():
     return failures
 
 
+def _hero(gap, calls_correct, calls_total, k=None):
+    """Synthetic topbottom_metrics()-shaped dict for pick_hero_form/
+    send_check_verdict tests -- avoids depending on real row data when
+    only gap/calls fields matter."""
+    return {"k": k or calls_total // 2, "top_avg": 1.0 + gap, "bottom_avg": 1.0,
+            "gap": gap, "calls_correct": calls_correct, "calls_total": calls_total}
+
+
+def test_impressiveness_tiers():
+    """Polish v5, Task 2 -- averages_tier/calls_tier boundary coverage,
+    explicitly including the exact-threshold values (0.5, 0.2, 0.0 for
+    averages; the calls_total=4-vs-6 scale split) so a tier boundary is
+    never ambiguous. Task 3's pick_hero_form tie-break: equal non-zero
+    tiers -> averages (more visceral); both-zero -> neutral, NEVER
+    averages (no boast is fabricated). Task 4's send_check_verdict remap:
+    STRONG/MIXED/DO NOT SEND/N/A from max(averages_tier, calls_tier)."""
+    failures = []
+
+    # averages_tier: exact boundaries resolve to the HIGHER named tier.
+    avg_cases = [
+        (0.5, 3), (0.51, 3), (10.0, 3),
+        (0.49, 2), (0.2, 2), (0.35, 2),
+        (0.19, 1), (0.0, 1), (0.1, 1),
+        (-0.001, 0), (-1.0, 0),
+    ]
+    for gap, expected in avg_cases:
+        got = averages_tier(gap)
+        if got != expected:
+            failures.append(f"averages_tier({gap}): expected {expected}, got {got}")
+
+    # calls_tier, calls_total=6 (k=3): 6,5->3; 4->2; 3->1; <=2->0.
+    calls6_cases = [(6, 3), (5, 3), (4, 2), (3, 1), (2, 0), (1, 0), (0, 0)]
+    for correct, expected in calls6_cases:
+        got = calls_tier(correct, 6)
+        if got != expected:
+            failures.append(f"calls_tier({correct}, 6): expected {expected}, got {got}")
+
+    # calls_tier, calls_total=4 (k=2): 4->3; 3->2; 2->1; <=1->0.
+    calls4_cases = [(4, 3), (3, 2), (2, 1), (1, 0), (0, 0)]
+    for correct, expected in calls4_cases:
+        got = calls_tier(correct, 4)
+        if got != expected:
+            failures.append(f"calls_tier({correct}, 4): expected {expected}, got {got}")
+
+    # pick_hero_form tie-break, both non-zero and EQUAL -> averages (more
+    # visceral). gap=0.3 -> averages_tier=2; calls 4 of 6 -> calls_tier=2.
+    hero = _hero(gap=0.3, calls_correct=4, calls_total=6)
+    form = pick_hero_form(hero, strongest=None)
+    if form != "averages":
+        failures.append(f"tie-break (2==2): expected 'averages', got {form!r}")
+
+    # pick_hero_form: calls strictly outranks averages -> calls form.
+    # gap=0.05 -> averages_tier=1; calls 4 of 6 -> calls_tier=2.
+    hero = _hero(gap=0.05, calls_correct=4, calls_total=6)
+    form = pick_hero_form(hero, strongest=None)
+    if form != "calls":
+        failures.append(f"calls outranks averages (1 vs 2): expected 'calls', got {form!r}")
+
+    # pick_hero_form: averages strictly outranks calls -> averages form.
+    hero = _hero(gap=0.6, calls_correct=2, calls_total=6)
+    form = pick_hero_form(hero, strongest=None)
+    if form != "averages":
+        failures.append(f"averages outranks calls (3 vs 0): expected 'averages', got {form!r}")
+
+    # pick_hero_form: BOTH tier 0 -> neutral, never averages (no fabricated
+    # boast on a flat/inverted result) even though 0==0 is technically a tie.
+    hero = _hero(gap=-0.1, calls_correct=2, calls_total=6)
+    form = pick_hero_form(hero, strongest=None)
+    if form != "neutral":
+        failures.append(f"both tier 0 (tie): expected 'neutral', got {form!r}")
+
+    # pick_hero_form: hero is None (n<4) -- best_bet when a scored video
+    # exists, pending when nothing does.
+    if pick_hero_form(None, strongest={"caption": "x"}) != "best_bet":
+        failures.append("hero=None with a strongest video: expected 'best_bet'")
+    if pick_hero_form(None, strongest=None) != "pending":
+        failures.append("hero=None with nothing scored: expected 'pending'")
+
+    # send_check_verdict remap: STRONG (max tier 3), MIXED (max tier 1-2),
+    # DO NOT SEND (both tier 0), N/A (hero is None).
+    verdict, _ = send_check_verdict(_hero(gap=0.6, calls_correct=0, calls_total=6))
+    if verdict != "STRONG":
+        failures.append(f"max_tier=3 (via averages): expected STRONG, got {verdict}")
+    verdict, _ = send_check_verdict(_hero(gap=0.0, calls_correct=6, calls_total=6))
+    if verdict != "STRONG":
+        failures.append(f"max_tier=3 (via calls): expected STRONG, got {verdict}")
+    verdict, _ = send_check_verdict(_hero(gap=0.3, calls_correct=2, calls_total=6))
+    if verdict != "MIXED":
+        failures.append(f"max_tier=2 (averages beats calls): expected MIXED, got {verdict}")
+    verdict, _ = send_check_verdict(_hero(gap=-0.1, calls_correct=3, calls_total=6))
+    if verdict != "MIXED":
+        failures.append(f"max_tier=1 (calls beats averages): expected MIXED, got {verdict}")
+    verdict, _ = send_check_verdict(_hero(gap=-0.1, calls_correct=2, calls_total=6))
+    if verdict != "DO NOT SEND":
+        failures.append(f"both tier 0: expected 'DO NOT SEND', got {verdict}")
+    verdict, _ = send_check_verdict(None)
+    if verdict != "N/A":
+        failures.append(f"hero=None: expected 'N/A', got {verdict}")
+
+    return failures
+
+
 def run():
     failures = []
     failures += test_pills()
     failures += test_bet_card()
+    failures += test_impressiveness_tiers()
 
     # n=3: below the n>=4 floor for even a 2-vs-2 split -- must drop entirely.
     rows = make_rows(3)
-    hero = hero_contrast(rows)
+    hero = topbottom_metrics(rows)
     if hero is not None:
         failures.append(f"n=3: expected None (too few for any contrast), got {hero}")
 
     # n=4: exactly enough for 2-vs-2, not enough for 3-vs-3 (would overlap).
     rows = make_rows(4)
-    hero = hero_contrast(rows)
+    hero = topbottom_metrics(rows)
     if hero is None or hero["k"] != 2:
         failures.append(f"n=4: expected k=2, got {hero}")
     elif hero is not None:
@@ -177,7 +290,7 @@ def run():
 
     # n=5: still 2-vs-2 -- a 3-vs-3 read here would double-count the middle row.
     rows = make_rows(5)
-    hero = hero_contrast(rows)
+    hero = topbottom_metrics(rows)
     if hero is None or hero["k"] != 2:
         failures.append(f"n=5: expected k=2, got {hero}")
     elif hero is not None:
@@ -185,7 +298,7 @@ def run():
 
     # n=6: exactly enough for 3-vs-3.
     rows = make_rows(6)
-    hero = hero_contrast(rows)
+    hero = topbottom_metrics(rows)
     if hero is None or hero["k"] != 3:
         failures.append(f"n=6: expected k=3, got {hero}")
     elif hero is not None:
@@ -194,7 +307,7 @@ def run():
     # n=8: the real Section-A target -- still 3-vs-3 (spec never asks for
     # k to grow past 3 regardless of n).
     rows = make_rows(8)
-    hero = hero_contrast(rows)
+    hero = topbottom_metrics(rows)
     if hero is None or hero["k"] != 3:
         failures.append(f"n=8: expected k=3, got {hero}")
     elif hero is not None:
@@ -203,13 +316,21 @@ def run():
     # Value sanity at n=8: top3 = rows ranked 1-3 (result_x 2.0,1.9,1.8 -> mean 1.9),
     # bottom3 = rows ranked 6-8 (result_x 1.5,1.4,1.3 -> mean 1.4).
     rows = make_rows(8)
-    hero = hero_contrast(rows)
-    if hero and (abs(hero["top"] - 1.9) > 1e-9 or abs(hero["bottom"] - 1.4) > 1e-9):
-        failures.append(f"n=8 values: expected top=1.9 bottom=1.4, got {hero}")
+    hero = topbottom_metrics(rows)
+    if hero and (abs(hero["top_avg"] - 1.9) > 1e-9 or abs(hero["bottom_avg"] - 1.4) > 1e-9):
+        failures.append(f"n=8 values: expected top_avg=1.9 bottom_avg=1.4, got {hero}")
+    # calls_correct/calls_total (Polish v5): make_rows' result_x is always
+    # >=1.0 in the top half and (at n=8) some of the bottom half dips below
+    # 1.0 too (1.5,1.4,1.3 -- all still >=1.0), so EVERY top call is a hit
+    # (>=1.0) and every bottom call is a MISS (also >=1.0, so bottom's own
+    # <1.0 check fails) -- calls_correct should be exactly k (top hits only).
+    if hero and (hero["calls_correct"] != hero["k"] or hero["calls_total"] != 2 * hero["k"]):
+        failures.append(f"n=8 calls: expected calls_correct=k={hero['k']} (top-only hits), "
+                         f"calls_total=2k={2 * hero['k']}, got {hero}")
 
     # Rows with no real result (result_x=None) don't count toward n at all.
     rows = make_rows(6) + [{"prediction": 100.0, "result_x": None}] * 3
-    hero = hero_contrast(rows)
+    hero = topbottom_metrics(rows)
     if hero is None or hero["k"] != 3:
         failures.append(f"n=6 usable (+3 unusable): expected k=3, got {hero}")
 
@@ -218,9 +339,11 @@ def run():
         for f in failures:
             print(f"  - {f}")
         sys.exit(1)
-    print("All hero_contrast + mark_top_bottom_pills + bet_card_fields tests passed "
+    print("All topbottom_metrics + mark_top_bottom_pills + bet_card_fields + "
+          "impressiveness-tier/tie-break tests passed "
           "(n=3,4,5,6,8 + no-result-rows case, all 4 tick branches at n=8, "
-          "bet card empty/non-empty branches).")
+          "bet card empty/non-empty branches, averages/calls tier boundaries, "
+          "pick_hero_form tie-break, send_check_verdict remap).")
 
 
 if __name__ == "__main__":
