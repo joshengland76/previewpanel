@@ -219,6 +219,90 @@ function NotificationPrimer({ onAllow, onSkip, timeEstimate }) {
   );
 }
 
+// ── Beta metering, Task 1: invite gate ─────────────────────────
+// Full-screen overlay, same fixed/inset/centered-card pattern as
+// NotificationPrimer above -- blocks interaction with the app underneath
+// without needing to restructure the rest of this component's render tree.
+// Enforced server-side too (checkBetaGate in server.js) -- this screen is
+// the UX front door, not the actual gate.
+function InviteGateScreen({ userId, onBound }) {
+  const [code, setCode] = useState("");
+  const [working, setWorking] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  const submit = async () => {
+    const trimmed = code.trim();
+    if (!trimmed) { setErrorMsg("Enter your invite code."); return; }
+    setWorking(true); setErrorMsg("");
+    try {
+      const res = await fetch(`${API_BASE}/api/invite/redeem`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, code: trimmed }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.ok) {
+        setErrorMsg(body.error || "That code didn't work — double-check it and try again.");
+        setWorking(false);
+        return;
+      }
+      onBound();
+    } catch {
+      setErrorMsg("Couldn't reach the server — check your connection and try again.");
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: B.bg,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      zIndex: 200, padding: "20px",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: "18px", padding: "32px 26px",
+        maxWidth: "380px", width: "100%", textAlign: "center",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.12)", border: `1px solid ${B.border}`,
+        animation: "pp-slide 0.25s ease",
+      }}>
+        <img src="/owl-logo.png?v=3" alt="PreviewPanel"
+          style={{ height: "64px", width: "auto", margin: "0 auto 18px", display: "block" }} />
+        <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
+          You're invited to the private beta
+        </div>
+        <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
+          PreviewPanel is free while we're testing it — your invite code gets
+          you in. It'll be a paid product at launch; testers get founding
+          terms for helping us get there.
+        </div>
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          placeholder="Invite code"
+          disabled={working}
+          style={{
+            width: "100%", height: "48px", borderRadius: "10px",
+            border: `1.5px solid ${B.border}`, padding: "0 14px",
+            fontSize: "16px", fontFamily: "inherit", marginBottom: "12px",
+            textAlign: "center", color: B.black,
+          }}
+        />
+        {errorMsg && (
+          <div style={{ fontSize: "12.5px", color: "#C0392B", marginBottom: "12px" }}>{errorMsg}</div>
+        )}
+        <button onClick={submit} disabled={working} style={{
+          width: "100%", height: "50px", background: B.action, border: "none",
+          borderRadius: "10px", color: "#fff", fontSize: "15px", fontWeight: "800",
+          cursor: working ? "default" : "pointer", fontFamily: "Montserrat, sans-serif",
+          opacity: working ? 0.7 : 1,
+        }}>
+          {working ? "Checking…" : "Enter beta"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Issue #9: History panel ───────────────────────────────────
 function HistoryPanel({ history, onRestore, onClose }) {
   if (!history.length) return (
@@ -374,6 +458,11 @@ export default function PreviewPanel() {
   const [userId] = useState(getOrCreateUserId); // Phase C, Task 1 -- generated once, stable for component lifetime
   const [showAccountSettings, setShowAccountSettings] = useState(false);
   const [tiktokConnected, setTiktokConnected] = useState(null); // Sweep D -- null = not yet checked
+  // Beta metering, Task 1 -- null = not yet checked (blocks render behind a
+  // blank cover so an unbound user never sees a flash of the real UI before
+  // the gate screen appears). {bound:false} or {bound:true, code, used,
+  // allowance} once resolved.
+  const [inviteStatus, setInviteStatus] = useState(null);
   const [tiktokNudgeDismissed, setTiktokNudgeDismissed] = useState(false);
   const [platform, setPlatform] = useState("youtube");
   const [videoFile, setVideoFile] = useState(null);
@@ -504,6 +593,21 @@ export default function PreviewPanel() {
     }
   };
   useEffect(() => { refreshTiktokConnected(); }, [userId]);
+
+  // Beta metering, Task 1 -- one round-trip on load resolves both whether
+  // to show the gate screen (bound) and the allowance counter (used/
+  // allowance). Re-run after a successful redemption (InviteGateScreen's
+  // onBound) to pick up the fresh binding immediately.
+  const refreshInviteStatus = async () => {
+    if (!userId) { setInviteStatus({ bound: false }); return; }
+    try {
+      const res = await fetch(`${API_BASE}/api/invite/status?userId=${encodeURIComponent(userId)}`);
+      setInviteStatus(res.ok ? await res.json() : { bound: false });
+    } catch {
+      setInviteStatus({ bound: false });
+    }
+  };
+  useEffect(() => { refreshInviteStatus(); }, [userId]);
 
   // Re-check after the connect modal closes -- catches a handle the user
   // just added, so an already-shown nudge won't outlive a real connection.
@@ -885,6 +989,7 @@ export default function PreviewPanel() {
         setUploadProgressIndeterminate(false);
         setJobStatus("uploading");
         setJobId(data.jobId);
+        refreshInviteStatus(); // server already recorded the beta submission event -- reflect the new count
       } catch (err) {
         setJobStatus("error");
         setStatusMessage(`Failed: ${err.message}`);
@@ -947,6 +1052,7 @@ export default function PreviewPanel() {
       setUploadProgressIndeterminate(false);
       setJobStatus("uploading");
       setJobId(data.jobId);
+      refreshInviteStatus(); // server already recorded the beta submission event -- reflect the new count
     } catch (err) {
       setStep(1);
       setJobStatus(null);
@@ -1072,6 +1178,17 @@ export default function PreviewPanel() {
         }
       `}</style>
 
+      {/* Beta metering, Task 1 -- invite gate. A blank cover while the
+          status check is in flight (inviteStatus === null) prevents a
+          flash of the real UI before an unbound user sees the gate;
+          resolves to either nothing (bound) or the gate screen. */}
+      {inviteStatus === null && (
+        <div style={{ position: "fixed", inset: 0, background: B.bg, zIndex: 200 }} />
+      )}
+      {inviteStatus && !inviteStatus.bound && (
+        <InviteGateScreen userId={userId} onBound={refreshInviteStatus} />
+      )}
+
       {/* Issue #4: Notification primer modal */}
       {showNotifPrimer && (
         <NotificationPrimer
@@ -1128,6 +1245,11 @@ export default function PreviewPanel() {
                 <AccountSettingsTrigger userId={userId} open={showAccountSettings} onOpenChange={handleAccountSettingsOpenChange} />
               </div>
             </div>
+            {inviteStatus?.bound && inviteStatus.allowance != null && (
+              <div style={{ textAlign: "center", fontSize: "11px", color: B.grey, marginTop: "9px" }}>
+                Beta allowance: {Math.max(0, inviteStatus.allowance - inviteStatus.used)} of {inviteStatus.allowance} left this month
+              </div>
+            )}
 
             {/* History panel */}
             {showHistory && (
@@ -1512,6 +1634,11 @@ export default function PreviewPanel() {
                 }}>← New Video</button>
               )}
             </div>
+            {inviteStatus?.bound && inviteStatus.allowance != null && (
+              <div style={{ textAlign: "center", fontSize: "11px", color: B.grey, marginTop: "9px" }}>
+                Beta allowance: {Math.max(0, inviteStatus.allowance - inviteStatus.used)} of {inviteStatus.allowance} left this month
+              </div>
+            )}
 
             {/* Upload progress bar — shown while XHR is in flight (before jobId received) */}
             {isProcessing && !jobId && jobStatus === "uploading" && (

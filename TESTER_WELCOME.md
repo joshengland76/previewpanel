@@ -5,6 +5,10 @@
 
 Thanks for helping test this out.
 
+**Your invite code.** [INVITE CODE] — enter this the first time you open
+PreviewPanel. It's tied to you; if you clear your browser or switch
+devices, just enter the same code again to get back in.
+
 **What it does.** Upload a video before you post it, and a panel of AI
 judges scores it — hook strength, pacing, how it's likely to land — and
 gives you a percentile: how it compares to your own typical video, and to
@@ -37,6 +41,13 @@ length, that's a described pattern in the data, not an instruction to make
 your videos longer or shorter. Some content categories don't have enough
 reliable data yet to score numerically; for those we'll say so plainly
 instead of making up a number.
+
+**Cost, and what happens later.** Free for the whole beta — no card,
+no charge. Each tester gets a monthly allowance of submissions, shown
+right in the app ("Beta allowance: X of Y left this month"); if you run
+out, we'll say so and point you to the feedback channel below rather
+than leave you guessing. PreviewPanel will be a paid product at launch —
+testers get founding terms for helping us get here.
 
 **Feedback.** Anything confusing, broken, or just wrong — tell us.
 [feedback channel — Josh to fill in: email / DM / form link]

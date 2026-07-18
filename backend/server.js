@@ -450,6 +450,101 @@ async function queryRW(sql, params = []) {
   }
 }
 
+// ── Beta metering layer ───────────────────────────────────────────────────
+// Invite gate + rolling-30-day allowance + daily circuit breaker.
+//
+// CRITICAL CONSTRAINT: checkBetaGate/recordBetaSubmissionEvent are called
+// ONLY from /api/analyze and /api/fetch-video -- the app's own two real
+// end-user submission entry points. research_api (/api/research/submit,
+// /api/research/submit-eval), /api/validation/ingest, and the prospect
+// worker flow (which POSTs to /api/validation/ingest too) NEVER call
+// either function -- verified by grep, not just by construction (see
+// BETA_METERING_READOUT.md Task 6). beta_submission_events is a DEDICATED
+// counter table, not derived from the shared `submissions` table -- that
+// table also carries validation-sourced rows for REAL connected users
+// (worker.py's daily scan submits with their own real user_id), which must
+// never count against that same user's beta allowance. Only a row THIS
+// file itself writes, at THESE two call sites, can ever land here.
+const BETA_ALLOWANCE = parseInt(process.env.BETA_ALLOWANCE, 10) || 15;
+const DAILY_SUBMISSION_CAP = parseInt(process.env.DAILY_SUBMISSION_CAP, 10) || 100;
+
+/**
+ * checkBetaGate(userId) -> { ok: true, used, allowance } | { ok: false, statusCode, body }
+ * Callers must check `.ok` and, if false, respond with
+ * res.status(result.statusCode).json(result.body) and clean up any
+ * uploaded temp file before returning -- this function has no knowledge
+ * of the request/response objects or multer's file, by design (kept a
+ * pure DB-in, decision-out function, same shape as this file's other
+ * shared checks like checkLinkFetchRateLimit).
+ */
+async function checkBetaGate(userId) {
+  // Fail OPEN (not closed) if the DB is down -- matches this file's own
+  // established !pgPool fallback convention elsewhere (e.g. the
+  // link-fetch/validation-ingest handlers' own `if (!pgPool)` branches);
+  // a beta metering layer must never be the reason a working DB-outage
+  // fallback path stops accepting real submissions.
+  if (!pgPool) return { ok: true, used: 0, allowance: BETA_ALLOWANCE };
+
+  // 1. Invite gate -- enforced here at the API, not just the UI (a request
+  // that never touched the frontend's own code screen still hits this).
+  if (!userId) {
+    return {
+      ok: false, statusCode: 403,
+      body: { error: "This beta requires an invite code.", reason: "no_invite" },
+    };
+  }
+  const { rows: boundRows } = await pgPool.query(`SELECT 1 FROM redemptions WHERE user_id = $1`, [userId]);
+  if (boundRows.length === 0) {
+    return {
+      ok: false, statusCode: 403,
+      body: { error: "This beta requires an invite code.", reason: "no_invite" },
+    };
+  }
+
+  // 2. Circuit breaker -- global daily cap, checked before the per-user
+  // allowance so a system-wide pause reads as "we're at capacity," not a
+  // personal limit. UTC calendar day, matching this project's other
+  // daily-boundary conventions (the 5 AM window rule etc.).
+  const { rows: dailyRows } = await pgPool.query(
+    `SELECT COUNT(*) AS n FROM beta_submission_events WHERE created_at >= date_trunc('day', now())`
+  );
+  const dailyCount = parseInt(dailyRows[0].n, 10);
+  if (dailyCount >= DAILY_SUBMISSION_CAP) {
+    console.error(`[beta-gate] CIRCUIT BREAKER TRIPPED -- ${dailyCount}/${DAILY_SUBMISSION_CAP} submissions today`);
+    return {
+      ok: false, statusCode: 503,
+      body: { error: "We're at capacity today — please try again tomorrow.", reason: "daily_cap" },
+    };
+  }
+
+  // 3. Per-user rolling-30-day allowance.
+  const { rows: allowRows } = await pgPool.query(
+    `SELECT COUNT(*) AS n FROM beta_submission_events WHERE user_id = $1 AND created_at > now() - interval '30 days'`,
+    [userId]
+  );
+  const usedCount = parseInt(allowRows[0].n, 10);
+  if (usedCount >= BETA_ALLOWANCE) {
+    return {
+      ok: false, statusCode: 403,
+      body: {
+        error: "You've used your beta allowance for this month — if you'd like more, let us know in the feedback channel.",
+        reason: "allowance_reached", used: usedCount, allowance: BETA_ALLOWANCE,
+      },
+    };
+  }
+
+  return { ok: true, used: usedCount, allowance: BETA_ALLOWANCE };
+}
+
+async function recordBetaSubmissionEvent(userId) {
+  if (!pgPool) return;
+  try {
+    await queryRW(`INSERT INTO beta_submission_events (user_id) VALUES ($1)`, [userId]);
+  } catch (err) {
+    console.error(`[beta-gate] failed to record submission event for user_id=${userId}: ${err.message}`);
+  }
+}
+
 // Neon's serverless compute can present a transient read-only window right
 // after scaling/resuming from idle (observed 2026-07-04: same host, same
 // connection string, "cannot execute CREATE TABLE in a read-only transaction"
@@ -826,6 +921,50 @@ async function initDb() {
       )
     `);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_push_subscriptions_job_id ON push_subscriptions(job_id)`);
+
+    // Beta metering layer -- invite gate + allowance + circuit breaker.
+    // CRITICAL: research_api, /api/validation/ingest, and the prospect worker
+    // flow (source='research_api'|'validation'|'prospect_report') must stay
+    // COMPLETELY exempt -- see checkBetaGate/recordBetaSubmissionEvent below,
+    // called ONLY from /api/analyze and /api/fetch-video. redemptions.user_id
+    // is the PK (one code binding per user_id, ever) -- clearing browser
+    // storage mints a new client-side user_id (identity-lite, Phase C Task 1)
+    // with no existing row here, so recovery is simply re-entering the same
+    // code, which inserts a NEW redemption row for the new user_id (consuming
+    // another slot against that code's max_redemptions -- by design, not a
+    // bug: a lost/reset device is expected to cost one of the code's limited
+    // redemptions, same as handing the code to a second person would).
+    // beta_submission_events is a DEDICATED counter table, written to ONLY at
+    // the two real end-user submission entry points -- deliberately NOT
+    // derived from the shared `submissions` table, which also carries
+    // validation-sourced rows for REAL connected users (worker.py's daily
+    // scan submits with their own real user_id) that must never count against
+    // that same user's beta allowance.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS invite_codes (
+        code             TEXT PRIMARY KEY,
+        label            TEXT,
+        max_redemptions  INTEGER NOT NULL DEFAULT 3,
+        created_at       TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS redemptions (
+        user_id     TEXT PRIMARY KEY,
+        code        TEXT NOT NULL REFERENCES invite_codes(code),
+        redeemed_at TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_redemptions_code ON redemptions(code)`);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS beta_submission_events (
+        id         BIGSERIAL PRIMARY KEY,
+        user_id    TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_beta_events_user_id ON beta_submission_events(user_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_beta_events_created_at ON beta_submission_events(created_at)`);
 
     // Capstone v2 shadow-scoring (Phase B2, Task 4) — invisible, flags-gated
     // (SHADOW_SCORING/EXTRACT_CDIMS, both default off). Created unconditionally
@@ -3264,6 +3403,81 @@ app.get("/api/user/:userId", async (req, res) => {
   }
 });
 
+// ── Beta invite gate (public, unauthenticated -- same trust model as
+// /api/user/connect: the client's own persistent user_id is the only
+// identity here, there is no login/session system). ───────────────────────
+// GET /api/invite/status?userId=X -- one round-trip for the client to learn
+// BOTH whether to show the code screen (bound) and the allowance counter
+// (used/allowance), on every app load.
+app.get("/api/invite/status", async (req, res) => {
+  const userId = (req.query.userId || "").toString().trim();
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  if (!userId) return res.json({ bound: false });
+  try {
+    const { rows } = await pgPool.query(`SELECT code FROM redemptions WHERE user_id = $1`, [userId]);
+    if (!rows[0]) return res.json({ bound: false });
+    const { rows: usageRows } = await pgPool.query(
+      `SELECT COUNT(*) AS n FROM beta_submission_events WHERE user_id = $1 AND created_at > now() - interval '30 days'`,
+      [userId]
+    );
+    res.json({
+      bound: true,
+      code: rows[0].code,
+      used: parseInt(usageRows[0].n, 10),
+      allowance: BETA_ALLOWANCE,
+    });
+  } catch (err) {
+    console.error(`[invite] status check failed for user_id=${userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to check invite status" });
+  }
+});
+
+// POST /api/invite/redeem { userId, code } -- binds user_id<->code
+// server-side. Idempotent for an already-bound user_id (returns their
+// EXISTING binding regardless of what code was submitted this time --
+// per spec, "bound users skip the screen," so a redeem call from an
+// already-bound client is treated as a stale retry, not an error).
+// redemptions.user_id is the PK, so a genuinely new user_id (cleared
+// storage, per Phase C Task 1's identity-lite) always inserts a fresh row
+// -- "cleared-storage recovery = re-enter the same code" consumes another
+// redemption against that code's max_redemptions, by design.
+app.post("/api/invite/redeem", async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  const userId = (req.body.userId || "").toString().trim();
+  const code = (req.body.code || "").toString().trim();
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+  if (!code) return res.status(400).json({ error: "Enter an invite code." });
+  try {
+    const { rows: existing } = await pgPool.query(`SELECT code FROM redemptions WHERE user_id = $1`, [userId]);
+    if (existing[0]) {
+      return res.json({ ok: true, code: existing[0].code, alreadyBound: true });
+    }
+
+    const { rows: codeRows } = await pgPool.query(
+      `SELECT max_redemptions FROM invite_codes WHERE code = $1`, [code]
+    );
+    if (!codeRows[0]) {
+      return res.status(400).json({ error: "That invite code isn't valid." });
+    }
+    const { rows: countRows } = await pgPool.query(
+      `SELECT COUNT(*) AS n FROM redemptions WHERE code = $1`, [code]
+    );
+    if (parseInt(countRows[0].n, 10) >= codeRows[0].max_redemptions) {
+      return res.status(400).json({ error: "This invite code has reached its redemption limit." });
+    }
+
+    await queryRW(
+      `INSERT INTO redemptions (user_id, code) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING`,
+      [userId, code]
+    );
+    console.log(`[invite] redeemed code=${code} user_id=${userId}`);
+    res.json({ ok: true, code, alreadyBound: false });
+  } catch (err) {
+    console.error(`[invite] redeem failed for user_id=${userId} code=${code}: ${err.message}`);
+    res.status(500).json({ error: "Failed to redeem code" });
+  }
+});
+
 // Paste-a-link submissions (radar/links prompt, Part B). Feasibility
 // confirmed live from Render's own environment first (B0 -- see
 // RADAR_LINKS_READOUT.md): yt-dlp fetched all 3 test TikTok URLs cleanly;
@@ -3387,6 +3601,11 @@ app.post("/api/fetch-video", async (req, res) => {
     return res.status(429).json({ error: "You've hit the link-fetch limit for now (10 per hour) — try again later, or upload the file directly." });
   }
 
+  // Beta metering layer -- checked before the metadata probe/download so a
+  // gated-out request never spends any yt-dlp time/bandwidth at all.
+  const gate = await checkBetaGate(userId);
+  if (!gate.ok) return res.status(gate.statusCode).json(gate.body);
+
   const selectedJudgeIds = judgesParam ? JSON.parse(judgesParam) : ["critic", "cool", "connector"];
   const selectedJudges = JUDGES.filter((j) => selectedJudgeIds.includes(j.id));
 
@@ -3474,6 +3693,7 @@ app.post("/api/fetch-video", async (req, res) => {
   };
 
   console.log(`[${jobId}] Link-fetch job created — platform=${platform} url=${parsed.href} queue position: ${queuePosition}`);
+  await recordBetaSubmissionEvent(userId); // counts toward the rolling-30-day allowance + daily cap
   res.json({ jobId, queuePosition });
 
   // Same preprocess -> enqueue -> runPipeline sequence /api/analyze uses for
@@ -3521,6 +3741,15 @@ app.post("/api/analyze", (req, res, next) => {
       return res.status(400).json({ error: "Provide a videoUrl or upload a file" });
     }
 
+    // Beta metering layer -- checked before any preprocessing/job creation.
+    // Multer has already written the uploaded file to disk by this point
+    // (it runs ahead of this handler), so a rejection here must clean it up.
+    const gate = await checkBetaGate(userId);
+    if (!gate.ok) {
+      if (filePath) fs.unlink(filePath, () => {});
+      return res.status(gate.statusCode).json(gate.body);
+    }
+
     const selectedJudgeIds = judgesParam
       ? JSON.parse(judgesParam)
       : ["critic", "cool", "connector"];
@@ -3553,6 +3782,7 @@ app.post("/api/analyze", (req, res, next) => {
     };
 
     console.log(`[${jobId}] Job created — queue position: ${queuePosition}, browser_upload_ms: ${req.browserUploadMs ?? "null"} — sending jobId to client`);
+    await recordBetaSubmissionEvent(userId); // counts toward the rolling-30-day allowance + daily cap
     res.json({ jobId, queuePosition });
 
     // ── Preprocess file outside the queue ─────────────────────────────────────
