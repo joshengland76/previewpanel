@@ -464,6 +464,25 @@ def select_prospect_videos(videos, max_aged, max_fresh):
     return aged[:max_aged], fresh[:max_fresh]
 
 
+def supersede_prior_draws(db, posted_video_id):
+    """--force-redraw: once the fresh draw's shadow_scores row has landed,
+    retire every PRIOR shadow_scores row for this posted_video
+    (pool_eligible=false), keeping only the most recent one eligible. This
+    keeps the percentile pool counting the video once (fetch_live_pool_rows
+    filters pool_eligible) and lets the render show the fresh draw
+    (generate_preview's prospect_rows picks the latest row per video). The
+    posted_videos row itself is upserted in place by the ingest, so its
+    y_pred already reflects the new draw and the frozen day-30 outcome is
+    preserved."""
+    db.query(
+        """UPDATE shadow_scores SET pool_eligible = false
+           WHERE posted_video_id = %s
+             AND id <> (SELECT id FROM shadow_scores WHERE posted_video_id = %s
+                        ORDER BY created_at DESC, id DESC LIMIT 1)""",
+        (posted_video_id, posted_video_id), commit=True,
+    )
+
+
 def capture_day30_equivalent(db, posted_video_id, handle, tiktok_video_id, age_days):
     """Phase5c license: an already-30-100-day-old video's CURRENT public
     counters are a valid day-30 equivalent, no need to wait a real 30 days.
@@ -552,8 +571,10 @@ def run_prospect_mode(args):
     db = DB()
 
     objective = args.objective  # validated-config ingest (None -> objective-blind judges)
+    force_redraw = args.force_redraw
     cfg = f"objective='{objective}'" if objective else "null-config (objective-blind)"
-    print(f"[worker] prospect mode: @{handle} (max_aged={max_aged}, max_fresh={max_fresh}) -- {cfg}")
+    redraw_note = " -- FORCE-REDRAW (re-scoring already-ingested videos as fresh draws)" if force_redraw else ""
+    print(f"[worker] prospect mode: @{handle} (max_aged={max_aged}, max_fresh={max_fresh}) -- {cfg}{redraw_note}")
     videos = list_recent_videos(handle, playlist_end=PROSPECT_YTDLP_PLAYLIST_END)
     aged, fresh = select_prospect_videos(videos, max_aged, max_fresh)
     print(f"[worker] found {len(aged)} aged (30-100d) + {len(fresh)} fresh (<30d) candidate video(s)")
@@ -572,9 +593,13 @@ def run_prospect_mode(args):
             # same idle-close risk), so it goes through db.query() too.
             existing = db.query("SELECT id, status FROM posted_videos WHERE tiktok_video_id = %s",
                                  (tiktok_video_id,), fetch="one")
-            if existing:
+            if existing and not force_redraw:
                 print(f"[worker] prospect {tiktok_video_id}: already ingested (status={existing[1]}) -- skipping")
                 continue
+            redraw = bool(existing)  # only reachable with --force-redraw (idempotent skip above otherwise)
+            if redraw:
+                print(f"[worker] prospect {tiktok_video_id}: --force-redraw -- re-scoring as a fresh draw "
+                      f"(prior draw will be superseded)")
 
             local_path = DOWNLOAD_DIR / f"{tiktok_video_id}.mp4"
             if not download_video(v["url"], local_path):
@@ -598,15 +623,22 @@ def run_prospect_mode(args):
                 continue
             scored_count += 1
 
-            if bucket_name == "aged":
-                # Hotfix v2, Task 1 -- THIS is the direct analogue of
-                # generate_preview.py's confirmed crash site: a DB read
-                # immediately after process_one_video's multi-minute
-                # download+judge+ingest cycle above.
-                row = db.query("SELECT id FROM posted_videos WHERE tiktok_video_id = %s",
-                                (tiktok_video_id,), fetch="one")
-                if row:
-                    capture_day30_equivalent(db, row[0], handle, tiktok_video_id, v["age_days"])
+            # Hotfix v2, Task 1 -- THIS is the direct analogue of
+            # generate_preview.py's confirmed crash site: a DB read
+            # immediately after process_one_video's multi-minute
+            # download+judge+ingest cycle above.
+            row = db.query("SELECT id FROM posted_videos WHERE tiktok_video_id = %s",
+                            (tiktok_video_id,), fetch="one")
+            if redraw and row:
+                # Retire the prior draw(s) so the pool counts this video once
+                # and the render shows the fresh one.
+                supersede_prior_draws(db, row[0])
+
+            if bucket_name == "aged" and not redraw and row:
+                # NEW aged video -> capture its day-30 equivalent now. A
+                # --force-redraw re-scores the PREDICTION only and preserves
+                # the already-captured (frozen) outcome, so it skips this.
+                capture_day30_equivalent(db, row[0], handle, tiktok_video_id, v["age_days"])
 
             time.sleep(INTER_VIDEO_DELAY_S)
 
@@ -636,7 +668,15 @@ def main():
                          help="--prospect: score under this canonical objective (validated config -- seeds the "
                               "judges' category lens + objective_fit, matching the app and the corpus). Omit for "
                               "the objective-blind null config. Must be one of the 19 canonical objectives.")
+    parser.add_argument("--force-redraw", action="store_true",
+                         help="--prospect: re-score this handle's ALREADY-ingested videos as fresh draws (new "
+                              "shadow_scores rows; each prior draw retired via pool_eligible=false and superseded). "
+                              "Use ONLY when a send-check looks like a rare outlier draw -- costs ~$1.50 for a full "
+                              "handle. Without it, prospect mode skips already-ingested videos (idempotent).")
     args = parser.parse_args()
+
+    if args.force_redraw and not args.prospect:
+        parser.error("--force-redraw is only valid with --prospect")
 
     if args.objective:
         if not args.prospect:

@@ -1028,13 +1028,20 @@ def study_section_b(db, creator_id, handle, mode, objective, reuse_within_hours=
 # ── --prospect data source (Task 1's own rows) ──────────────────────────────
 def prospect_rows(db, handle, aged):
     status_clause = "pv.is_day30_equiv IS TRUE" if aged else "pv.is_day30_equiv IS NOT TRUE"
+    # DISTINCT ON (pv.id) with a created_at DESC tiebreak picks the LATEST
+    # shadow_scores row per video. Normally each prospect video has exactly
+    # one row (this is a no-op); after `worker.py --prospect --force-redraw`
+    # a video has a fresh draw plus retired prior draw(s), and this makes the
+    # render show the fresh one without duplicating the video. Re-sorted by
+    # posted_at DESC below (DISTINCT ON forces the pv.id ordering here).
     rows = db.query(f"""
-        SELECT pv.posted_at, pv.caption, pv.day30_wec_rate AS wec_rate,
+        SELECT DISTINCT ON (pv.id)
+               pv.id, pv.posted_at, pv.caption, pv.day30_wec_rate AS wec_rate,
                s.prediction, s.input_features
         FROM posted_videos pv
         JOIN shadow_scores s ON s.posted_video_id = pv.id
         WHERE lower(pv.handle) = lower(%s) AND pv.source = 'prospect_report' AND {status_clause}
-        ORDER BY pv.posted_at DESC
+        ORDER BY pv.id, s.created_at DESC, s.id DESC
     """, (handle,), fetch="all", cursor_factory=psycopg2.extras.RealDictCursor)
     out = [
         {"posted_at": r["posted_at"], "caption": r["caption"] or "(no caption)",
@@ -1042,6 +1049,7 @@ def prospect_rows(db, handle, aged):
          "axis_scores": axis_scores_from_input_features(r["input_features"])}
         for r in rows
     ]
+    out.sort(key=lambda r: (r["posted_at"] is not None, r["posted_at"]), reverse=True)
     return out
 
 
@@ -1053,12 +1061,18 @@ def prospect_scoring_config(db, handle):
     matching the app + corpus). Raises SystemExit if the rows MIX configs,
     because their ŷ values are then not comparable (the objective-blind null
     path scores structurally higher -- OBJECTIVE_CONDITIONING_DIAGNOSTIC.md).
-    'One creator, one config' is the invariant a render depends on."""
+    'One creator, one config' is the invariant a render depends on.
+
+    Only LIVE draws count (s.pool_eligible) -- a `--force-redraw` retires the
+    prior draw(s) to pool_eligible=false, so a redraw that also switches
+    objective is a clean config switch, not a spurious 'mixed configs'
+    refusal against the superseded rows."""
     rows = db.query("""
         SELECT DISTINCT s.objective
         FROM posted_videos pv
         JOIN shadow_scores s ON s.posted_video_id = pv.id
         WHERE lower(pv.handle) = lower(%s) AND pv.source = 'prospect_report'
+          AND s.pool_eligible
     """, (handle,), fetch="all")
     configs = {r[0] for r in rows}  # each is None or an objective string
     if len(configs) > 1:

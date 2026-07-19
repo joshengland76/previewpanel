@@ -98,6 +98,30 @@ ingest) costs money, and it's idempotent on `tiktok_video_id` (a second
 `worker.py --prospect` run on the same handle skips videos it already
 has).
 
+**`--force-redraw` — re-score after a suspected outlier draw (~$1.50).**
+The noise study (`POST_DIAGNOSTIC_READOUT.md`) put typical run-to-run ŷ SD
+at ~0.025–0.03, but **rare outlier draws happen** (the diagnostic caught
+one). If a handle's send-check looks off in a way that reads as a bad
+draw — a video scoring far from where its content suggests, a verdict
+that flipped implausibly — re-score the whole handle as **fresh draws**:
+
+```bash
+./_venv/bin/python3 worker.py --prospect somehandle --force-redraw   # add --objective if that's the config
+```
+
+This bypasses the idempotent skip, re-scores every already-ingested video
+(new `shadow_scores` rows), and **retires each prior draw**
+(`pool_eligible=false`) so the pool counts the video once and the render
+shows the fresh draw. The `posted_videos` row is updated in place (fresh
+`y_pred`; the frozen day-30 outcome is preserved — a redraw re-draws the
+prediction, not the result). Cost ~$1.50 for a full handle
+(~$0.10/video). **Use sparingly and deliberately** — this is for a
+genuine suspected-outlier case, not a reflex; a single draw is normally
+representative, and re-drawing until you like the number is
+p-hacking your own preview. Match the config: pass `--objective` (or omit
+it) the same way the handle was originally ingested, or the redraw's rows
+will mix configs and the render will refuse.
+
 **Step 3 — after ingest + preview send, mint the tester's invite code.**
 A pre-linked code (`--handle`) auto-connects their account and claims the
 `posted_videos`/`shadow_scores` rows Step 1 just wrote the moment they
