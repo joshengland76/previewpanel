@@ -456,7 +456,13 @@ function HistoryPanel({ history, onRestore, onClose, hasTrackRecord, onSwitchToT
 const TRACK_RECORD_LAST_SEEN_KEY = "pp_track_record_last_seen";
 
 function trFormatDate(iso) {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  // Date basis (post-diagnostic, T5): render the UTC-derived calendar date,
+  // as-is, on ONE declared basis -- matching the Performance Preview PDF and
+  // the docs. NOT the viewer's local zone (timeZone omitted would make each
+  // device show a different day, and a late-evening US post would read a day
+  // earlier than its UTC date). The stored posted_at is the video's real UTC
+  // instant; we show its UTC date consistently everywhere.
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 // Track Record v2, Task 3c -- the app's standing ORDINAL vocabulary
@@ -811,6 +817,17 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 // (showWelcomeModal) at its call site for why that's a real robustness
 // improvement over the banner it replaces.
 function TrackRecordWelcomeModal({ scoredCount, gradedCount, onSeeTrackRecord, onDismiss }) {
+  // Welcome copy v2 (post-diagnostic, T6). Two EQUAL-WEIGHT choice cards
+  // (identical styling -- neither is a subordinate "secondary" button), each
+  // with a bold title + a muted subline. gradedCount is no longer surfaced in
+  // the body copy (kept as a prop for call-site compatibility).
+  const choiceCard = {
+    width: "100%", background: B.bg, border: `1.5px solid ${B.border}`,
+    borderRadius: "12px", padding: "13px 16px", textAlign: "left",
+    cursor: "pointer", fontFamily: "Montserrat, sans-serif", display: "block",
+  };
+  const choiceTitle = { fontSize: "15px", fontWeight: "800", color: B.black, marginBottom: "3px" };
+  const choiceSub = { fontSize: "12px", color: "#777", lineHeight: "1.45" };
   return (
     <div style={{
       position: "fixed", inset: 0, background: B.bg, zIndex: 150,
@@ -824,26 +841,25 @@ function TrackRecordWelcomeModal({ scoredCount, gradedCount, onSeeTrackRecord, o
       }}>
         <img src="/owl-logo.png?v=3" alt="PreviewPanel"
           style={{ height: "64px", width: "auto", margin: "0 auto 18px", display: "block" }} />
-        <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
-          Your track record is ready
+        <div style={{ fontWeight: "800", fontSize: "19px", color: B.black, marginBottom: "10px" }}>
+          We've been keeping score.
         </div>
-        <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px" }}>
-          We scored {scoredCount} of your posted TikToks and put our calls on the record — {gradedCount} graded so far.
+        <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
+          PreviewPanel predicts how a video will do before you post it. To prove it, we scored {scoredCount} of
+          your recent TikToks from the content alone — never seeing a single view count — then checked our
+          predictions against how they actually performed. That's your Track Record, and it's ready now.
         </div>
-        <button onClick={onSeeTrackRecord} style={{
-          width: "100%", height: "50px", background: B.action, border: "none",
-          borderRadius: "10px", color: "#fff", fontSize: "15px", fontWeight: "800",
-          cursor: "pointer", fontFamily: "Montserrat, sans-serif", marginBottom: "10px",
-        }}>
-          See your track record
+        <button onClick={onSeeTrackRecord} style={{ ...choiceCard, marginBottom: "10px" }}>
+          <div style={choiceTitle}>See your track record</div>
+          <div style={choiceSub}>How our calls on your videos turned out.</div>
         </button>
-        <button onClick={onDismiss} style={{
-          width: "100%", height: "50px", background: "#fff", border: `1.5px solid ${B.border}`,
-          borderRadius: "10px", color: B.brown, fontSize: "15px", fontWeight: "800",
-          cursor: "pointer", fontFamily: "Montserrat, sans-serif",
-        }}>
-          Run a video first
+        <button onClick={onDismiss} style={choiceCard}>
+          <div style={choiceTitle}>Score your next video</div>
+          <div style={choiceSub}>Get its predicted percentile, what's working, and what to fix — before you post.</div>
         </button>
+        <div style={{ fontSize: "11.5px", color: "#999", marginTop: "18px" }}>
+          Your track record lives under History whenever you want it.
+        </div>
       </div>
     </div>
   );

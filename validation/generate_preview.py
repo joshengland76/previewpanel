@@ -80,7 +80,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import psycopg2
@@ -89,19 +88,18 @@ import requests
 
 import spec_scorer
 
-# Date-display bug fix (found live: a ballerinafarm video posted ~9pm
-# Mountain time on 2026-06-30 showed as "Jul 1" here but "Jun 30" in
-# TikTok's own app). posted_at is a `timestamptz` column -- psycopg2
-# returns it UTC-aware by default, and fmt_date() used to strftime that
-# UTC value directly. There's no single "correct" timezone to convert to
-# (TikTok's app shows a post's date in the VIEWER's own device timezone,
-# which we can't know in general) -- DISPLAY_TZ is the same documented
-# best-effort default worker.py now stores precise timestamps against
-# (US/Eastern, roughly splitting the difference across the continental
-# US). Applied at format time here (not at storage time) so it also
-# corrects the display for any already-stored UTC-only posted_at value,
-# not just new ingests.
-DISPLAY_TZ = ZoneInfo("America/New_York")
+# Date basis (post-diagnostic decision, T5): all posted dates render on ONE
+# declared basis -- the UTC-derived calendar date, as-is, with NO per-viewer
+# timezone conversion. yt-dlp derives a video's date from its real UTC
+# upload timestamp; TikTok's own app instead shows that instant in the
+# *viewer's* device timezone, so a video posted late-evening US time can read
+# one calendar day earlier in-app than its UTC date (e.g. ballerinafarm's
+# 2026-07-01 03:56 UTC post shows "Jun 30" to a US viewer). That is timezone
+# framing, not a data bug -- the stored instant is correct. We deliberately do
+# NOT chase the viewer's local date (unknowable in general, wrong for
+# international creators); we render the UTC date consistently across the PDF,
+# the in-app Track Record tab, and the docs, and declare the basis. This
+# supersedes the earlier US/Eastern best-effort conversion.
 
 HERE = pathlib.Path(__file__).resolve().parent
 BACKEND_SCORING = HERE.parent / "backend" / "scoring"
@@ -1047,6 +1045,34 @@ def prospect_rows(db, handle, aged):
     return out
 
 
+def prospect_scoring_config(db, handle):
+    """Validated-config stamp (post-diagnostic). Returns the single scoring
+    config all of this prospect's rows share -- either None (null-config:
+    the judges were objective-blind) or a canonical objective string
+    (validated-config: the judges got the category lens + objective_fit,
+    matching the app + corpus). Raises SystemExit if the rows MIX configs,
+    because their ŷ values are then not comparable (the objective-blind null
+    path scores structurally higher -- OBJECTIVE_CONDITIONING_DIAGNOSTIC.md).
+    'One creator, one config' is the invariant a render depends on."""
+    rows = db.query("""
+        SELECT DISTINCT s.objective
+        FROM posted_videos pv
+        JOIN shadow_scores s ON s.posted_video_id = pv.id
+        WHERE lower(pv.handle) = lower(%s) AND pv.source = 'prospect_report'
+    """, (handle,), fetch="all")
+    configs = {r[0] for r in rows}  # each is None or an objective string
+    if len(configs) > 1:
+        pretty = ", ".join(sorted(("null" if c is None else f"'{c}'") for c in configs))
+        sys.exit(
+            f"[generate_preview] --prospect {handle}: rows were scored under MIXED configs "
+            f"({pretty}) -- their predictions are not comparable (the null/objective-blind config "
+            f"scores structurally higher; see OBJECTIVE_CONDITIONING_DIAGNOSTIC.md). Re-ingest this "
+            f"handle under one config: `worker.py --prospect {handle}` (null) OR "
+            f"`worker.py --prospect {handle} --objective \"<canonical>\"` (validated), consistently."
+        )
+    return next(iter(configs)) if configs else None
+
+
 def prospect_section_a(db, handle):
     """Transport hotfix, Task 2 -- returns (windowed, attempted, succeeded)
     for the same coverage-tracking shape study_section_a/study_section_b
@@ -1079,11 +1105,14 @@ ROW_B_RE = re.compile(
 
 
 def fmt_date(dt):
-    """Converts to DISPLAY_TZ before formatting -- see the module-level
-    DISPLAY_TZ comment. A naive datetime (no tzinfo) is formatted as-is."""
+    """UTC-derived calendar date, as-is -- see the module-level date-basis
+    note. posted_at is a timestamptz that psycopg2 returns UTC-aware, so a
+    bare strftime already yields the UTC date; a tz-aware value is first
+    normalized to UTC so the displayed date can never depend on the
+    machine's local zone. A naive datetime is formatted as-is."""
     if not hasattr(dt, "strftime"):
         return str(dt)
-    return (dt.astimezone(DISPLAY_TZ) if dt.tzinfo else dt).strftime("%b %-d")
+    return (dt.astimezone(timezone.utc) if dt.tzinfo else dt).strftime("%b %-d")
 
 
 CAPTION_MAX_CHARS = 58  # matches the template's own sample-row caption length (36-50 chars) --
@@ -1151,7 +1180,8 @@ def row_b_html(v, checkin_date):
 
 
 def render_html(*, handle, niche_line, prepared_date, render_date, section_a_start,
-                 section_a, section_b, hero, insight, precision_caveat, mode, objective, full_coverage):
+                 section_a, section_b, hero, insight, precision_caveat, mode, objective, full_coverage,
+                 null_config=False):
     html = TEMPLATE_PATH.read_text()
 
     # Shared rule: MOCKUP ribbon removed entirely, not just print-hidden.
@@ -1294,6 +1324,20 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
             f"Predictions, not promises. {precision_caveat}",
         )
 
+    # Honesty line (post-diagnostic, T3) -- a null-config render scored the
+    # videos WITHOUT a content-category lens (objective-blind judges), which
+    # scores structurally higher and differently than the app, where a
+    # category is always selected. One plain sentence, appended to the same
+    # footer line, so a recipient isn't surprised when their in-app numbers
+    # differ. Validated-config renders (objective seeded at ingest) match the
+    # app config and get no such line.
+    if null_config:
+        html = html.replace(
+            "Predictions, not promises.",
+            "Predictions, not promises. Scores in this preview were produced without a content-category "
+            "lens; in the app your scores use the category you select, so numbers can differ.",
+        )
+
     # Polish v5, Task 4: hero_form is returned alongside the html (not just
     # used internally above) so main() can print it next to the send-check
     # verdict -- "which hero form rendered" always describes what's
@@ -1397,7 +1441,17 @@ def main():
         # default 24h) finds a matching prior row for that exact URL.
         section_b, section_b_attempted, section_b_succeeded = study_section_b(
             db, creator_id, handle, mode, objective, reuse_within_hours=args.reuse_section_b_hours)
+        prospect_null_config = False  # study rows are always corpus-config (judged with objective)
     else:
+        # Validated-config stamp + mixed-config guard (post-diagnostic, T2).
+        prospect_config = prospect_scoring_config(db, handle)
+        prospect_null_config = prospect_config is None
+        stamp = "null-config (objective-blind judges)" if prospect_null_config else f"validated-config (objective='{prospect_config}')"
+        print(f"[generate_preview] --prospect {handle}: rows scored under {stamp}")
+        if mode == "objective" and not prospect_null_config and prospect_config != objective:
+            print(f"[generate_preview] WARNING: rows were scored for objective '{prospect_config}' but you are "
+                  f"rendering a '{objective}' niche percentile -- the pill's comparison pool ('{objective}') does "
+                  f"not match the config the judges scored under ('{prospect_config}').", file=sys.stderr)
         section_a_full, section_a_attempted, section_a_succeeded = prospect_section_a(db, handle)
         section_b, section_b_attempted, section_b_succeeded = prospect_section_b(db, handle)
 
@@ -1466,7 +1520,7 @@ def main():
         render_date=render_date, section_a_start=section_a_start,
         section_a=section_a, section_b=section_b, hero=hero, insight=insight,
         precision_caveat=precision_caveat, mode=mode, objective=objective,
-        full_coverage=full_coverage,
+        full_coverage=full_coverage, null_config=prospect_null_config,
     )
     html_path.write_text(html)
     render_pdf(html_path, pdf_path)

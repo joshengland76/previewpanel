@@ -42,7 +42,6 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
@@ -84,25 +83,17 @@ PROSPECT_COST_PER_VIDEO = 0.10
 
 PP_API_BASE = __import__("os").environ.get("PP_API_BASE", "http://localhost:3001")
 
-# Date-display bug fix (found live: a ballerinafarm video posted 2026-06-30
-# ~9pm Mountain time showed as "Jul 1" on the Performance Preview, but "Jun
-# 30" in TikTok's own app). Root cause: list_recent_videos()'s
-# --flat-playlist probe only returns yt-dlp's `upload_date` (a bare
-# "YYYYMMDD" string with NO time-of-day), which yt-dlp itself derives by
-# truncating the video's real UTC timestamp to a calendar date -- so any
-# video posted after ~4-8pm US time (already past midnight UTC) reads one
-# day ahead of what every US timezone actually shows. There's no single
-# "correct" timezone to convert to -- TikTok's app shows a post's date
-# converted to the VIEWER's own device timezone, which we can never know in
-# general. DISPLAY_TZ is a documented best-effort default (US/Eastern,
-# roughly splitting the difference across the continental US) applied to
-# the PRECISE `timestamp` field (Unix epoch, fetched per-video alongside
-# the caption probe -- see fetch_video_meta) instead of the UTC-truncated
-# date string. This fixes the reported case outright (converts to June 30
-# in every continental US zone) and meaningfully narrows the window for
-# every other near-midnight post, even though it can't guarantee a match
-# for a creator based outside the contiguous US.
-DISPLAY_TZ = ZoneInfo("America/New_York")
+# Date basis (post-diagnostic decision, T5): posted_at is stored as the
+# video's real UTC instant (yt-dlp's per-video `timestamp` Unix epoch, kept
+# UTC), and every surface renders the UTC-derived calendar date as-is -- no
+# per-viewer timezone conversion. TikTok's app shows that instant in the
+# viewer's own device zone, so a late-evening US post can read one day
+# earlier in-app than its UTC date; that is timezone framing, not a data
+# bug (the instant is correct). We render UTC consistently and declare the
+# basis rather than guessing a region. This supersedes the earlier
+# US/Eastern best-effort conversion. Capturing the precise `timestamp` (vs
+# the flat-playlist's coarser, sometimes-absent date-only `upload_date`) is
+# retained purely for reliability -- the DATE it yields is the UTC date.
 
 
 def get_env(key):
@@ -111,6 +102,15 @@ def get_env(key):
         if line.startswith(f"{key}="):
             return line.split("=", 1)[1]
     return None
+
+
+def load_canonical_objectives():
+    """The 19 canonical app objectives -- tiers_v2_2.json's per_objective keys
+    (the same list buildTLPrompt/the app validate against). Read from the app
+    repo's own canonical file, no research-repo import (same convention as
+    generate_preview.py's corpus_reference_pool.json / call_semantics.json)."""
+    tiers_path = pathlib.Path.home() / "PreviewPanel" / "backend" / "scoring" / "tiers_v2_2.json"
+    return set(json.loads(tiers_path.read_text())["per_objective"].keys())
 
 
 def db_connect():
@@ -219,11 +219,11 @@ def fetch_video_meta(video_url: str) -> tuple[str | None, datetime | None]:
     and posted_at falls back to list_recent_videos()'s coarser date-only
     value -- never blocks discovery/download/ingest.
 
-    Date-display bug fix: this same probe's `timestamp` field (Unix epoch,
-    precise to the second) replaces the flat-playlist's date-only
-    `upload_date` as the real posted_at source -- see DISPLAY_TZ above for
-    why. Returns (caption, posted_at_precise); either can be None on a
-    probe failure or missing field, same best-effort contract as before."""
+    Date basis: this same probe's `timestamp` field (Unix epoch, precise to
+    the second) replaces the flat-playlist's date-only `upload_date` as the
+    posted_at source -- kept in UTC (see the date-basis note above).
+    Returns (caption, posted_at_precise); either can be None on a probe
+    failure or missing field, same best-effort contract as before."""
     cmd = ["yt-dlp", "--dump-json", "--no-warnings", "--skip-download", video_url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=YTDLP_LIST_TIMEOUT)
@@ -242,7 +242,7 @@ def fetch_video_meta(video_url: str) -> tuple[str | None, datetime | None]:
     ts = meta.get("timestamp")
     if ts is not None:
         try:
-            posted_at_precise = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(DISPLAY_TZ)
+            posted_at_precise = datetime.fromtimestamp(int(ts), tz=timezone.utc)
         except (ValueError, OSError):
             pass
     return caption, posted_at_precise
@@ -291,7 +291,7 @@ def fetch_candidate_fingerprints(conn, user_id):
 
 
 # ── Ingestion POST ────────────────────────────────────────────────────────
-def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match, caption=None, source=None):
+def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match, caption=None, source=None, objective=None):
     research_key = get_env("RESEARCH_API_KEY")
     data = {
         "tiktokVideoId": tiktok_video_id,
@@ -300,6 +300,15 @@ def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match, 
     }
     if source:
         data["source"] = source
+    # Validated-config prospect ingest -- when an --objective is supplied,
+    # pass it through so the ingest endpoint seeds buildTLPrompt's category
+    # lens + objective_fit field, matching the app's own scoring config and
+    # the corpus's training config (every corpus row was judged WITH an
+    # objective -- see OBJECTIVE_CONDITIONING_DIAGNOSTIC.md). Omitting it
+    # leaves the judges objective-blind (null config), which the diagnostic
+    # showed scores structurally higher and off-distribution.
+    if objective:
+        data["objective"] = objective
     if caption:
         data["caption"] = caption
     if posted_at:
@@ -323,7 +332,7 @@ def post_ingest(video_path, tiktok_video_id, user_id, handle, posted_at, match, 
     return resp
 
 
-def process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_path, caption=None, source=None):
+def process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_path, caption=None, source=None, objective=None):
     fp_json = fp.fingerprint_video(pathlib.Path(local_path))
     # Prospects have no prior app history to match against (user_id is
     # always None for them, same as any unconnected caller) -- candidates
@@ -339,7 +348,7 @@ def process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_p
     else:
         print(f"[worker] {tiktok_video_id}: no candidate previews in trailing {TRAILING_DAYS}d window")
 
-    resp = post_ingest(local_path, tiktok_video_id, user_id, handle, posted_at, match, caption=caption, source=source)
+    resp = post_ingest(local_path, tiktok_video_id, user_id, handle, posted_at, match, caption=caption, source=source, objective=objective)
     if resp.status_code == 200:
         body = resp.json()
         print(f"[worker] {tiktok_video_id}: ingested -> status={body.get('status')} "
@@ -542,7 +551,9 @@ def run_prospect_mode(args):
     DOWNLOAD_DIR.mkdir(exist_ok=True)
     db = DB()
 
-    print(f"[worker] prospect mode: @{handle} (max_aged={max_aged}, max_fresh={max_fresh})")
+    objective = args.objective  # validated-config ingest (None -> objective-blind judges)
+    cfg = f"objective='{objective}'" if objective else "null-config (objective-blind)"
+    print(f"[worker] prospect mode: @{handle} (max_aged={max_aged}, max_fresh={max_fresh}) -- {cfg}")
     videos = list_recent_videos(handle, playlist_end=PROSPECT_YTDLP_PLAYLIST_END)
     aged, fresh = select_prospect_videos(videos, max_aged, max_fresh)
     print(f"[worker] found {len(aged)} aged (30-100d) + {len(fresh)} fresh (<30d) candidate video(s)")
@@ -580,7 +591,7 @@ def run_prospect_mode(args):
                 # iteration) rather than widening process_one_video's own
                 # signature for a param it wouldn't use here.
                 ok = process_one_video(db.conn, None, handle, tiktok_video_id, posted_at, local_path,
-                                        caption=caption, source="prospect_report")
+                                        caption=caption, source="prospect_report", objective=objective)
             finally:
                 local_path.unlink(missing_ok=True)  # never accumulate downloaded videos on disk
             if not ok:
@@ -621,7 +632,19 @@ def main():
                          help="Performance Preview prospect-report mode: @handle of a not-yet-enrolled creator")
     parser.add_argument("--max-aged", type=int, default=None, help="--prospect: cap on videos aged 30-100 days (default 14)")
     parser.add_argument("--max-fresh", type=int, default=None, help="--prospect: cap on videos aged <30 days (default 4)")
+    parser.add_argument("--objective", type=str, default=None,
+                         help="--prospect: score under this canonical objective (validated config -- seeds the "
+                              "judges' category lens + objective_fit, matching the app and the corpus). Omit for "
+                              "the objective-blind null config. Must be one of the 19 canonical objectives.")
     args = parser.parse_args()
+
+    if args.objective:
+        if not args.prospect:
+            parser.error("--objective is only valid with --prospect (validated-config prospect ingest)")
+        canonical = load_canonical_objectives()
+        if args.objective not in canonical:
+            parser.error(f"--objective '{args.objective}' is not canonical. Must be one of:\n  "
+                         + "\n  ".join(sorted(canonical)))
 
     if args.prospect:
         run_prospect_mode(args)

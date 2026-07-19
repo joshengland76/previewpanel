@@ -47,7 +47,14 @@ cd ~/PreviewPanel/validation
 export PP_API_BASE=https://previewpanel.onrender.com
 
 # Step 1 — ingest. Discovers the handle's public posts, scores each
-# through the real live path. No --objective needed here.
+# through the real live path.
+#
+# CHOOSE THE INGEST CONFIG (post-diagnostic, see below):
+#   niche-pure creator -> ingest WITH --objective (validated config: the
+#     judges get the category lens + objective_fit, matching the app AND
+#     the corpus the model was trained on).
+./_venv/bin/python3 worker.py --prospect somehandle --objective "Food & Drinks/Cooking"
+#   multi-niche creator -> omit --objective (null config), render --overall.
 ./_venv/bin/python3 worker.py --prospect somehandle
 #   optional: --max-aged 14 (default) --max-fresh 4 (default)
 
@@ -57,6 +64,32 @@ export PP_API_BASE=https://previewpanel.onrender.com
 ./_venv/bin/python3 generate_preview.py --prospect somehandle --objective "Aesthetic/Vibes"
 ./_venv/bin/python3 generate_preview.py --prospect somehandle --overall
 ```
+
+**Ingest config — niche-pure vs multi-niche (post-diagnostic).** The
+objective-conditioning diagnostic (`OBJECTIVE_CONDITIONING_DIAGNOSTIC.md`)
+established that the null (objective-blind) config scores **structurally
+higher** than the app — the judges apply no category lens and
+`objfit_consensus` is median-imputed to a good fit (raw 8.333, an
+off-distribution input: **0** of 4,897 corpus rows were scored
+objective-blind). So:
+
+- **Niche-pure creator** (clearly one category): ingest **WITH
+  `--objective "<canonical>"`** — the *validated config*, matching the app
+  and the corpus. Then render `--objective` (niche pill) and/or
+  `--overall`; the numbers are directly comparable to what the invitee
+  will see in-app.
+- **Multi-niche creator** (no single category fits): ingest **without
+  `--objective`** (null config) and render **`--overall` only**. A
+  null-config render auto-appends an honesty footer line
+  ("Scores in this preview were produced without a content-category
+  lens…") so the recipient isn't surprised when their in-app numbers
+  differ.
+- **One creator, one config.** `generate_preview.py` **refuses to render
+  a handle whose rows mix configs** (some null, some objective, or two
+  different objectives) — their predictions aren't comparable. Re-ingest
+  consistently if you switch. The render prints the config stamp it used
+  (`rows scored under validated-config (objective='…')` /
+  `null-config (objective-blind judges)`).
 
 **Spend-reuse note:** re-running Step 2 (either mode, any number of
 times) never re-spends — `--prospect` render always reads Task 1's
