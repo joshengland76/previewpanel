@@ -1921,40 +1921,57 @@ export default function PreviewPanel() {
                 cursor: "pointer", fontFamily: "Montserrat, sans-serif",
                 display: "inline-flex", alignItems: "center", gap: "5px",
               }}>
+                <span className="pp-header-btn-label">📋 History</span>
+                {/* Header symmetry, Task 5 (v3) -- BOTH count forms this
+                    button can show (local-preview "(N)" inline text, and
+                    the track-record unseen/graded count) used to sit
+                    INLINE as flex siblings of the label, widening the
+                    button's own layout box. Measuring actual rendered
+                    widths (not just reading the Header-collision Task 2
+                    media query) showed real overlap with the centered,
+                    never-shrunk logo at true 375/390px widths -- the TR
+                    badge case by ~5-13px, and the local-history "(24)"
+                    case by ~35px, since double-digit inline text runs
+                    wider still. Both are now the SAME absolute-positioned
+                    corner dot (matching the segmented Track-Record-tab
+                    badge below) instead of inline content: it overlays the
+                    button's own padding box rather than adding to its
+                    width, so the button measures identically whether any
+                    badge is showing or not -- no count, in either form,
+                    can ever push it wider again. Local-preview count still
+                    takes precedence over the track-record count when both
+                    are non-zero, same priority as before. */}
                 {history.length > 0 ? (
-                  <span className="pp-header-btn-label">📋 History ({history.length})</span>
-                ) : (
-                  <>
-                    <span className="pp-header-btn-label">📋 History</span>
-                    {/* Header collision, Task 2 -- a compact numeric badge
-                        (not inline text like "· 9 graded") is the primary
-                        populated-state signal at every width; unseen (red)
-                        takes priority over already-seen (muted grey) count,
-                        same distinction as before, just no longer prose that
-                        can grow long enough to collide with the centered
-                        logo at narrow viewports. */}
-                    {trackRecordHasContent && trackRecordSummary.unseenGradedCount > 0 && (
-                      <span style={{
-                        display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        background: "#E53935", color: "#fff", borderRadius: "999px",
-                        fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
-                        padding: "0 3px", flexShrink: 0,
-                      }}>
-                        {trackRecordSummary.unseenGradedCount}
-                      </span>
-                    )}
-                    {trackRecordHasContent && trackRecordSummary.unseenGradedCount === 0 && trackRecordSummary.gradedCallCount > 0 && (
-                      <span style={{
-                        display: "inline-flex", alignItems: "center", justifyContent: "center",
-                        background: B.lightBrown, color: B.brown, borderRadius: "999px",
-                        fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
-                        padding: "0 3px", flexShrink: 0,
-                      }}>
-                        {trackRecordSummary.gradedCallCount}
-                      </span>
-                    )}
-                  </>
-                )}
+                  <span style={{
+                    position: "absolute", top: "-6px", right: "-6px",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    background: B.lightBrown, color: B.brown, borderRadius: "999px",
+                    fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+                    padding: "0 3px", border: "1.5px solid #fff",
+                  }}>
+                    {history.length}
+                  </span>
+                ) : trackRecordHasContent && trackRecordSummary.unseenGradedCount > 0 ? (
+                  <span style={{
+                    position: "absolute", top: "-6px", right: "-6px",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    background: "#E53935", color: "#fff", borderRadius: "999px",
+                    fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+                    padding: "0 3px", border: "1.5px solid #fff",
+                  }}>
+                    {trackRecordSummary.unseenGradedCount}
+                  </span>
+                ) : trackRecordHasContent && trackRecordSummary.gradedCallCount > 0 ? (
+                  <span style={{
+                    position: "absolute", top: "-6px", right: "-6px",
+                    display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    background: B.lightBrown, color: B.brown, borderRadius: "999px",
+                    fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+                    padding: "0 3px", border: "1.5px solid #fff",
+                  }}>
+                    {trackRecordSummary.gradedCallCount}
+                  </span>
+                ) : null}
               </button>
               {/* Phase C, Task 1: Connect-accounts trigger */}
               <div style={{ position: "absolute", top: "10px", left: "0" }} className="pp-header-btn">
