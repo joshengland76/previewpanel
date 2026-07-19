@@ -224,16 +224,16 @@ and `--overall` as the canonical invitee document.
 
 ## Git / deploy state
 
-- **App repo (`PreviewPanel`):** `355ea28` (Tasks 1–4, 6, 7) then
-  `9161f92` (Task 5 real fix). Both pushed to `origin/main`. Render
-  backend confirmed live on `355ea28` (`/version` sha match) before
-  verification; `9161f92` is frontend-only, confirmed live via
-  post-deploy measurement (Vercel auto-deploy, no Render restart).
-- **Research repo (`correlation-research`):** `PreviewPanel_Operations_
-  and_Roadmap.md` edited, not yet committed as of this readout — only
-  this one file is part of this dispatch; the repo has many unrelated
-  untracked research files from other in-flight work that this dispatch
-  does not touch.
+- **App repo (`PreviewPanel`):** `355ea28` (Tasks 1–4, 6, 7), `9161f92`
+  (Task 5 real fix), `d917302` (this readout). All pushed to
+  `origin/main`. Render backend confirmed live on `355ea28` (`/version`
+  sha match) before verification; `9161f92` is frontend-only, confirmed
+  live via post-deploy measurement (Vercel auto-deploy, no Render
+  restart).
+- **Research repo (`correlation-research`):** `71cadb1` — only
+  `PreviewPanel_Operations_and_Roadmap.md` touched and committed; the
+  repo has many unrelated untracked research files from other in-flight
+  work that this dispatch does not touch. Pushed to `origin/main`.
 
 ## STOP
 
