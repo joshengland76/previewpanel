@@ -42,6 +42,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import psycopg2
 import psycopg2.extras
@@ -82,6 +83,26 @@ INTER_VIDEO_DELAY_S = 2  # politeness delay between videos within a prospect run
 PROSPECT_COST_PER_VIDEO = 0.10
 
 PP_API_BASE = __import__("os").environ.get("PP_API_BASE", "http://localhost:3001")
+
+# Date-display bug fix (found live: a ballerinafarm video posted 2026-06-30
+# ~9pm Mountain time showed as "Jul 1" on the Performance Preview, but "Jun
+# 30" in TikTok's own app). Root cause: list_recent_videos()'s
+# --flat-playlist probe only returns yt-dlp's `upload_date` (a bare
+# "YYYYMMDD" string with NO time-of-day), which yt-dlp itself derives by
+# truncating the video's real UTC timestamp to a calendar date -- so any
+# video posted after ~4-8pm US time (already past midnight UTC) reads one
+# day ahead of what every US timezone actually shows. There's no single
+# "correct" timezone to convert to -- TikTok's app shows a post's date
+# converted to the VIEWER's own device timezone, which we can never know in
+# general. DISPLAY_TZ is a documented best-effort default (US/Eastern,
+# roughly splitting the difference across the continental US) applied to
+# the PRECISE `timestamp` field (Unix epoch, fetched per-video alongside
+# the caption probe -- see fetch_video_meta) instead of the UTC-truncated
+# date string. This fixes the reported case outright (converts to June 30
+# in every continental US zone) and meaningfully narrows the window for
+# every other near-midnight post, even though it can't guarantee a match
+# for a creator based outside the contiguous US.
+DISPLAY_TZ = ZoneInfo("America/New_York")
 
 
 def get_env(key):
@@ -189,27 +210,42 @@ def list_recent_videos(handle: str, playlist_end: int = YTDLP_PLAYLIST_END):
     return videos
 
 
-def fetch_caption(video_url: str) -> str | None:
+def fetch_video_meta(video_url: str) -> tuple[str | None, datetime | None]:
     """Chips v2, Task 3b -- list_recent_videos()'s --flat-playlist entries
     don't reliably carry `description`; a real per-video --dump-json probe
     does (same info-dict field the app's own link-fetch path reads, and the
     same field parser.py reads for the research corpus). Best-effort: a
-    failure here just means this video's caption-dependent chips stay muted,
-    same as before this change -- never blocks discovery/download/ingest."""
+    failure here just means this video's caption-dependent chips stay muted
+    and posted_at falls back to list_recent_videos()'s coarser date-only
+    value -- never blocks discovery/download/ingest.
+
+    Date-display bug fix: this same probe's `timestamp` field (Unix epoch,
+    precise to the second) replaces the flat-playlist's date-only
+    `upload_date` as the real posted_at source -- see DISPLAY_TZ above for
+    why. Returns (caption, posted_at_precise); either can be None on a
+    probe failure or missing field, same best-effort contract as before."""
     cmd = ["yt-dlp", "--dump-json", "--no-warnings", "--skip-download", video_url]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=YTDLP_LIST_TIMEOUT)
     except subprocess.TimeoutExpired:
-        print(f"[worker] caption probe timed out: {video_url}", file=sys.stderr)
-        return None
+        print(f"[worker] video-meta probe timed out: {video_url}", file=sys.stderr)
+        return None, None
     if result.returncode != 0 or not result.stdout.strip():
-        print(f"[worker] caption probe failed for {video_url}: {result.stderr[:200]}", file=sys.stderr)
-        return None
+        print(f"[worker] video-meta probe failed for {video_url}: {result.stderr[:200]}", file=sys.stderr)
+        return None, None
     try:
         meta = json.loads(result.stdout.strip().split("\n")[0])
     except json.JSONDecodeError:
-        return None
-    return meta.get("description") or None
+        return None, None
+    caption = meta.get("description") or None
+    posted_at_precise = None
+    ts = meta.get("timestamp")
+    if ts is not None:
+        try:
+            posted_at_precise = datetime.fromtimestamp(int(ts), tz=timezone.utc).astimezone(DISPLAY_TZ)
+        except (ValueError, OSError):
+            pass
+    return caption, posted_at_precise
 
 
 def download_video(video_url: str, out_path: pathlib.Path) -> bool:
@@ -378,10 +414,11 @@ def run_scan_mode(args):
             conn.commit()
             cur.close()
 
-            caption = fetch_caption(v["url"])
+            caption, posted_at_precise = fetch_video_meta(v["url"])
+            posted_at = posted_at_precise or v["posted_at"]
 
             try:
-                process_one_video(conn, user_id, handle, tiktok_video_id, v["posted_at"], local_path, caption=caption)
+                process_one_video(conn, user_id, handle, tiktok_video_id, posted_at, local_path, caption=caption)
             finally:
                 local_path.unlink(missing_ok=True)  # never accumulate downloaded videos on disk
 
@@ -531,7 +568,8 @@ def run_prospect_mode(args):
             local_path = DOWNLOAD_DIR / f"{tiktok_video_id}.mp4"
             if not download_video(v["url"], local_path):
                 continue
-            caption = fetch_caption(v["url"])
+            caption, posted_at_precise = fetch_video_meta(v["url"])
+            posted_at = posted_at_precise or v["posted_at"]
 
             try:
                 # process_one_video's own conn param is unused on this call
@@ -541,7 +579,7 @@ def run_prospect_mode(args):
                 # connection, even if a reconnect happened earlier this
                 # iteration) rather than widening process_one_video's own
                 # signature for a param it wouldn't use here.
-                ok = process_one_video(db.conn, None, handle, tiktok_video_id, v["posted_at"], local_path,
+                ok = process_one_video(db.conn, None, handle, tiktok_video_id, posted_at, local_path,
                                         caption=caption, source="prospect_report")
             finally:
                 local_path.unlink(missing_ok=True)  # never accumulate downloaded videos on disk

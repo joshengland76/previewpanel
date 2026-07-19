@@ -80,6 +80,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import psycopg2
@@ -87,6 +88,20 @@ import psycopg2.extras
 import requests
 
 import spec_scorer
+
+# Date-display bug fix (found live: a ballerinafarm video posted ~9pm
+# Mountain time on 2026-06-30 showed as "Jul 1" here but "Jun 30" in
+# TikTok's own app). posted_at is a `timestamptz` column -- psycopg2
+# returns it UTC-aware by default, and fmt_date() used to strftime that
+# UTC value directly. There's no single "correct" timezone to convert to
+# (TikTok's app shows a post's date in the VIEWER's own device timezone,
+# which we can't know in general) -- DISPLAY_TZ is the same documented
+# best-effort default worker.py now stores precise timestamps against
+# (US/Eastern, roughly splitting the difference across the continental
+# US). Applied at format time here (not at storage time) so it also
+# corrects the display for any already-stored UTC-only posted_at value,
+# not just new ingests.
+DISPLAY_TZ = ZoneInfo("America/New_York")
 
 HERE = pathlib.Path(__file__).resolve().parent
 BACKEND_SCORING = HERE.parent / "backend" / "scoring"
@@ -624,7 +639,7 @@ def bet_card_fields(section_b, mode, objective):
         "caption": truncate_caption(video["caption"]),
         "date": fmt_date(video["posted_at"]),
         "pill": pill_text(video["percentile"], mode, objective) or "—",
-        "checkin": (video["posted_at"] + timedelta(days=30)).strftime("%b %-d"),
+        "checkin": fmt_date(video["posted_at"] + timedelta(days=30)),
     }
 
 
@@ -1064,7 +1079,11 @@ ROW_B_RE = re.compile(
 
 
 def fmt_date(dt):
-    return dt.strftime("%b %-d") if hasattr(dt, "strftime") else str(dt)
+    """Converts to DISPLAY_TZ before formatting -- see the module-level
+    DISPLAY_TZ comment. A naive datetime (no tzinfo) is formatted as-is."""
+    if not hasattr(dt, "strftime"):
+        return str(dt)
+    return (dt.astimezone(DISPLAY_TZ) if dt.tzinfo else dt).strftime("%b %-d")
 
 
 CAPTION_MAX_CHARS = 58  # matches the template's own sample-row caption length (36-50 chars) --
@@ -1259,7 +1278,7 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     chip_html = f'Predicted {prepared_date} · before results exist'
     html = re.sub(r'<span class="chip-predicted">.*?</span>', f'<span class="chip-predicted">{chip_html}</span>', html, count=1)
     rows_b_html = "\n      ".join(
-        row_b_html(v, (v["posted_at"] + timedelta(days=30)).strftime("%b %-d")) for v in section_b
+        row_b_html(v, fmt_date(v["posted_at"] + timedelta(days=30))) for v in section_b
     ) or '<tr><td colspan="4">No videos in this window yet.</td></tr>'
     html = ROW_B_RE.sub("@@ROW_B@@", html)
     html = re.sub(r'(@@ROW_B@@\s*)+', rows_b_html, html)

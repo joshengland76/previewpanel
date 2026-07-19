@@ -127,8 +127,12 @@ def test_bet_card():
     if result.get("pill") != "91st percentile · Aesthetic/Vibes":
         failures.append(f"bet card pill should keep its FULL suffix (single context-free "
                          f"instance, unlike row pills), got {result.get('pill')!r}")
-    if result.get("checkin") != "Aug 2":
-        failures.append(f"checkin should be posted_at + 30 days, expected 'Aug 2', got {result.get('checkin')}")
+    # Date-display bug fix: fmt_date now converts to DISPLAY_TZ (US/Eastern)
+    # before formatting instead of strftime-ing the raw UTC value, so a
+    # UTC-midnight fixture like this one's Aug 2 + 30 days correctly lands
+    # on Aug 1 evening Eastern -- "Aug 1", not "Aug 2".
+    if result.get("checkin") != "Aug 1":
+        failures.append(f"checkin should be posted_at + 30 days, expected 'Aug 1', got {result.get('checkin')}")
 
     # --overall mode: pill scope is "all videos", not an objective name.
     result = bet_card_fields(section_b, "overall", None)
