@@ -540,8 +540,9 @@ function TrCardLabel({ children }) {
   );
 }
 
-// Track Record v3, Task 3 -- right-aligned verdict chip on graded cards
-// only: "✓ Called it" (green), "✗ Missed" (rust), italic "no call".
+// Right-aligned verdict pill: "✓ Called it" (green fill), "✗ Missed" (rust
+// fill), or a DEEMPHASIZED "no call" pill (no fill, muted border/text) --
+// same pill shape as the other two, just visually quieter.
 function TrCardVerdictChip({ verdict }) {
   if (verdict === "hit") {
     return (
@@ -563,7 +564,14 @@ function TrCardVerdictChip({ verdict }) {
       </span>
     );
   }
-  return <span style={{ fontSize: "11px", fontStyle: "italic", color: "#aaa", whiteSpace: "nowrap" }}>no call</span>;
+  return (
+    <span style={{
+      fontSize: "11px", fontWeight: "700", color: "#999", background: "transparent",
+      border: "1px solid #ddd", borderRadius: "999px", padding: "3px 10px", whiteSpace: "nowrap",
+    }}>
+      no call
+    </span>
+  );
 }
 
 function TrackRecordPendingRow({ row }) {
@@ -597,55 +605,44 @@ function TrackRecordPendingRow({ row }) {
 }
 
 function TrackRecordGradedRow({ row }) {
-  // v4 -- no-call rows (the "Other videos in that timeframe" section) are
-  // minimal: caption + date on the left, an italic "no call" on the right,
-  // and NOTHING else (no prediction-score pill, no call chip, no result, no
-  // verdict chip) -- they weren't one of the panel's actual calls.
+  // Unified card for all three sections. The verdict pill lives on the TOP
+  // row (next to the caption), NOT in a right-hand column -- so the
+  // OUR PREDICTION SCORE and 30-DAY RESULT sections below use the FULL card
+  // width and their labels/contents no longer wrap. "Other" (no-call) rows
+  // use the exact same layout: they show the score + result too, just
+  // without the CALLED STRONG/WEAK chip, and their verdict pill is the
+  // deemphasized "no call".
   const isCall = row.callType === "strong" || row.callType === "weak";
-  if (!isCall) {
-    return (
-      <div style={{
-        background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
-        padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
-      }}>
-        <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600", flex: 1, minWidth: 0 }}>
-          {trRowTitle(row)}
-        </span>
-        <span style={{ fontSize: "11px", fontStyle: "italic", color: "#aaa", flexShrink: 0 }}>no call</span>
-      </div>
-    );
-  }
-  // Called row: 30-DAY RESULT color-coded (green >=1.0x, rust <1.0x, bold).
-  const resultColor = row.timesTypical >= 1.0 ? "#2E7D32" : "#8D4B36";
+  // 30-DAY RESULT color: green >1.0×, rust <1.0×, BLACK at exactly 1.00×
+  // (keyed on the DISPLAYED rounded value so a "1.00×" is never green/rust).
+  const shown = row.timesTypical.toFixed(2);
+  const resultColor = shown === "1.00" ? B.black : (row.timesTypical > 1.0 ? "#2E7D32" : "#8D4B36");
   return (
     <div style={{
       background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
-      padding: "12px 14px", display: "flex", alignItems: "flex-start", gap: "12px",
+      padding: "12px 14px",
     }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}>
-          <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
-            {trRowTitle(row)}
-          </span>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px", marginBottom: "8px" }}>
+        <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600", flex: 1, minWidth: 0 }}>
+          {trRowTitle(row)}
           {row.previewed && <TrackRecordPreviewedBadge />}
-        </div>
-        <TrCardLabel>Our prediction score</TrCardLabel>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
-          <span style={{
-            fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
-            borderRadius: "999px", padding: "3px 10px",
-          }}>
-            {trPillTextShort(row.overallPercentile)}
-          </span>
-          <TrackRecordCallChip callType={row.callType} />
-        </div>
-        <TrCardLabel>30-day result (likes/shares/saves per view)</TrCardLabel>
-        <div style={{ fontSize: "13px", fontWeight: "800", color: resultColor }}>
-          {row.timesTypical.toFixed(2)}× your typical
-        </div>
+        </span>
+        <span style={{ flexShrink: 0, marginTop: "1px" }}>
+          <TrCardVerdictChip verdict={row.verdict} />
+        </span>
       </div>
-      <div style={{ flexShrink: 0, marginTop: "2px" }}>
-        <TrCardVerdictChip verdict={row.verdict} />
+      <TrCardLabel>Our prediction score</TrCardLabel>
+      <div style={{ display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
+        {/* Percentile is plain text now (not a pill) -- same weight/size as
+            the result line below, ink-colored, no fill. */}
+        <span style={{ fontSize: "13px", fontWeight: "800", color: B.black }}>
+          {trPillTextShort(row.overallPercentile) || "—"}
+        </span>
+        {isCall && <TrackRecordCallChip callType={row.callType} />}
+      </div>
+      <TrCardLabel>30-day result (likes/shares/saves per view)</TrCardLabel>
+      <div style={{ fontSize: "13px", fontWeight: "800", color: resultColor }}>
+        {shown}× your typical
       </div>
     </div>
   );
@@ -842,19 +839,17 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 // (showWelcomeModal) at its call site for why that's a real robustness
 // improvement over the banner it replaces.
 function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss }) {
-  // Welcome copy v3 (Track Record v4, Task 2b). Button 1 is the PRIMARY
-  // action ("Run a video", filled) -> dismiss to the form; button 2 is
-  // secondary ("See how our predictions did", bordered) -> open the tab.
-  // No dynamic counts in the body -- so this can render the instant identity
-  // is confirmed, with no track-record fetch to wait on (Task 2a).
+  // Welcome copy v3.1. Both buttons are brown (filled B.action); button 1
+  // ("Run a video") dismisses to the form, button 2 opens the tab. No
+  // dynamic counts in the body so it renders the instant identity is
+  // confirmed (no track-record fetch to wait on).
   const cardBase = {
     width: "100%", borderRadius: "12px", padding: "13px 16px", textAlign: "left",
     cursor: "pointer", fontFamily: "Montserrat, sans-serif", display: "block",
+    background: B.action, border: "none",
   };
-  const titlePrimary = { fontSize: "15px", fontWeight: "800", color: "#fff", marginBottom: "3px" };
-  const subPrimary = { fontSize: "12px", color: "rgba(255,255,255,0.85)", lineHeight: "1.45" };
-  const titleSec = { fontSize: "15px", fontWeight: "800", color: B.black, marginBottom: "3px" };
-  const subSec = { fontSize: "12px", color: "#777", lineHeight: "1.45" };
+  const btnTitle = { fontSize: "15px", fontWeight: "800", color: "#fff", marginBottom: "3px" };
+  const btnSub = { fontSize: "12px", color: "rgba(255,255,255,0.85)", lineHeight: "1.45" };
   return (
     <div style={{
       position: "fixed", inset: 0, background: B.bg, zIndex: 150,
@@ -867,29 +862,23 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss }) {
         animation: "pp-slide 0.25s ease",
       }}>
         <img src="/owl-logo.png?v=3" alt="PreviewPanel"
-          style={{ height: "64px", width: "auto", margin: "0 auto 18px", display: "block" }} />
+          style={{ height: "77px", width: "auto", margin: "0 auto 18px", display: "block" }} />
         <div style={{ fontWeight: "800", fontSize: "20px", color: B.black, marginBottom: "12px" }}>
           Know before you post.
         </div>
         <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
-          Think of PreviewPanel as a test screening for your feed. Before you post, our panel watches your
-          video the way your audience will — hook, pacing, vibe, all of it — and tells you how it's likely to
-          stack up against your usual numbers, plus what to fix while you still can. This isn't “looks great!”
-          feedback: it's built on thousands of real videos and their real 30-day results, and when we call a
-          video one of your strongest, we're right more than 2 out of 3 times. Don't just take our word for
-          it — we brought receipts.
+          PreviewPanel is a test screening for your feed. Our panel watches your video the way your audience
+          will — hook, pacing, vibe — and tells you how it's likely to stack up against your usual numbers,
+          plus what to fix while you still can. No “looks great!” fluff: when we call a video one of your
+          strongest, we're right more than 2 out of 3 times. We brought receipts.
         </div>
-        <button onClick={onDismiss} style={{
-          ...cardBase, background: B.action, border: "none", marginBottom: "10px",
-        }}>
-          <div style={titlePrimary}>Run a video</div>
-          <div style={subPrimary}>Upload a draft or paste a link — get your score and straight-up feedback before you post.</div>
+        <button onClick={onDismiss} style={{ ...cardBase, marginBottom: "10px" }}>
+          <div style={btnTitle}>Run a video</div>
+          <div style={btnSub}>Upload a draft or paste a link — get your score and straight-up feedback.</div>
         </button>
-        <button onClick={onSeeTrackRecord} style={{
-          ...cardBase, background: "#fff", border: `1.5px solid ${B.border}`,
-        }}>
-          <div style={titleSec}>See how our predictions did on your videos</div>
-          <div style={subSec}>We already scored some of your videos and checked them against their real 30-day results. See what we called — and what actually happened.</div>
+        <button onClick={onSeeTrackRecord} style={cardBase}>
+          <div style={btnTitle}>See how our predictions did on your videos</div>
+          <div style={btnSub}>We scored a batch of your videos and tracked their real 30-day results. See how our calls held up.</div>
         </button>
       </div>
     </div>
