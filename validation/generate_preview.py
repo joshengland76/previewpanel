@@ -1242,8 +1242,8 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
         # rank groups (strong_weak_metrics over the rank split).
         thesis_h1 = (
             f'{opening} '
-            f'The videos we predicted would be strongest averaged <b class="up">{hero["strong_avg"]:.1f}×</b> your typical engagement. '
-            f'Those we predicted would be weakest averaged <b class="down">{hero["weak_avg"]:.1f}×</b>.'
+            f'The videos we predicted would be strongest averaged <b class="up">{hero["strong_avg"]:.1f}×</b> your typical engagement, '
+            f'while those predicted weakest averaged <b class="down">{hero["weak_avg"]:.1f}×</b>.'
         )
     elif hero_form == "calls":
         # Calls form: leads with the panel's hit rate over the rank groups

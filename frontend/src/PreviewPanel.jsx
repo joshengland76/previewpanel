@@ -506,7 +506,7 @@ function TrackRecordPreviewedBadge() {
 // Track Record v2, Task 3c -- CALLED STRONG / CALLED WEAK chips, inline
 // after the pill, on called rows only (call_type strong/weak with a
 // real hit/miss verdict -- never on a no_call row, which gets no chip).
-function TrackRecordCallChip({ callType }) {
+function TrackRecordCallChip({ callType, k }) {
   if (callType !== "strong" && callType !== "weak") return null;
   const isStrong = callType === "strong";
   return (
@@ -516,7 +516,7 @@ function TrackRecordCallChip({ callType }) {
       background: isStrong ? "#E8F5E9" : "#F5E4DF",
       borderRadius: "5px", padding: "2px 7px",
     }}>
-      CALLED {isStrong ? "STRONG" : "WEAK"}
+      {isStrong ? "Top" : "Bottom"} {k}
     </span>
   );
 }
@@ -604,7 +604,7 @@ function TrackRecordPendingRow({ row }) {
   );
 }
 
-function TrackRecordGradedRow({ row }) {
+function TrackRecordGradedRow({ row, groupK }) {
   // Unified card for all three sections. The verdict pill lives on the TOP
   // row (next to the caption), NOT in a right-hand column -- so the
   // OUR PREDICTION SCORE and 30-DAY RESULT sections below use the FULL card
@@ -638,7 +638,7 @@ function TrackRecordGradedRow({ row }) {
         <span style={{ fontSize: "13px", fontWeight: "800", color: B.black }}>
           {trPillTextShort(row.overallPercentile) || "—"}
         </span>
-        {isCall && <TrackRecordCallChip callType={row.callType} />}
+        {isCall && <TrackRecordCallChip callType={row.callType} k={groupK} />}
       </div>
       <TrCardLabel>30-day result (likes/shares/saves per view)</TrCardLabel>
       <div style={{ fontSize: "13px", fontWeight: "800", color: resultColor }}>
@@ -756,8 +756,7 @@ function TrackRecordPanel({ userId, onConnectClick }) {
               We scored your {windowLabel ? <>{windowLabel} </> : null}TikTok videos — from content alone, never seeing a single view count.
               {showAverages && (
                 <> The videos we predicted would be strongest averaged{" "}
-                  <b style={{ color: "#2E7D32" }}>{agg.avgTimesTypicalStrong.toFixed(1)}×</b> your typical 30-day engagement.
-                  {" "}Those we predicted would be weakest averaged{" "}
+                  <b style={{ color: "#2E7D32" }}>{agg.avgTimesTypicalStrong.toFixed(1)}×</b> your typical 30-day engagement, while those predicted weakest averaged{" "}
                   <b style={{ color: "#8D4B36" }}>{agg.avgTimesTypicalWeak.toFixed(1)}×</b>.</>
               )}
             </div>
@@ -775,22 +774,22 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 
       {topRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#2E7D32", letterSpacing: "0.05em", marginBottom: "8px" }}>
-            VIDEOS WE PREDICTED AS TOP PERFORMERS
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#2E7D32", marginBottom: "10px" }}>
+            Top {topRows.length} Predictions
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {topRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}
+            {topRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={topRows.length} />)}
           </div>
         </div>
       )}
 
       {bottomRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#8D4B36", letterSpacing: "0.05em", marginBottom: "8px" }}>
-            VIDEOS WE PREDICTED AS BOTTOM PERFORMERS
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#8D4B36", marginBottom: "10px" }}>
+            Bottom {bottomRows.length} Predictions
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {bottomRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}
+            {bottomRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={bottomRows.length} />)}
           </div>
         </div>
       )}
