@@ -256,6 +256,34 @@ ranking-confidence bar (`p_gt0>=0.95`) outright. There is no override
 flag. If a Dancing creator needs a document, use `--overall` instead
 (no tier gate).
 
+## Which document is canonical: `--overall` vs `--objective`
+
+Track Record v3, Task 7: **`--overall` is the canonical invitee
+document** — it's the same last-1,000-videos overall-pool percentile
+basis the in-app Track Record tab itself uses, so an invitee who redeems
+their invite code sees the identical vocabulary (CALLED STRONG/WEAK
+chips), the identical threshold rule (strong ≥ 70th percentile, weak ≤
+30th), and — coverage caveats aside — the same calls their preview
+document already told them about. It also works for every handle
+unconditionally (no tier gate, no Dancing-style refusal, no per-objective
+statistical-confidence bar to clear).
+
+`--objective` is an **optional niche-pure supplement** — send it
+*alongside* `--overall`, never *instead of* it. It answers a narrower,
+sometimes more persuasive question ("how do you rank against other
+Fitness/Wellness creators specifically") but its comparison pool is
+different from the one the live app's Track Record tab shows (a niche
+pool vs. the overall last-1,000 pool), so its percentiles and its
+calls can legitimately disagree with what the invitee later sees in-app
+— always caveat this when sending both ("your niche percentile above is
+a different, narrower comparison than what you'll see in your live
+Track Record after you sign up").
+
+In short: **always render and send `--overall`.** Add `--objective` on
+top of it only when the creator has a clear, gate-clearing niche and the
+extra document adds something the overall one doesn't — never as a
+replacement.
+
 ## Costs and typical durations
 
 | Step | Cost | Typical duration |
@@ -290,19 +318,26 @@ from being written**. Polish v5 remap: the hero sentence itself now
 sometimes leads with the panel's **calls record** instead of the
 **averages gap** (whichever is the more impressive of the two — see
 "Reading the adaptive hero" below), so the verdict tracks whichever
-signal is actually the stronger one, not the averages gap alone:
+signal is actually the stronger one, not the averages gap alone.
+Track Record v3 unified call semantics: "top"/"bottom" (rank-based,
+implied a fixed k-and-k split) are retired in favor of "strong"/"weak"
+(percentile-threshold-based — >=70th percentile is a strong call, <=30th
+is weak, independent of how many other rows are in the set, so the
+counts on each side can be asymmetric, e.g. 7 strong + 2 weak):
 
 ```
-[generate_preview] SEND-CHECK: MIXED (averages: top=1.24x bottom=1.26x gap=-0.02x (tier 0) | calls: 4 of 6 (tier 2) | max_tier=2) -- hero form: calls
+[generate_preview] SEND-CHECK: MIXED (averages: strong=1.24x weak=1.26x gap=-0.02x (tier 0) | calls: 4 of 6 (tier 2) | max_tier=2) -- hero form: calls
 ```
 
 Both metrics (averages gap AND calls record) and which hero form
 actually rendered are always printed together — never just the verdict.
 
 - **STRONG** (either signal reaches its top impressiveness tier — averages
-  gap ≥ 0.5×, or the panel called 6/6 or 5/6 on a 6-call board / 4/4 on a
-  4-call board): a real, visible contrast or a genuinely strong hit rate.
-  Safe to send as-is.
+  gap ≥ 0.5×, or the panel's calls-correct/calls-total ratio ≥ 0.8, e.g.
+  6/6, 5/6, 4/4, or any other split clearing that bar — strong/weak
+  counts are independent now, so there's no fixed "N-call board" size):
+  a real, visible contrast or a genuinely strong hit rate. Safe to send
+  as-is.
 - **MIXED** (some positive signal, but neither clears the top tier):
   **read the doc before sending.** Still an honest document — the numbers
   are what they are — but worth a second look at which of the two
@@ -325,14 +360,24 @@ changes. Sentence 2 picks whichever of two forms is more impressive,
 tiered 0–3 on each (see `generate_preview.py`'s `averages_tier`/
 `calls_tier` for the exact boundaries) — a tie goes to the **averages**
 form (more visceral), except when both are tier 0, which gets a neutral
-line instead of a fabricated boast:
+line instead of a fabricated boast. Track Record v3, Task 1: unified
+call semantics replaced the old rank-based "highest-/lowest-rated"
+wording (which implied a fixed, symmetric N-and-N split) with
+percentile-threshold "called strong/weak" wording, since strong/weak
+counts are independent now and can be asymmetric (e.g. 7 strong + 2
+weak):
 
-- **Averages form**: `"Your N highest-rated averaged X× your typical
-  engagement. Your N lowest-rated averaged Y×."`
-- **Calls form**: `"We made calls on your N highest- and N lowest-rated —
-  and got C of 2N right."` (bold; green only when C/2N ≥ .67)
+- **Averages form**: `"The videos we called strong averaged X× your
+  typical engagement. The ones we called weak averaged Y×."`
+- **Calls form**: `"We made calls on your strong- and weak-scored
+  videos — and got C of N right."` (bold; green only when C/N ≥ .67)
 - **Neutral form** (both tiers 0): `"Every call — hit and miss — is in
   the table below."`
+
+This is the exact same vocabulary and threshold rule (strong ≥ 70th
+percentile, weak ≤ 30th) the live app's own Track Record tab uses —
+both read `backend/scoring/call_semantics.json`, so the document and
+the in-app tab can never disagree about what counts as a call.
 
 The console SEND-CHECK line always names which form rendered
 (`hero form: averages|calls|neutral|best_bet|pending`) so this never has

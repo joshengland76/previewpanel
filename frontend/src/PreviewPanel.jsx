@@ -454,7 +454,6 @@ function HistoryPanel({ history, onRestore, onClose, hasTrackRecord, onSwitchToT
 // share the same two-section layout below, differing only in what data is
 // available to show in each.
 const TRACK_RECORD_LAST_SEEN_KEY = "pp_track_record_last_seen";
-const TRACK_RECORD_BANNER_SEEN_KEY = "pp_track_record_banner_seen"; // Beta UX polish v2, Task 3c
 
 function trFormatDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -476,6 +475,15 @@ function trClampedOrdinal(p) {
 }
 function trPillText(p) {
   return p == null ? null : `${trClampedOrdinal(p)} percentile · all videos`;
+}
+// Track Record v3, Task 3 -- card redesign drops the "· all videos" scope
+// suffix on the in-card "OUR SCORE" pill (a single subline under the
+// section header now states the scope once for every row, so repeating
+// it on each pill read as redundant); the bet-card/pending-tab context
+// still uses the full trPillText above where the scope isn't otherwise
+// stated nearby.
+function trPillTextShort(p) {
+  return p == null ? null : `${trClampedOrdinal(p)} percentile`;
 }
 
 function TrackRecordPreviewedBadge() {
@@ -511,69 +519,111 @@ function trRowTitle(row) {
   return row.captionSnippet || `Posted ${trFormatDate(row.postedAt)}`;
 }
 
+// Track Record v3, Task 3 -- shared small-caps muted label ("OUR SCORE",
+// "30-DAY RESULT") used by both graded and pending cards.
+function TrCardLabel({ children }) {
+  return (
+    <div style={{
+      fontSize: "9.5px", fontWeight: "800", color: "#999", letterSpacing: "0.06em",
+      textTransform: "uppercase", marginBottom: "3px",
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// Track Record v3, Task 3 -- right-aligned verdict chip on graded cards
+// only: "✓ Called it" (green), "✗ Missed" (rust), italic "no call".
+function TrCardVerdictChip({ verdict }) {
+  if (verdict === "hit") {
+    return (
+      <span style={{
+        fontSize: "11px", fontWeight: "800", color: "#fff", background: "#43A047",
+        borderRadius: "999px", padding: "4px 10px", whiteSpace: "nowrap",
+      }}>
+        ✓ Called it
+      </span>
+    );
+  }
+  if (verdict === "miss") {
+    return (
+      <span style={{
+        fontSize: "11px", fontWeight: "800", color: "#fff", background: "#8D4B36",
+        borderRadius: "999px", padding: "4px 10px", whiteSpace: "nowrap",
+      }}>
+        ✗ Missed
+      </span>
+    );
+  }
+  return <span style={{ fontSize: "11px", fontStyle: "italic", color: "#aaa", whiteSpace: "nowrap" }}>no call</span>;
+}
+
 function TrackRecordPendingRow({ row }) {
   return (
     <div style={{
       background: "#fff", border: `1.5px solid ${VALENCE.split}55`, borderLeft: `4px solid ${VALENCE.split}`,
       borderRadius: "10px", padding: "12px 14px",
     }}>
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}>
         <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
           {trRowTitle(row)}
         </span>
         {row.previewed && <TrackRecordPreviewedBadge />}
       </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+      <TrCardLabel>Our score</TrCardLabel>
+      <div style={{ marginBottom: "8px" }}>
         {row.overallPercentile != null ? (
           <span style={{
             fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
             borderRadius: "999px", padding: "3px 10px",
           }}>
-            {trPillText(row.overallPercentile)}
+            {trPillTextShort(row.overallPercentile)}
           </span>
-        ) : <span />}
-        <span style={{ fontSize: "11px", color: VALENCE.split, fontWeight: "700" }}>
-          Check-in {trFormatDate(row.checkInDate)}
-        </span>
+        ) : <span style={{ fontSize: "11px", color: "#aaa" }}>—</span>}
+      </div>
+      <div style={{ fontSize: "11px", color: VALENCE.split, fontWeight: "700" }}>
+        Day-30 check-in {trFormatDate(row.checkInDate)}
       </div>
     </div>
   );
 }
 
 function TrackRecordGradedRow({ row }) {
-  const isHit = row.verdict === "hit";
-  const isMiss = row.verdict === "miss";
   return (
     <div style={{
       background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
-      padding: "12px 14px", display: "flex", alignItems: "center", gap: "12px",
+      padding: "12px 14px", display: "flex", alignItems: "flex-start", gap: "12px",
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}>
           <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
             {trRowTitle(row)}
           </span>
           {row.previewed && <TrackRecordPreviewedBadge />}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+        <TrCardLabel>Our score</TrCardLabel>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
           <span style={{
             fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
             borderRadius: "999px", padding: "3px 10px",
           }}>
-            {trPillText(row.overallPercentile)}
+            {trPillTextShort(row.overallPercentile)}
           </span>
           <TrackRecordCallChip callType={row.callType} />
-          {row.verdict !== "no_call" && (
-            <span style={{ fontSize: "11px", color: "#888" }}>
-              {row.timesTypical.toFixed(2)}× your typical
-            </span>
-          )}
         </div>
+        {row.verdict !== "no_call" && (
+          <>
+            <TrCardLabel>30-day result</TrCardLabel>
+            {/* Result must read as EQUAL WEIGHT to the score above --
+                bold, ink-colored (B.black), never gray/deemphasized. */}
+            <div style={{ fontSize: "13px", fontWeight: "800", color: B.black }}>
+              {row.timesTypical.toFixed(2)}× your typical
+            </div>
+          </>
+        )}
       </div>
-      <div style={{ flexShrink: 0, fontSize: "20px", fontWeight: "800" }}>
-        {isHit && <span style={{ color: "#43A047" }}>✓</span>}
-        {isMiss && <span style={{ color: "#bbb" }}>✗</span>}
-        {row.verdict === "no_call" && <span style={{ fontSize: "11px", fontStyle: "italic", color: "#aaa" }}>no call</span>}
+      <div style={{ flexShrink: 0, marginTop: "2px" }}>
+        <TrCardVerdictChip verdict={row.verdict} />
       </div>
     </div>
   );
@@ -585,7 +635,7 @@ function TrackRecordBaselineFormingRow({ row, baselineMin }) {
       background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
       padding: "12px 14px",
     }}>
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "6px" }}>
+      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}>
         <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
           {trRowTitle(row)}
         </span>
@@ -671,43 +721,63 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 
   return (
     <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
-      {data.aggregates ? (
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: "17px", fontWeight: "800", color: B.black }}>
-            Called it: {data.aggregates.hits} of {data.aggregates.graded}
+      {/* Track Record v3, Task 2 -- hero, mirrors the PDF exactly. Line 1
+          always renders (coverage-honest claim, same spirit as the PDF's
+          own hero_opening_sentence -- we're past no_handle/no_posts_yet
+          here, so there IS at least one scored video to make this claim
+          about). Line 2 (strong/weak averages, bolded green/rust numbers
+          only -- not the words themselves, matching the PDF) needs its
+          own >=2-strong-and->=2-weak floor, independent of whether the
+          "Called it" line itself is showing yet. Lines 3+4 (the record
+          stat + study-context line) keep their existing AGGREGATE_MIN
+          gate; the sub-threshold "building your track record" copy is
+          unchanged for states below that gate. */}
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6" }}>
+          We scored every video you've posted — from content alone, never seeing a single view count.
+        </div>
+        {showAverages && (
+          <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6", marginTop: "6px" }}>
+            The videos we called strong averaged <b style={{ color: "#2E7D32" }}>{data.aggregates.avgTimesTypicalStrong.toFixed(1)}×</b> your
+            {" "}typical engagement. The ones we called weak averaged <b style={{ color: "#8D4B36" }}>{data.aggregates.avgTimesTypicalWeak.toFixed(1)}×</b>.
           </div>
-          {showAverages && (
-            <div style={{ fontSize: "12px", color: B.brown, fontWeight: "600", marginTop: "4px" }}>
-              Strong calls averaged {data.aggregates.avgTimesTypicalStrong.toFixed(1)}x your typical ·
-              {" "}weak calls {data.aggregates.avgTimesTypicalWeak.toFixed(1)}x
+        )}
+        {data.aggregates ? (
+          <>
+            <div style={{ fontSize: "17px", fontWeight: "800", color: B.black, marginTop: "10px" }}>
+              Called it: {data.aggregates.hits} of {data.aggregates.graded}
             </div>
-          )}
-          <div style={{ fontSize: "11.5px", color: "#888", marginTop: "2px" }}>
-            study-wide, our top-tier picks beat typical ~2 in 3
+            <div style={{ fontSize: "11.5px", color: "#888", marginTop: "2px" }}>
+              study-wide, our top-tier picks beat typical ~2 in 3
+            </div>
+          </>
+        ) : data.state !== "pending_only" && data.state !== "baseline_forming" ? (
+          <div style={{ fontSize: "12.5px", color: "#888", marginTop: "10px" }}>
+            Building your track record — {data.gradedCallCount} call{data.gradedCallCount === 1 ? "" : "s"} on the books.
           </div>
-        </div>
-      ) : data.state !== "pending_only" && data.state !== "baseline_forming" ? (
-        <div style={{ textAlign: "center", fontSize: "12.5px", color: "#888" }}>
-          Building your track record — {data.gradedCallCount} call{data.gradedCallCount === 1 ? "" : "s"} on the books.
-        </div>
-      ) : null}
+        ) : null}
+      </div>
 
       {/* Track Record v2, Task 3b -- structure mirrors the PDF: predicted-
           vs-happened (graded) THEN on-the-record (pending), hero first. */}
       {gradedRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "4px" }}>
             WHAT WE PREDICTED VS. WHAT HAPPENED
+          </div>
+          {/* Track Record v3, Task 3 -- one subline under the header,
+              replacing the old end-of-list legend (chips are
+              self-documenting now: CALLED STRONG/WEAK + the verdict chip
+              together already say what a row's own call was and whether
+              it landed, with no separate key needed). */}
+          <div style={{ fontSize: "10.5px", color: "#aaa", marginBottom: "8px" }}>
+            Scores = percentile among the last 1,000 videos we've scored · sorted by our score.
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {gradedRows.map((row) => row.verdict
               ? <TrackRecordGradedRow key={row.postedVideoId} row={row} />
               : <TrackRecordBaselineFormingRow key={row.postedVideoId} row={row} baselineMin={data.baselineMin} />
             )}
-          </div>
-          {/* Task 3c -- one legend line at list end. */}
-          <div style={{ fontSize: "10.5px", color: "#aaa", marginTop: "8px", lineHeight: "1.5" }}>
-            ✓/✗ = whether our strong/weak calls matched above-/below-typical results · middle scores: no call
           </div>
         </div>
       )}
@@ -728,6 +798,53 @@ function TrackRecordPanel({ userId, onConnectClick }) {
           Nothing on the record yet.
         </div>
       )}
+    </div>
+  );
+}
+
+// Track Record v3, Task 4 -- welcome modal, replaces the old claim banner
+// entirely. One-time, styled like InviteGateScreen's own identity-confirm
+// step (same overlay/card pattern: opaque B.bg backdrop, centered white
+// card, owl logo) rather than an inline dismissible banner. Shown on
+// first post-claim visit; "seen" persists SERVER-SIDE (users.
+// track_record_welcomed), not localStorage -- see the trigger logic
+// (showWelcomeModal) at its call site for why that's a real robustness
+// improvement over the banner it replaces.
+function TrackRecordWelcomeModal({ scoredCount, gradedCount, onSeeTrackRecord, onDismiss }) {
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: B.bg, zIndex: 150,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: "20px",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: "18px", padding: "32px 26px",
+        maxWidth: "380px", width: "100%", textAlign: "center",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.12)", border: `1px solid ${B.border}`,
+        animation: "pp-slide 0.25s ease",
+      }}>
+        <img src="/owl-logo.png?v=3" alt="PreviewPanel"
+          style={{ height: "64px", width: "auto", margin: "0 auto 18px", display: "block" }} />
+        <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
+          Your track record is ready
+        </div>
+        <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px" }}>
+          We scored {scoredCount} of your posted TikToks and put our calls on the record — {gradedCount} graded so far.
+        </div>
+        <button onClick={onSeeTrackRecord} style={{
+          width: "100%", height: "50px", background: B.action, border: "none",
+          borderRadius: "10px", color: "#fff", fontSize: "15px", fontWeight: "800",
+          cursor: "pointer", fontFamily: "Montserrat, sans-serif", marginBottom: "10px",
+        }}>
+          See your track record
+        </button>
+        <button onClick={onDismiss} style={{
+          width: "100%", height: "50px", background: "#fff", border: `1.5px solid ${B.border}`,
+          borderRadius: "10px", color: B.brown, fontSize: "15px", fontWeight: "800",
+          cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+        }}>
+          Run a video first
+        </button>
+      </div>
     </div>
   );
 }
@@ -820,6 +937,26 @@ function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploa
       </div>
     </div>
   );
+}
+
+// Scroll-to-top, attempt 3 (Track Record v3, Task 6) -- the confirm->form
+// transition (InviteGateScreen's onBound) passed CC's own verification
+// twice already (attempt 1: single scrollTo(0,0) on gate close; attempt 2:
+// history.scrollRestoration = "manual" at mount) but still failed on
+// Josh's real iPhone twice. A single synchronous scrollTo call fires
+// before the gate modal has actually unmounted and before any late layout
+// shift from the newly-revealed form (e.g. images/fonts finishing layout,
+// the welcome modal mounting on top of it) -- iOS Safari can re-settle
+// scroll position after that point in a way desktop-width emulation in
+// this environment has never reproduced. Belt-and-suspenders: schedule a
+// rAF-timed scrollTo (fires after the current paint, once the unmount has
+// actually committed) AND a ~150ms delayed fallback (catches layout shifts
+// that land after even the next paint). Neither replaces the existing
+// synchronous call -- all three run.
+function scrollToTopRobust() {
+  window.scrollTo(0, 0);
+  requestAnimationFrame(() => window.scrollTo(0, 0));
+  setTimeout(() => window.scrollTo(0, 0), 150);
 }
 
 const OBJECTIVE_OPTIONS = [
@@ -923,12 +1060,13 @@ export default function PreviewPanel() {
   useEffect(() => {
     if (showHistory) logEvent(userId, historyTab === "trackrecord" ? "track_record_view" : "previews_view");
   }, [showHistory, historyTab, userId]);
-  // Beta UX polish v2, Task 3c -- day-one claim banner. Shown at most once
-  // ever per identity (localStorage TRACK_RECORD_BANNER_SEEN_KEY, set the
-  // moment it's first shown, not just on dismiss -- "the banner never
-  // returns after first view or dismiss").
-  const [showClaimBanner, setShowClaimBanner] = useState(false);
-  const [claimBannerCount, setClaimBannerCount] = useState(0);
+  // Track Record v3, Task 4 -- welcome modal (replaces the old claim
+  // banner entirely; see the modal component + trigger logic below,
+  // which reads trackRecordSummary.welcomeSeen -- a SERVER-persisted
+  // flag, not localStorage). welcomeModalDismissedLocally is just an
+  // immediate-hide optimization so the modal doesn't flash back on
+  // between clicking a button and the server confirming the write.
+  const [welcomeModalDismissedLocally, setWelcomeModalDismissedLocally] = useState(false);
   const [history, setHistory] = useState(loadHistory);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadProgressIndeterminate, setUploadProgressIndeterminate] = useState(false);
@@ -1663,35 +1801,51 @@ export default function PreviewPanel() {
           // scroll, so whatever scroll position was left over (e.g. from
           // a restored session) is still there once it closes. Land the
           // revealed submit screen at the top every time, not wherever
-          // the page happened to be scrolled to.
-          window.scrollTo(0, 0);
-          // Beta UX polish v2, Task 3c -- a "that's me" claim that attached
-          // >0 rows gets a one-time day-one spotlight banner. Refetch
-          // Track Record now (the redeem call already ran grading
-          // server-side, via the endpoint's own idempotent pass on this
-          // next load) so the banner's count is real, not stale.
-          //
-          // Bug fix (found live, Track Record v2 verification): the "seen"
-          // flag used to be set BEFORE confirming the fetch actually
-          // succeeded with a real count -- a transient failure or a grading
-          // race (gradedCallCount still 0 right at claim time) permanently
-          // suppressed the banner even though it was never shown. Now the
-          // flag is only set once there's an actual non-zero count to
-          // display; onBound only fires once per redemption, so there's no
-          // second chance for this specific tester, but a future claim
-          // won't silently lose its banner to the same race.
-          if (body?.claimed && body.claim?.claimedPostedVideos > 0 && !localStorage.getItem(TRACK_RECORD_BANNER_SEEN_KEY)) {
-            refreshTrackRecordSummary().then((json) => {
-              if (json?.gradedCallCount > 0) {
-                localStorage.setItem(TRACK_RECORD_BANNER_SEEN_KEY, "true");
-                setClaimBannerCount(json.gradedCallCount);
-                setShowClaimBanner(true);
-              }
-            });
-          } else {
-            refreshTrackRecordSummary();
-          }
+          // the page happened to be scrolled to. Scroll, attempt 3 --
+          // scrollToTopRobust (not a single scrollTo) to survive late
+          // layout shifts after the gate/modal actually unmounts.
+          scrollToTopRobust();
+          // Track Record v3, Task 4 -- the welcome modal replaces the old
+          // claim banner. No special-case trigger needed here anymore:
+          // refreshing the summary is enough -- the modal's visibility is
+          // DERIVED reactively (trackRecordSummary.welcomeSeen === false
+          // && trackRecordHasContent, see showWelcomeModal below), a
+          // server-persisted flag rather than a one-shot localStorage
+          // write. This is strictly more robust than the banner's old
+          // design: if THIS load somehow races (grading not caught up
+          // yet), the flag is still false server-side, so the very next
+          // normal refreshTrackRecordSummary() call (e.g. opening History)
+          // shows it instead -- there's no single "only chance" anymore.
+          refreshTrackRecordSummary();
         }} />
+      )}
+
+      {/* Track Record v3, Task 4 -- welcome modal. Shows once real content
+          exists (trackRecordHasContent) and the server flag hasn't been
+          set yet (welcomeSeen === false, not just falsy/undefined -- an
+          unresolved fetch or a no_handle/no_posts_yet response omits the
+          field entirely, which must NOT be treated as "unseen"). */}
+      {trackRecordHasContent && trackRecordSummary?.welcomeSeen === false && !welcomeModalDismissedLocally && (
+        <TrackRecordWelcomeModal
+          scoredCount={(trackRecordSummary.pending?.length || 0) + (trackRecordSummary.graded?.length || 0) + (trackRecordSummary.ungradedResolved?.length || 0)}
+          gradedCount={trackRecordSummary.graded?.length || 0}
+          onSeeTrackRecord={() => {
+            setWelcomeModalDismissedLocally(true);
+            fetch(`${API_BASE}/api/track-record/welcome-seen`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId }),
+            }).catch(() => {});
+            setShowHistory(true);
+            setHistoryTab("trackrecord");
+          }}
+          onDismiss={() => {
+            setWelcomeModalDismissedLocally(true);
+            fetch(`${API_BASE}/api/track-record/welcome-seen`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId }),
+            }).catch(() => {});
+          }}
+        />
       )}
 
       {/* Issue #4: Notification primer modal */}
@@ -1810,32 +1964,6 @@ export default function PreviewPanel() {
             {inviteStatus?.bound && inviteStatus.allowance != null && (
               <div style={{ textAlign: "center", fontSize: "11px", color: B.grey, marginTop: "9px" }}>
                 Beta allowance: {Math.max(0, inviteStatus.allowance - inviteStatus.used)} of {inviteStatus.allowance} left this month
-              </div>
-            )}
-
-            {/* Beta UX polish v2, Task 3c -- day-one claim banner. The
-                permanent path is the always-on History button (3a); this
-                is the one-time spotlight so a fresh "that's me" claim
-                doesn't rely on the tester noticing the button on their
-                own. Shown at most once ever (localStorage flag set the
-                moment it's first shown -- see the onBound handler above). */}
-            {showClaimBanner && (
-              <div style={{
-                background: B.lightBrown, border: `1.5px solid ${VALENCE.split}`, borderRadius: "12px",
-                padding: "12px 14px", marginTop: "12px",
-                display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px",
-              }}>
-                <div
-                  onClick={() => { setShowHistory(true); setHistoryTab("trackrecord"); setShowClaimBanner(false); }}
-                  style={{ fontSize: "13px", fontWeight: "700", color: B.black, cursor: "pointer", lineHeight: "1.4" }}
-                >
-                  Your track record is ready — {claimBannerCount} graded call{claimBannerCount === 1 ? "" : "s"} ·{" "}
-                  <span style={{ color: B.action, textDecoration: "underline" }}>View it</span>
-                </div>
-                <button onClick={() => setShowClaimBanner(false)} style={{
-                  background: "none", border: "none", fontSize: "16px", color: "#aaa",
-                  cursor: "pointer", flexShrink: 0, lineHeight: 1,
-                }}>×</button>
               </div>
             )}
 

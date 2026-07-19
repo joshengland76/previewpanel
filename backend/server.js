@@ -1027,6 +1027,14 @@ async function initDb() {
     // counts -- internal usage isn't tester engagement.
     await client.query(`ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS is_internal BOOLEAN DEFAULT false`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_internal BOOLEAN DEFAULT false`);
+    // Track Record v3, Task 4 -- welcome modal (replaces the old
+    // localStorage-only claim banner). Persisted SERVER-SIDE so it can
+    // never re-show after a browser-storage clear, and so a race that
+    // stops it showing on the very first post-claim load (the exact bug
+    // the old banner hit) just means the NEXT normal /api/track-record
+    // load shows it instead -- there's no single "only chance" the way
+    // the banner's one-shot onBound trigger had.
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS track_record_welcomed BOOLEAN DEFAULT false`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS beta_submission_events (
         id         BIGSERIAL PRIMARY KEY,
@@ -3575,8 +3583,18 @@ async function claimHandleHistory(userId, handle) {
 // Design constants -- single source, shared by the grading pass and the
 // /api/track-record endpoint below. Do not derive these differently
 // anywhere else.
-const CALL_STRONG_PCTILE = 70; // >= this overall percentile at grading time -> a "strong" call
-const CALL_WEAK_PCTILE = 30;   // <= this -> a "weak" call; the 30-70 middle is NO CALL (displayed, never graded as hit/miss)
+//
+// Track Record v3, Task 1 -- UNIFIED CALL SEMANTICS. strongPercentile/
+// weakPercentile are read from scoring/call_semantics.json, the single
+// shared constants module also read directly by generate_preview.py and
+// sync_study_history.py (Python, no research-repo import -- same "read
+// the app repo's own canonical file" convention as corpus_reference_
+// pool.json). Neither language hardcodes 70/30 anymore; both read the
+// same physical file, so the app's grading engine and the Performance
+// Preview PDF can never disagree about the threshold.
+const CALL_SEMANTICS = JSON.parse(fs.readFileSync(path.join(__dirname, "scoring", "call_semantics.json"), "utf8"));
+const CALL_STRONG_PCTILE = CALL_SEMANTICS.strongPercentile; // >= this percentile at grading time -> a "strong" call
+const CALL_WEAK_PCTILE = CALL_SEMANTICS.weakPercentile;     // <= this -> a "weak" call; the middle is NO CALL (displayed, never graded as hit/miss)
 const BASELINE_MIN = 4;        // a creator needs >= this many collected outcomes before ANY of their rows can be graded
 const AGGREGATE_MIN = 4;       // >= this many graded (hit|miss, excluding no_call) calls before the record line shows
 
@@ -3836,9 +3854,10 @@ app.get("/api/track-record", async (req, res) => {
   if (!userId) return res.json({ state: "no_handle", handle: null });
 
   try {
-    const { rows: userRows } = await pgPool.query(`SELECT tiktok_handle FROM users WHERE user_id = $1`, [userId]);
+    const { rows: userRows } = await pgPool.query(`SELECT tiktok_handle, track_record_welcomed FROM users WHERE user_id = $1`, [userId]);
     const handle = userRows[0]?.tiktok_handle || null;
     if (!handle) return res.json({ state: "no_handle", handle: null });
+    const welcomeSeen = !!userRows[0]?.track_record_welcomed;
 
     // Optional safety net (Task 2) -- idempotent, see claimHandleHistory.
     await claimHandleHistory(userId, handle);
@@ -3938,6 +3957,7 @@ app.get("/api/track-record", async (req, res) => {
       state, handle, pending, graded, ungradedResolved, aggregates,
       gradedCallCount: hitOrMiss.length, // hit|miss count regardless of the AGGREGATE_MIN gate -- feeds the sub-threshold "N calls on the books" copy
       unseenGradedCount, baselineMin: BASELINE_MIN, aggregateMin: AGGREGATE_MIN,
+      welcomeSeen, // Task 4 -- server-side welcome-modal flag; false here means the frontend should show it
     });
   } catch (err) {
     console.error(`[track-record] fetch failed for user_id=${userId}: ${err.message}`);
@@ -3967,6 +3987,24 @@ app.post("/api/event", async (req, res) => {
   } catch (err) {
     console.error(`[event] failed to log ${event} for user_id=${userId}: ${err.message}`);
     res.status(500).json({ error: "Failed to log event" });
+  }
+});
+
+// POST /api/track-record/welcome-seen { userId } -- Track Record v3,
+// Task 4. Marks the one-time welcome modal seen SERVER-SIDE (replaces the
+// old claim banner's localStorage-only flag) -- called once the modal is
+// dismissed via either button, never shown again after that regardless
+// of browser storage.
+app.post("/api/track-record/welcome-seen", async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  const userId = (req.body.userId || "").toString().trim();
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+  try {
+    await queryRW(`UPDATE users SET track_record_welcomed = true WHERE user_id = $1`, [userId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[track-record] failed to mark welcome seen for user_id=${userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to update" });
   }
 });
 

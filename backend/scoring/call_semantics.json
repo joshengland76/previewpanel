@@ -1,0 +1,5 @@
+{
+  "strongPercentile": 70,
+  "weakPercentile": 30,
+  "_comment": "Track Record v3, Task 1 -- single shared source of truth for the strong/weak call thresholds, consumed by BOTH the app's grading engine (server.js) and the Performance Preview PDF generator (generate_preview.py, validation/sync_study_history.py). A call is 'strong' at >= strongPercentile, 'weak' at <= weakPercentile, on whatever percentile basis the surface itself displays (overall pool for --overall/Track Record, niche pool for --study --objective). Never hardcode 70/30 anywhere else -- read this file."
+}

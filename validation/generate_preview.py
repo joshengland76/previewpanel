@@ -92,6 +92,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 BACKEND_SCORING = HERE.parent / "backend" / "scoring"
 TIERS_PATH = BACKEND_SCORING / "tiers_v2_2.json"
 CORPUS_PATH = BACKEND_SCORING / "corpus_reference_pool.json"
+CALL_SEMANTICS_PATH = BACKEND_SCORING / "call_semantics.json"
 RECRUITMENT_DIR = HERE.parent / "Recruitment"
 TEMPLATE_PATH = RECRUITMENT_DIR / "performance_preview_template.html"
 OOF_PARQUET = (
@@ -349,69 +350,55 @@ def size_section_a_window(videos_most_recent_first, max_rows=SECTION_A_MAX_ROWS)
     return videos_most_recent_first[:max_rows]
 
 
-def _topbottom_k(n):
-    """Single source of truth for 'how many rows count as top/bottom at
-    this n', shared by topbottom_metrics and mark_top_bottom_pills so the
-    hero sentence and the Section-A pills can never disagree about it.
-    n>=6 -> 3; n in {4,5} -> 2 (a k=3 read at n=5 would pull the
-    middle-ranked row into BOTH groups -- overlapping sets are worse than
-    a smaller honest split); n<4 -> None (not enough spread to say
-    anything about a top-vs-bottom split that isn't noise)."""
-    if n >= 6:
-        return 3
-    if n >= 4:
-        return 2
-    return None
+_call_semantics = json.loads(CALL_SEMANTICS_PATH.read_text())
+CALL_STRONG_PCTILE = _call_semantics["strongPercentile"]
+CALL_WEAK_PCTILE = _call_semantics["weakPercentile"]
 
 
-def mark_top_bottom_pills(section_a):
-    """Polish v3: replaces the old shown-set top-half/bottom-half
-    'CALLED IT?' rule with explicit TOP-N/BOTTOM-N pills -- same
-    self-relative philosophy (this says whether our RANKING of YOUR
-    videos called the direction right, not whether you're an
-    above-average creator against the pool -- the percentile pill already
-    answers that), just made concrete instead of implicit. Mutates each
-    row with pill_kind ('top'|'bottom'|None), pill_group (display label,
-    e.g. 'Top 3'), and pill_tick (True/False/None). TOP row: ✓ iff
-    result_x>=1.0 (a top-scored video that actually over-performed),
-    else ✗ (a top-scored video that under-performed -- a real miss).
-    BOTTOM row: ✓ iff result_x<1.0, else ✗. Middle (non-pill) rows get
-    neither a pill nor a mark -- their ranking wasn't confident enough to
-    be one of the panel's actual calls.
+def call_type_for(percentile):
+    """Track Record v3, Task 1 -- UNIFIED CALL SEMANTICS. Strong >=
+    CALL_STRONG_PCTILE, weak <= CALL_WEAK_PCTILE, on whatever percentile
+    basis THIS render already computed (niche pool for --study
+    --objective, overall pool for --overall) -- the identical threshold
+    rule server.js's grading engine applies to its own overall-pool
+    percentile (both read backend/scoring/call_semantics.json, never a
+    hardcoded 70/30). Middle = 'none', a no-call: displayed, never
+    counted as a call."""
+    if percentile is None:
+        return None
+    if percentile >= CALL_STRONG_PCTILE:
+        return "strong"
+    if percentile <= CALL_WEAK_PCTILE:
+        return "weak"
+    return "none"
 
-    Polish v5, Task 1: the top/bottom split itself now comes from
-    topbottom_metrics -- the SAME computation the adaptive hero sentence
-    and send-check verdict read -- rather than re-sorting/re-selecting
-    independently, so the pills and the hero/verdict can never disagree
-    about which rows are top/bottom or whether a call was right."""
+
+def mark_call_chips(section_a):
+    """Track Record v3, Task 1 -- replaces the old rank-based top-k/
+    bottom-k pills (mark_top_bottom_pills, retired) with the unified
+    percentile-threshold rule: every row's own call_type is a direct
+    function of ITS OWN percentile, never of how many other videos are
+    in this particular shown set. Mutates each row with call_type
+    ('strong'|'weak'|'none') and call_tick (True/False/None). strong:
+    tick iff result_x>=1.0 (a strong call that actually over-performed);
+    weak: tick iff result_x<1.0. 'none' rows get no tick -- a no-call,
+    never one of the panel's actual calls."""
     for v in section_a:
-        v["pill_kind"] = None
-        v["pill_group"] = None
-        v["pill_tick"] = None
-
-    metrics = topbottom_metrics(section_a)
-    if metrics is None:
-        return section_a
-
-    k = metrics["k"]
-    for v in metrics["top_rows"]:
-        v["pill_kind"] = "top"
-        v["pill_group"] = f"Top {k}"
-        v["pill_tick"] = v["result_x"] >= 1.0
-    for v in metrics["bottom_rows"]:
-        v["pill_kind"] = "bottom"
-        v["pill_group"] = f"Bottom {k}"
-        v["pill_tick"] = v["result_x"] < 1.0
+        v["call_type"] = call_type_for(v.get("percentile"))
+        v["call_tick"] = None
+        if v.get("result_x") is None or v["call_type"] in (None, "none"):
+            continue
+        v["call_tick"] = v["result_x"] >= 1.0 if v["call_type"] == "strong" else v["result_x"] < 1.0
     return section_a
 
 
 def score_section_a(videos, pool):
     """videos: dicts with prediction (raw ŷ) and wec_rate (real 30-day
     result) already populated. Adds percentile/pill/result_x, plus
-    pill_kind/pill_group/pill_tick via mark_top_bottom_pills. Median is
-    over THIS shown set, not the creator's full history. Pill is the
-    SHORT form (Polish v4, Task 1) -- mode/objective no longer needed
-    here, the scope now lives once in the column header subline."""
+    call_type/call_tick via mark_call_chips. Median is over THIS shown
+    set, not the creator's full history. Pill is the SHORT form (Polish
+    v4, Task 1) -- mode/objective no longer needed here, the scope now
+    lives once in the column header subline."""
     for v in videos:
         v["percentile"] = midrank_percentile(v["prediction"], pool)
         v["pill"] = pill_text_short(v["percentile"])
@@ -422,51 +409,52 @@ def score_section_a(videos, pool):
         v["result_x"] = (v["wec_rate"] / median_wec
                           if median_wec and v.get("wec_rate") is not None else None)
 
-    mark_top_bottom_pills(videos)
+    mark_call_chips(videos)
     return videos
 
 
-def topbottom_metrics(section_a_scored):
-    """Polish v5, Task 1 -- single source of truth for the top-N/bottom-N
-    split and everything derived from it, shared by mark_top_bottom_pills
-    (the row pills' kind/tick), the adaptive hero sentence, and the
-    send-check verdict -- none of them can ever disagree about which rows
-    count, whether a call was right, or the resulting averages, because
-    they all read from THIS one computation rather than each re-deriving
-    it independently. Supersedes the old hero_contrast (same tiering via
-    _topbottom_k, same 2*k<=n no-overlap guarantee), extended with the
-    calls-record fields Polish v5's adaptive hero/verdict need.
+def strong_weak_metrics(section_a_scored):
+    """Track Record v3, Task 1 -- single source of truth for the
+    strong/weak call split and everything derived from it, shared by
+    mark_call_chips (the row chips), the adaptive hero sentence, and the
+    send-check verdict -- none of them can ever disagree about which
+    rows are calls or whether a call was right, because they all read
+    from THIS one computation rather than each re-deriving it
+    independently. Supersedes topbottom_metrics's rank-based top-k/
+    bottom-k (retired) -- a row's call_type is now a direct function of
+    its own percentile (call_type_for), never of how many other videos
+    happen to be in this shown set.
 
-    n (usable = has a real result_x, i.e. a real 30-day result exists)
-    tiered via _topbottom_k -- same tiering mark_top_bottom_pills uses for
-    the Section-A pills. n<4 -> None, caller drops the contrast and leads
-    with the best-bet framing instead.
+    Needs >=2 strong AND >=2 weak calls to return real metrics (same
+    floor Track Record's own hero-averages gate uses in the app) --
+    below that, the contrast isn't reliable enough to report; caller
+    drops it and leads with best-bet framing instead, same as the old
+    n<4 guard's spirit, just keyed on actual call counts rather than
+    total usable rows (a set could have 8 usable rows and still fail
+    this floor if they're mostly 'none' calls in the middle).
 
     Returns None or a dict:
-      k                        -- 2 or 3, the N in "Top N / Bottom N"
-      top_rows / bottom_rows   -- the actual row dicts (exposed so
-        mark_top_bottom_pills doesn't re-sort/re-select independently)
-      top_avg / bottom_avg     -- mean result_x within each group
-      gap                      -- top_avg - bottom_avg
-      calls_correct            -- rows where the panel's call matched
-        (TOP: result_x>=1.0, BOTTOM: result_x<1.0), out of...
-      calls_total              -- 2*k
+      strong_rows / weak_rows   -- the actual row dicts
+      strong_avg / weak_avg     -- mean result_x within each group
+      gap                       -- strong_avg - weak_avg
+      calls_correct             -- rows where the panel's call matched
+        (strong: result_x>=1.0, weak: result_x<1.0), out of...
+      calls_total               -- len(strong_rows) + len(weak_rows)
+        (no longer fixed at 2*k -- strong/weak counts are independent
+        now, not a forced symmetric split)
     """
-    usable = [v for v in section_a_scored if v.get("result_x") is not None]
-    k = _topbottom_k(len(usable))
-    if k is None:
+    strong_rows = [v for v in section_a_scored if v.get("call_type") == "strong" and v.get("result_x") is not None]
+    weak_rows = [v for v in section_a_scored if v.get("call_type") == "weak" and v.get("result_x") is not None]
+    if len(strong_rows) < 2 or len(weak_rows) < 2:
         return None
-    by_score = sorted(usable, key=lambda v: v["prediction"], reverse=True)
-    top_rows = by_score[:k]
-    bottom_rows = by_score[-k:]
-    top_avg = statistics.mean(v["result_x"] for v in top_rows)
-    bottom_avg = statistics.mean(v["result_x"] for v in bottom_rows)
-    calls_correct = (sum(1 for v in top_rows if v["result_x"] >= 1.0)
-                     + sum(1 for v in bottom_rows if v["result_x"] < 1.0))
+    strong_avg = statistics.mean(v["result_x"] for v in strong_rows)
+    weak_avg = statistics.mean(v["result_x"] for v in weak_rows)
+    calls_correct = (sum(1 for v in strong_rows if v["result_x"] >= 1.0)
+                     + sum(1 for v in weak_rows if v["result_x"] < 1.0))
     return {
-        "k": k, "top_rows": top_rows, "bottom_rows": bottom_rows,
-        "top_avg": top_avg, "bottom_avg": bottom_avg, "gap": top_avg - bottom_avg,
-        "calls_correct": calls_correct, "calls_total": 2 * k,
+        "strong_rows": strong_rows, "weak_rows": weak_rows,
+        "strong_avg": strong_avg, "weak_avg": weak_avg, "gap": strong_avg - weak_avg,
+        "calls_correct": calls_correct, "calls_total": len(strong_rows) + len(weak_rows),
     }
 
 
@@ -493,28 +481,24 @@ def averages_tier(gap):
 
 
 def calls_tier(calls_correct, calls_total):
-    """Polish v5, Task 2 -- deterministic impressiveness tier from the
-    top/bottom CALLS record. Two separate scales depending on calls_total
-    (4 when k=2, 6 when k=3 -- the only two values _topbottom_k ever
-    produces, since calls_total == 2*k)."""
-    if calls_total == 6:
-        if calls_correct >= 5:
-            return 3
-        if calls_correct == 4:
-            return 2
-        if calls_correct == 3:
-            return 1
+    """Track Record v3, Task 1 -- deterministic impressiveness tier from
+    the strong/weak CALLS record. Generalized from the old fixed
+    4-total/6-total lookup tables (rank-based top-k/bottom-k could only
+    ever produce 2*k = 4 or 6) to a proportion-based scale, since the
+    unified strong/weak call count is no longer fixed at a symmetric
+    2*k -- a creator can have any number of strong calls and any number
+    of weak calls now, independently. Boundaries chosen so the old
+    fixed-total cases land on the identical tier they used to: 5/6=.83
+    and 4/4=1.0 -> 3; 4/6=.67 and 3/4=.75 -> 2; 3/6=.5 and 2/4=.5 -> 1."""
+    if calls_total <= 0:
         return 0
-    if calls_total == 4:
-        if calls_correct == 4:
-            return 3
-        if calls_correct == 3:
-            return 2
-        if calls_correct == 2:
-            return 1
-        return 0
-    # calls_total is always 4 or 6 in practice (2*k, k in {2,3}) -- degrade
-    # to the most conservative tier rather than raising if it somehow isn't.
+    ratio = calls_correct / calls_total
+    if ratio >= 0.8:
+        return 3
+    if ratio >= 0.65:
+        return 2
+    if ratio >= 0.5:
+        return 1
     return 0
 
 
@@ -550,7 +534,7 @@ def send_check_verdict(hero):
     tiers are 0 -- final, no override. N/A when hero is None (n<4, no
     contrast computed at all)."""
     if hero is None:
-        return "N/A", "fewer than 4 Section-A videos with a real result -- no contrast to check"
+        return "N/A", "fewer than 2 strong + 2 weak calls with a real result -- no contrast to check"
     avg_t = averages_tier(hero["gap"])
     call_t = calls_tier(hero["calls_correct"], hero["calls_total"])
     max_tier = max(avg_t, call_t)
@@ -560,7 +544,7 @@ def send_check_verdict(hero):
         verdict = "DO NOT SEND"
     else:
         verdict = "MIXED"
-    detail = (f"averages: top={hero['top_avg']:.2f}x bottom={hero['bottom_avg']:.2f}x "
+    detail = (f"averages: strong={hero['strong_avg']:.2f}x weak={hero['weak_avg']:.2f}x "
               f"gap={hero['gap']:+.2f}x (tier {avg_t}) | "
               f"calls: {hero['calls_correct']} of {hero['calls_total']} (tier {call_t}) | "
               f"max_tier={max_tier}")
@@ -1100,17 +1084,20 @@ def row_a_html(v):
     result_class = "up" if (v["result_x"] or 0) >= 1.0 else "down"
     result_text = f'{v["result_x"]:.1f}× <small>your typical</small>' if v.get("result_x") is not None else "—"
     pill = v.get("pill") or "—"
-    # Inline TOP/BOTTOM pill next to the percentile pill -- only on rows
-    # mark_top_bottom_pills actually placed in one of the two groups.
-    badge = f'<span class="pill-{v["pill_kind"]}">{v["pill_group"]}</span>' if v.get("pill_kind") else ""
-    # ✓/✗ ONLY on pill rows -- a miss renders as a real ✗ (var(--low)), not
-    # a near-invisible dash. Middle (non-pill) rows get an explicit small
-    # muted "no call" (Polish v4, Task 4) instead of a blank cell -- their
-    # ranking wasn't confident enough to be one of the panel's actual
+    # Track Record v3, Task 1 -- CALLED STRONG/CALLED WEAK chips (unified
+    # call semantics), inline next to the percentile pill -- only on rows
+    # mark_call_chips actually classified as strong or weak (never on a
+    # 'none' no-call row).
+    badge = (f'<span class="pill-{v["call_type"]}">CALLED {v["call_type"].upper()}</span>'
+             if v.get("call_type") in ("strong", "weak") else "")
+    # ✓/✗ ONLY on called rows -- a miss renders as a real ✗ (var(--low)),
+    # not a near-invisible dash. No-call rows get an explicit small muted
+    # "no call" (Polish v4, Task 4) instead of a blank cell -- their
+    # percentile wasn't extreme enough to be one of the panel's actual
     # calls, and that's worth saying rather than leaving unexplained.
-    if v.get("pill_tick") is None:
+    if v.get("call_tick") is None:
         mark_html = '<span class="no-call">no call</span>'
-    elif v["pill_tick"]:
+    elif v["call_tick"]:
         mark_html = '<span class="tick">✓</span>'
     else:
         mark_html = '<span class="miss">✗</span>'
@@ -1126,8 +1113,8 @@ def build_section_a_rows_html(section_a):
     """Polish v3: sorted by score descending (fixes the date-sort
     regression -- an earlier version left rows in the data-source
     adapters' date order, but the spec was always score-sort). No divider
-    row anymore -- the TOP/BOTTOM pills (row_a_html) mark the split
-    explicitly now, inline, so a separate hairline row would be
+    row anymore -- the CALLED STRONG/WEAK chips (row_a_html) mark the
+    split explicitly now, inline, so a separate hairline row would be
     redundant."""
     if not section_a:
         return '<tr><td colspan="5">No videos in this window yet.</td></tr>'
@@ -1182,26 +1169,31 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     # send-check log can never describe two different sentences.
     hero_form = pick_hero_form(hero, strongest)
     if hero_form == "averages":
-        word = {2: "2", 3: "3"}[hero["k"]]
+        # Track Record v3, Task 1 -- unified call semantics: "highest/
+        # lowest-rated" (rank-based, implied a fixed k-and-k split) is
+        # retired in favor of "called strong/weak" (percentile-threshold-
+        # based, counts can be asymmetric now -- e.g. 7 strong + 2 weak).
         thesis_h1 = (
             f'{opening} '
-            f'Your <b>{word} highest-rated</b> averaged <b class="up">{hero["top_avg"]:.1f}×</b> your typical engagement. '
-            f'Your <b>{word} lowest-rated</b> averaged <b class="down">{hero["bottom_avg"]:.1f}×</b>.'
+            f'The videos we called strong averaged <b class="up">{hero["strong_avg"]:.1f}×</b> your typical engagement. '
+            f'The ones we called weak averaged <b class="down">{hero["weak_avg"]:.1f}×</b>.'
         )
     elif hero_form == "calls":
         # Calls form: leads with the panel's hit rate instead of the raw
         # averages -- picked over averages when the CALLS tier outranks
-        # the AVERAGES tier (see pick_hero_form). Bold "C of 2N"; green
-        # only when the hit rate clears 2/3, same bar as an easy pass on a
-        # 6-call board would be a real accomplishment (>=.67), not a bare
-        # majority.
-        word = {2: "2", 3: "3"}[hero["k"]]
+        # the AVERAGES tier (see pick_hero_form). Bold "C of N"; green
+        # only when the hit rate clears 2/3, same bar as before. Wording
+        # updated alongside the averages form above: "highest-/lowest-
+        # rated" implied a fixed, symmetric k-and-k count that no longer
+        # holds under unified call semantics (strong/weak counts are
+        # independent now) -- "strong- and weak-scored" is accurate for
+        # any split.
         ratio = hero["calls_correct"] / hero["calls_total"]
         calls_b = (f'<b class="up">{hero["calls_correct"]} of {hero["calls_total"]}</b>' if ratio >= 0.67
                    else f'<b>{hero["calls_correct"]} of {hero["calls_total"]}</b>')
         thesis_h1 = (
             f'{opening} '
-            f'We made calls on your {word} highest- and {word} lowest-rated — and got {calls_b} right.'
+            f'We made calls on your strong- and weak-scored videos — and got {calls_b} right.'
         )
     elif hero_form == "neutral":
         # Neither the averages gap nor the calls record clears even the
@@ -1211,7 +1203,7 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     elif hero_form == "best_bet":
         # Hero-contrast guard: fewer than 4 Section-A rows with a real
         # result isn't enough spread for an honest top-vs-bottom split
-        # (see pick_hero_form/topbottom_metrics) -- lead with the best bet
+        # (see pick_hero_form/strong_weak_metrics) -- lead with the best bet
         # instead of forcing a noisy contrast.
         thesis_h1 = (
             f'{opening} '
@@ -1420,7 +1412,7 @@ def main():
     if len(section_a) < SECTION_A_MAX_ROWS:
         print(f"[generate_preview] NOTE: only {len(section_a)}/{SECTION_A_MAX_ROWS} Section-A videos exist "
               f"within this mode's lookback window -- rendering what exists, not padding or erroring.")
-    hero = topbottom_metrics(section_a)
+    hero = strong_weak_metrics(section_a)
     insight = insight_line(section_a + section_b)
     # Polish v3, Tasks 2-3: "Section-A start date" is the single date both
     # the meta line and the dynamic hero sentence hang off of -- the

@@ -34,17 +34,24 @@ skipped, never duplicated or overwritten.
 
 Usage: ./_venv/bin/python3 sync_study_history.py <handle>
 """
+import json
 import sys
 
 import psycopg2.extras
 
 from generate_preview import (
-    DB, AGED_MIN_DAYS, load_corpus_rows, fetch_live_pool_rows, build_pools,
-    midrank_percentile, creator_research_video_ids, load_oof_predictions,
+    DB, BACKEND_SCORING, AGED_MIN_DAYS, load_corpus_rows, fetch_live_pool_rows,
+    build_pools, midrank_percentile, creator_research_video_ids, load_oof_predictions,
 )
 
-CALL_STRONG_PCTILE = 70
-CALL_WEAK_PCTILE = 30
+# Track Record v3, Task 1 -- UNIFIED CALL SEMANTICS. Read from the same
+# shared constants module server.js and generate_preview.py both read
+# (backend/scoring/call_semantics.json) -- no hardcoded 70/30 here
+# anymore, so this script's synthesized rows can never disagree with the
+# live app's grading engine or the PDF about the threshold.
+_call_semantics = json.loads((BACKEND_SCORING / "call_semantics.json").read_text())
+CALL_STRONG_PCTILE = _call_semantics["strongPercentile"]
+CALL_WEAK_PCTILE = _call_semantics["weakPercentile"]
 
 
 def clamp_percentile(p):
