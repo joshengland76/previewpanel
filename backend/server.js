@@ -3584,19 +3584,56 @@ async function claimHandleHistory(userId, handle) {
 // /api/track-record endpoint below. Do not derive these differently
 // anywhere else.
 //
-// Track Record v3, Task 1 -- UNIFIED CALL SEMANTICS. strongPercentile/
-// weakPercentile are read from scoring/call_semantics.json, the single
-// shared constants module also read directly by generate_preview.py and
-// sync_study_history.py (Python, no research-repo import -- same "read
-// the app repo's own canonical file" convention as corpus_reference_
-// pool.json). Neither language hardcodes 70/30 anymore; both read the
-// same physical file, so the app's grading engine and the Performance
-// Preview PDF can never disagree about the threshold.
+// Track Record v4 -- RANK-BASED CALL SEMANTICS (supersedes v3's percentile
+// threshold). scoring/call_semantics.json is the single shared module read
+// by BOTH this grading pass and generate_preview.py (Python, no research-repo
+// import -- same "read the app repo's own canonical file" convention as
+// corpus_reference_pool.json). A "call" is the TOP k / BOTTOM k of the
+// creator's graded window ranked by prediction; k comes from sizeTiers by
+// the graded count. Both surfaces read the same tiers, so they can never
+// disagree about how many rows count as top/bottom.
 const CALL_SEMANTICS = JSON.parse(fs.readFileSync(path.join(__dirname, "scoring", "call_semantics.json"), "utf8"));
-const CALL_STRONG_PCTILE = CALL_SEMANTICS.strongPercentile; // >= this percentile at grading time -> a "strong" call
-const CALL_WEAK_PCTILE = CALL_SEMANTICS.weakPercentile;     // <= this -> a "weak" call; the middle is NO CALL (displayed, never graded as hit/miss)
+const CALL_SIZE_TIERS = CALL_SEMANTICS.sizeTiers; // [{minGraded,k}], evaluated largest-minGraded first
 const BASELINE_MIN = 4;        // a creator needs >= this many collected outcomes before ANY of their rows can be graded
 const AGGREGATE_MIN = 4;       // >= this many graded (hit|miss, excluding no_call) calls before the record line shows
+
+// topBottomK(n) -- how many rows count as top/bottom at this graded-count n,
+// straight from the shared sizeTiers (mirrors generate_preview.py's
+// _topbottom_k). n>=6 -> 3; n in {4,5} -> 2; n<4 -> null (no calls).
+function topBottomK(n) {
+  for (const t of [...CALL_SIZE_TIERS].sort((a, b) => b.minGraded - a.minGraded)) {
+    if (n >= t.minGraded) return t.k;
+  }
+  return null;
+}
+
+// assignRankCalls(rows) -- the shared RANK rule. `rows` each need
+// { prediction, postedAt, id, timesTypical }. Ranks by prediction DESC with a
+// deterministic tie-break (posted_at DESC, then id DESC -- identical to the
+// PDF's), takes the TOP k as 'strong' calls and the BOTTOM k as 'weak', the
+// rest 'none'. Verdict from the frozen result: strong hits iff
+// timesTypical>=1.0, weak hits iff <1.0, none -> 'no_call'. Returns a Map
+// id -> { callType, verdict }. Pure -- the caller persists it.
+function assignRankCalls(rows) {
+  const k = topBottomK(rows.length);
+  const ranked = [...rows].sort((a, b) =>
+    (b.prediction - a.prediction) ||
+    (new Date(b.postedAt) - new Date(a.postedAt)) ||
+    (b.id - a.id));
+  const out = new Map();
+  ranked.forEach((r, i) => {
+    let callType = "none";
+    if (k != null) {
+      if (i < k) callType = "strong";
+      else if (i >= ranked.length - k) callType = "weak";
+    }
+    const verdict = callType === "none" ? "no_call"
+      : callType === "strong" ? (r.timesTypical >= 1.0 ? "hit" : "miss")
+      : (r.timesTypical < 1.0 ? "hit" : "miss");
+    out.set(r.id, { callType, verdict });
+  });
+  return out;
+}
 
 // gradeTrackRecordForUser(userId) -- idempotent, safe to call on every tab
 // load (the /api/track-record call site below) and after the day-30
@@ -3624,7 +3661,8 @@ async function gradeTrackRecordForUser(userId) {
     // a later row's baseline the same as it always did -- freezing a
     // VERDICT doesn't remove that row's WEC_rate from the shared pool.
     const { rows: outcomeRows } = await pgPool.query(
-      `SELECT id, day30_wec_rate, verdict, y_pred, call_type, overall_percentile_at_grading FROM posted_videos
+      `SELECT id, posted_at, day30_wec_rate, y_pred, times_typical, call_type, verdict,
+              overall_percentile_at_grading FROM posted_videos
        WHERE user_id = $1 AND status = 'day30_collected' AND day30_wec_rate IS NOT NULL
          AND test_row IS NOT TRUE`,
       [userId]
@@ -3637,65 +3675,54 @@ async function gradeTrackRecordForUser(userId) {
     const typical = sortedRates.length % 2 === 0
       ? (sortedRates[mid - 1] + sortedRates[mid]) / 2
       : sortedRates[mid];
+    if (!(typical > 0)) return; // degenerate creator baseline -- nothing gradeable yet
 
-    const ungraded = outcomeRows.filter((r) => r.verdict == null);
-    if (ungraded.length === 0 || !(typical > 0)) return; // typical=0 -- degenerate creator baseline, nothing gradeable yet
-
-    // Same live overall window every other percentile display in the app
-    // reads (percentilePools.js, TTL-cached) -- a posted-video row was
-    // never itself a member of this pool (is_posted_video excludes it from
-    // fetchShadowRows), so no excludeKey/self-exclusion is needed the way
-    // scoreDisplay.js needs one for a live app submission ranking itself.
-    // Only fetched lazily (below) if at least one ungraded row actually
-    // needs it -- a study-history sync already pre-computed both fields
-    // for every row it wrote, so an all-study-history batch never touches
-    // this at all.
+    // STEP 1 -- freeze the RESULT. times_typical (30-day result / creator
+    // median) and the pill's overall percentile are frozen ONCE, the first
+    // time a row is gradeable, and never recomputed -- this is the freeze
+    // that survives v4 (the RESULT is frozen; the CALL re-ranks in step 2).
+    // times_typical uses the median AS OF this moment; overall_percentile is
+    // the row's own overall-pool rank (sync_study_history.py pre-computes it
+    // at sync time -- reused when present, per its at-sync-time-pool note).
+    // A row whose judging never produced a usable y_pred can't be ranked or
+    // graded and is left untouched (surfaces as ungradedResolved).
     let pools = null;
-
-    for (const row of ungraded) {
-      // Track Record, Task 3b -- validation/sync_study_history.py
-      // pre-computes call_type + overall_percentile_at_grading at SYNC
-      // time (its own Python port of this exact pool math, self-excluding
-      // the creator, same as generate_preview.py --study's Section A) for
-      // any row it writes, so this grading pass does NOT recompute or
-      // overwrite them here -- it only derives times_typical/verdict from
-      // whatever's already stored. Recomputing against THIS pool (live,
-      // right now) instead of using the sync-time value would silently
-      // discard the "at sync time" pool the sync script's own comment
-      // documents as its honest limitation, and would disagree with
-      // whatever a --study/--prospect PDF rendered for the same video.
+    for (const row of outcomeRows) {
+      if (row.times_typical != null) continue; // result already frozen
+      if (row.y_pred == null) continue;         // no prediction -- ungradeable
       let overallPercentile = row.overall_percentile_at_grading;
-      let callType = row.call_type;
-      if (overallPercentile == null || callType == null) {
-        // posted_videos.y_pred is written from the exact same shadowResult.
-        // prediction value at ingest time (see the /api/validation/ingest
-        // write-back) -- reading it directly here means grading has no
-        // dependency on the shadow_scores row surviving (it's a separate
-        // table with its own lifecycle; this row is the one Track Record
-        // actually owns and displays).
-        const prediction = row.y_pred;
-        if (prediction == null) continue; // judging never produced a usable prediction for this row -- can't grade it
+      if (overallPercentile == null) {
         if (!pools) pools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
-        // Track Record v2, Task 3c -- clamped once here, at computation
-        // (same convention scoreDisplayCopy.js's own clampPercentile
-        // comment documents: every consumer then sees an already-clamped
-        // value, never a raw 0/100 to format defensively). Clamping only
-        // touches the extreme ends (0->1, 100->99) so it can never flip
-        // the >=70/<=30 call-type classification below.
-        overallPercentile = clampPercentile(midrankPercentile(prediction, pools.overall));
-        callType = overallPercentile >= CALL_STRONG_PCTILE ? "strong"
-          : overallPercentile <= CALL_WEAK_PCTILE ? "weak" : "none";
+        overallPercentile = clampPercentile(midrankPercentile(row.y_pred, pools.overall));
       }
       const timesTypical = row.day30_wec_rate / typical;
-      const verdict = callType === "none" ? "no_call"
-        : callType === "strong" ? (timesTypical >= 1.0 ? "hit" : "miss")
-        : (timesTypical < 1.0 ? "hit" : "miss");
-
       await queryRW(
-        `UPDATE posted_videos SET call_type = $1, times_typical = $2, verdict = $3, graded_at = now(),
-           baseline_n_at_grading = $4, overall_percentile_at_grading = $5
-         WHERE id = $6 AND verdict IS NULL`,
-        [callType, timesTypical, verdict, baselineN, overallPercentile, row.id]
+        `UPDATE posted_videos SET times_typical = $1, graded_at = now(),
+           baseline_n_at_grading = $2, overall_percentile_at_grading = $3
+         WHERE id = $4 AND times_typical IS NULL`,
+        [timesTypical, baselineN, overallPercentile, row.id]
+      );
+      row.times_typical = timesTypical; // reflect for the ranking step below
+    }
+
+    // STEP 2 -- RANK. Every result-frozen row is (re-)classified TOP k /
+    // BOTTOM k / none over the CURRENT graded window via the shared rank
+    // rule (assignRankCalls). call_type + verdict are a denormalized cache
+    // of this live ranking -- rewritten each pass (NOT frozen; the RESULT
+    // is). This keeps the tab's three sections + "N of M" hero consistent as
+    // the window grows, and identical to the PDF's Section A. Existing rows
+    // carried over from the v3 threshold rule are re-ranked here on the very
+    // first tab load (the semantics migration also does it eagerly).
+    const gradable = outcomeRows.filter((r) => r.times_typical != null && r.y_pred != null);
+    const calls = assignRankCalls(gradable.map((r) => ({
+      id: r.id, prediction: r.y_pred, postedAt: r.posted_at, timesTypical: r.times_typical,
+    })));
+    for (const row of gradable) {
+      const c = calls.get(row.id);
+      if (!c || (row.call_type === c.callType && row.verdict === c.verdict)) continue; // no-op
+      await queryRW(
+        `UPDATE posted_videos SET call_type = $1, verdict = $2 WHERE id = $3`,
+        [c.callType, c.verdict, row.id]
       );
     }
   } catch (err) {
@@ -3831,7 +3858,15 @@ app.post("/api/invite/redeem", async (req, res) => {
     } else {
       console.log(`[invite] redeemed code=${code} user_id=${userId}`);
     }
-    res.json({ ok: true, code, alreadyBound: false, claimed: !!(isPreLinked && claimIdentity), claim: claimResult });
+    // Track Record v4, Task 2a -- welcome-modal TIMING. Tell the client, ON
+    // THE REDEMPTION RESPONSE, whether the just-claimed identity has content
+    // that warrants the one-time welcome modal, so it can render the instant
+    // identity is confirmed with NO track-record fetch to wait on (the async
+    // fetch is exactly what let the form flash before the modal appeared).
+    // A fresh redemption's user is always track_record_welcomed=false, so
+    // "needed" reduces to "the claim gave them at least one posted video."
+    const welcomeNeeded = !!(isPreLinked && claimIdentity && claimResult && claimResult.claimedPostedVideos > 0);
+    res.json({ ok: true, code, alreadyBound: false, claimed: !!(isPreLinked && claimIdentity), claim: claimResult, welcomeNeeded });
   } catch (err) {
     console.error(`[invite] redeem failed for user_id=${userId} code=${code}: ${err.message}`);
     res.status(500).json({ error: "Failed to redeem code" });
@@ -3906,6 +3941,7 @@ app.get("/api/track-record", async (req, res) => {
       timesTypical: r.times_typical,
       verdict: r.verdict,
       overallPercentile: r.overall_percentile_at_grading,
+      prediction: r.y_pred, // v4 -- the rank basis; the frontend sorts each section by it (score-descending)
       gradedAt: r.graded_at,
       previewed: r.match_tier != null && r.match_tier <= 2,
     }));
@@ -3928,9 +3964,13 @@ app.get("/api/track-record", async (req, res) => {
       const strong = graded.filter((g) => g.callType === "strong" && (g.verdict === "hit" || g.verdict === "miss"));
       const weak = graded.filter((g) => g.callType === "weak" && (g.verdict === "hit" || g.verdict === "miss"));
       const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b.timesTypical, 0) / arr.length : null;
+      // v4 hero window -- min/max posted date over the whole graded set (the
+      // videos shown across all three sections), UTC per the declared date
+      // basis; the frontend renders it short-form.
+      const gradedTimes = graded.map((g) => new Date(g.postedAt).getTime()).filter((t) => !isNaN(t));
       aggregates = {
         hits: hitOrMiss.filter((g) => g.verdict === "hit").length,
-        graded: hitOrMiss.length,
+        graded: hitOrMiss.length, // v4: = the number of CALLS (strong+weak); a rank call is always hit|miss, never no_call
         // Track Record v2, Task 3d -- counts (not just averages) so the
         // frontend can gate the averages sub-stat on >=2 of EACH type,
         // not just the combined AGGREGATE_MIN.
@@ -3938,6 +3978,8 @@ app.get("/api/track-record", async (req, res) => {
         weakCount: weak.length,
         avgTimesTypicalStrong: avg(strong),
         avgTimesTypicalWeak: avg(weak),
+        windowStart: gradedTimes.length ? new Date(Math.min(...gradedTimes)).toISOString() : null,
+        windowEnd: gradedTimes.length ? new Date(Math.max(...gradedTimes)).toISOString() : null,
       };
     }
 

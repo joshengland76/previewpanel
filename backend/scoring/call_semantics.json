@@ -1,5 +1,9 @@
 {
-  "strongPercentile": 70,
-  "weakPercentile": 30,
-  "_comment": "Track Record v3, Task 1 -- single shared source of truth for the strong/weak call thresholds, consumed by BOTH the app's grading engine (server.js) and the Performance Preview PDF generator (generate_preview.py, validation/sync_study_history.py). A call is 'strong' at >= strongPercentile, 'weak' at <= weakPercentile, on whatever percentile basis the surface itself displays (overall pool for --overall/Track Record, niche pool for --study --objective). Never hardcode 70/30 anywhere else -- read this file."
+  "version": 2,
+  "rule": "rank-top-bottom",
+  "sizeTiers": [
+    { "minGraded": 6, "k": 3 },
+    { "minGraded": 4, "k": 2 }
+  ],
+  "_comment": "Track Record v4 -- RANK-based call semantics. SUPERSEDES the v3 percentile-threshold rule (the old strongPercentile/weakPercentile 70/30, removed). A 'call' is the TOP k / BOTTOM k of the creator's graded window, ranked by stored prediction (y_pred) DESCENDING, with a deterministic tie-break: posted_at DESC, then id DESC (so both surfaces rank identically). k comes from sizeTiers by the graded-row count: n>=6 -> k=3, n in {4,5} -> k=2, n<4 -> no calls at all (drop -- not enough spread). The TOP-k rows are 'strong' calls, the BOTTOM-k are 'weak' calls, everything in between is 'none' (a no-call: displayed, never scored hit/miss). Verdict from the frozen 30-day result (times_typical = result / creator-median): a STRONG call is a hit iff times_typical >= 1.0, a WEAK call is a hit iff times_typical < 1.0. This module is the single shared source consumed by BOTH server.js's Track Record grading pass (which writes call_type/verdict as a denormalized cache of this live ranking -- see gradeTrackRecordForUser) and generate_preview.py's PDF Section A (mark_call_chips / strong_weak_metrics). Because the call is a RANK over the creator's own graded set, it is NOT a frozen per-row property: it re-ranks as the set grows (times_typical, the RESULT, stays frozen once written). A row's own overall-pool percentile is a SEPARATE display (the pill) and is not the call basis. Never hardcode the tiers anywhere else -- read this file. See TRACK_RECORD_V4_READOUT.md for the semantics migration."
 }

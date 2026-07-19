@@ -417,24 +417,27 @@ changes. Sentence 2 picks whichever of two forms is more impressive,
 tiered 0–3 on each (see `generate_preview.py`'s `averages_tier`/
 `calls_tier` for the exact boundaries) — a tie goes to the **averages**
 form (more visceral), except when both are tier 0, which gets a neutral
-line instead of a fabricated boast. Track Record v3, Task 1: unified
-call semantics replaced the old rank-based "highest-/lowest-rated"
-wording (which implied a fixed, symmetric N-and-N split) with
-percentile-threshold "called strong/weak" wording, since strong/weak
-counts are independent now and can be asymmetric (e.g. 7 strong + 2
-weak):
+line instead of a fabricated boast. Track Record v4: RANK-based call
+semantics — the "calls" are the **TOP k / BOTTOM k of the shown set**
+(`k` from `_topbottom_k`: n≥6→3, {4,5}→2, n<4→none), and the wording is
+the rank language the app tab uses:
 
-- **Averages form**: `"The videos we called strong averaged X× your
-  typical engagement. The ones we called weak averaged Y×."`
-- **Calls form**: `"We made calls on your strong- and weak-scored
-  videos — and got C of N right."` (bold; green only when C/N ≥ .67)
+- **Averages form**: `"The videos we predicted would be strongest
+  averaged X× your typical engagement. Those we predicted would be
+  weakest averaged Y×."` (X/Y = mean ×typical of the TOP-k / BOTTOM-k
+  groups)
+- **Calls form**: `"We predicted which of your videos would land
+  strongest and weakest — and called C of N right."` (bold; green only
+  when C/N ≥ .67)
 - **Neutral form** (both tiers 0): `"Every call — hit and miss — is in
   the table below."`
 
-This is the exact same vocabulary and threshold rule (strong ≥ 70th
-percentile, weak ≤ 30th) the live app's own Track Record tab uses —
-both read `backend/scoring/call_semantics.json`, so the document and
-the in-app tab can never disagree about what counts as a call.
+The Section-A pills are **TOP k / BOTTOM k** (green/rust tints) — these
+ARE the calls. The in-app Track Record tab shows the same underlying rank
+calls but labels the row chips CALLED STRONG / CALLED WEAK (different
+surface label, same rank; both read `call_semantics.json`'s tiers, so the
+document and the tab can never disagree about how many rows count as
+top/bottom or which ones they are).
 
 The console SEND-CHECK line always names which form rendered
 (`hero form: averages|calls|neutral|best_bet|pending`) so this never has

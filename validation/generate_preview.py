@@ -364,44 +364,58 @@ def size_section_a_window(videos_most_recent_first, max_rows=SECTION_A_MAX_ROWS)
 
 
 _call_semantics = json.loads(CALL_SEMANTICS_PATH.read_text())
-CALL_STRONG_PCTILE = _call_semantics["strongPercentile"]
-CALL_WEAK_PCTILE = _call_semantics["weakPercentile"]
+CALL_SIZE_TIERS = _call_semantics["sizeTiers"]  # [{minGraded,k}], largest minGraded first
 
 
-def call_type_for(percentile):
-    """Track Record v3, Task 1 -- UNIFIED CALL SEMANTICS. Strong >=
-    CALL_STRONG_PCTILE, weak <= CALL_WEAK_PCTILE, on whatever percentile
-    basis THIS render already computed (niche pool for --study
-    --objective, overall pool for --overall) -- the identical threshold
-    rule server.js's grading engine applies to its own overall-pool
-    percentile (both read backend/scoring/call_semantics.json, never a
-    hardcoded 70/30). Middle = 'none', a no-call: displayed, never
-    counted as a call."""
-    if percentile is None:
-        return None
-    if percentile >= CALL_STRONG_PCTILE:
-        return "strong"
-    if percentile <= CALL_WEAK_PCTILE:
-        return "weak"
-    return "none"
+def _topbottom_k(n):
+    """Track Record v4 -- RANK-based call semantics. How many rows count as
+    top/bottom at this shown-set size n, read from the shared sizeTiers
+    (backend/scoring/call_semantics.json) so this and server.js's own
+    topBottomK() can never disagree. n>=6 -> 3; n in {4,5} -> 2; n<4 ->
+    None (not enough spread to call a top-vs-bottom split that isn't
+    noise). A k=3 read at n=5 would pull the middle-ranked row into BOTH
+    groups -- 2*k<=n holds at every tier, so the groups never overlap."""
+    for t in sorted(CALL_SIZE_TIERS, key=lambda t: -t["minGraded"]):
+        if n >= t["minGraded"]:
+            return t["k"]
+    return None
 
 
 def mark_call_chips(section_a):
-    """Track Record v3, Task 1 -- replaces the old rank-based top-k/
-    bottom-k pills (mark_top_bottom_pills, retired) with the unified
-    percentile-threshold rule: every row's own call_type is a direct
-    function of ITS OWN percentile, never of how many other videos are
-    in this particular shown set. Mutates each row with call_type
-    ('strong'|'weak'|'none') and call_tick (True/False/None). strong:
-    tick iff result_x>=1.0 (a strong call that actually over-performed);
-    weak: tick iff result_x<1.0. 'none' rows get no tick -- a no-call,
-    never one of the panel's actual calls."""
+    """Track Record v4 -- RANK-based calls (supersedes v3's per-row
+    percentile threshold). A 'call' is the TOP k / BOTTOM k of THIS shown
+    set, ranked by prediction DESC with the shared deterministic tie-break
+    (posted_at DESC, then id DESC). Mutates each row with call_type
+    ('strong'=top-k | 'weak'=bottom-k | 'none'=middle), call_label
+    ('TOP {k}' / 'BOTTOM {k}' / None -- the PDF pill text), and call_tick
+    (True/False/None). strong: tick iff result_x>=1.0 (a top-ranked video
+    that actually over-performed); weak: tick iff result_x<1.0. Identical
+    rule to server.js assignRankCalls -- same k, same ordering."""
     for v in section_a:
-        v["call_type"] = call_type_for(v.get("percentile"))
+        v["call_type"] = "none"
+        v["call_label"] = None
         v["call_tick"] = None
-        if v.get("result_x") is None or v["call_type"] in (None, "none"):
-            continue
-        v["call_tick"] = v["result_x"] >= 1.0 if v["call_type"] == "strong" else v["result_x"] < 1.0
+    k = _topbottom_k(len(section_a))
+    if k is None:
+        return section_a
+    def _pa(d):  # posted_at -> float epoch seconds (avoids tz-aware/naive compare + None)
+        try:
+            return d.timestamp()
+        except (AttributeError, ValueError, OSError):
+            return 0.0
+    ranked = sorted(
+        section_a,
+        key=lambda v: (v.get("prediction") if v.get("prediction") is not None else float("-inf"),
+                       _pa(v.get("posted_at")), v.get("id") or 0),
+        reverse=True,
+    )
+    for i, v in enumerate(ranked):
+        if i < k:
+            v["call_type"], v["call_label"] = "strong", f"TOP {k}"
+        elif i >= len(ranked) - k:
+            v["call_type"], v["call_label"] = "weak", f"BOTTOM {k}"
+        if v["call_type"] != "none" and v.get("result_x") is not None:
+            v["call_tick"] = v["result_x"] >= 1.0 if v["call_type"] == "strong" else v["result_x"] < 1.0
     return section_a
 
 
@@ -427,34 +441,22 @@ def score_section_a(videos, pool):
 
 
 def strong_weak_metrics(section_a_scored):
-    """Track Record v3, Task 1 -- single source of truth for the
-    strong/weak call split and everything derived from it, shared by
-    mark_call_chips (the row chips), the adaptive hero sentence, and the
-    send-check verdict -- none of them can ever disagree about which
-    rows are calls or whether a call was right, because they all read
-    from THIS one computation rather than each re-deriving it
-    independently. Supersedes topbottom_metrics's rank-based top-k/
-    bottom-k (retired) -- a row's call_type is now a direct function of
-    its own percentile (call_type_for), never of how many other videos
-    happen to be in this shown set.
-
-    Needs >=2 strong AND >=2 weak calls to return real metrics (same
-    floor Track Record's own hero-averages gate uses in the app) --
-    below that, the contrast isn't reliable enough to report; caller
-    drops it and leads with best-bet framing instead, same as the old
-    n<4 guard's spirit, just keyed on actual call counts rather than
-    total usable rows (a set could have 8 usable rows and still fail
-    this floor if they're mostly 'none' calls in the middle).
+    """Track Record v4 -- metrics over the RANK call groups, shared by the
+    adaptive hero sentence and the send-check verdict so they can never
+    disagree with the row pills (all read mark_call_chips's call_type).
+    strong_rows = the TOP-k group, weak_rows = the BOTTOM-k group (with a
+    real result). Under the rank rule these are symmetric (k each) whenever
+    k is not None; the >=2-each floor below is therefore equivalent to
+    "k>=2" (n>=4), just expressed defensively in case a top/bottom row is
+    missing its result_x.
 
     Returns None or a dict:
-      strong_rows / weak_rows   -- the actual row dicts
+      strong_rows / weak_rows   -- the actual row dicts (top-k / bottom-k)
       strong_avg / weak_avg     -- mean result_x within each group
       gap                       -- strong_avg - weak_avg
-      calls_correct             -- rows where the panel's call matched
+      calls_correct             -- rows where the call matched
         (strong: result_x>=1.0, weak: result_x<1.0), out of...
       calls_total               -- len(strong_rows) + len(weak_rows)
-        (no longer fixed at 2*k -- strong/weak counts are independent
-        now, not a forced symmetric split)
     """
     strong_rows = [v for v in section_a_scored if v.get("call_type") == "strong" and v.get("result_x") is not None]
     weak_rows = [v for v in section_a_scored if v.get("call_type") == "weak" and v.get("result_x") is not None]
@@ -1146,12 +1148,14 @@ def row_a_html(v):
     result_class = "up" if (v["result_x"] or 0) >= 1.0 else "down"
     result_text = f'{v["result_x"]:.1f}× <small>your typical</small>' if v.get("result_x") is not None else "—"
     pill = v.get("pill") or "—"
-    # Track Record v3, Task 1 -- CALLED STRONG/CALLED WEAK chips (unified
-    # call semantics), inline next to the percentile pill -- only on rows
-    # mark_call_chips actually classified as strong or weak (never on a
-    # 'none' no-call row).
-    badge = (f'<span class="pill-{v["call_type"]}">CALLED {v["call_type"].upper()}</span>'
-             if v.get("call_type") in ("strong", "weak") else "")
+    # Track Record v4 -- TOP N / BOTTOM N pills (rank-based calls), inline
+    # next to the percentile pill, only on rows mark_call_chips classified
+    # as top-k (strong, green tint) or bottom-k (weak, rust tint); a 'none'
+    # middle row gets no pill. These pills ARE the calls. (The app tab shows
+    # the same calls but labels them CALLED STRONG/WEAK -- same underlying
+    # rank, different surface label, per the v4 spec.)
+    badge = (f'<span class="pill-{v["call_type"]}">{v["call_label"]}</span>'
+             if v.get("call_type") in ("strong", "weak") and v.get("call_label") else "")
     # ✓/✗ ONLY on called rows -- a miss renders as a real ✗ (var(--low)),
     # not a near-invisible dash. No-call rows get an explicit small muted
     # "no call" (Polish v4, Task 4) instead of a blank cell -- their
@@ -1232,31 +1236,26 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     # send-check log can never describe two different sentences.
     hero_form = pick_hero_form(hero, strongest)
     if hero_form == "averages":
-        # Track Record v3, Task 1 -- unified call semantics: "highest/
-        # lowest-rated" (rank-based, implied a fixed k-and-k split) is
-        # retired in favor of "called strong/weak" (percentile-threshold-
-        # based, counts can be asymmetric now -- e.g. 7 strong + 2 weak).
+        # Track Record v4 -- RANK wording, aligned to the app tab's hero
+        # line 2 ("The videos we predicted would be strongest/weakest"):
+        # strong_avg/weak_avg are the mean ×typical of the TOP-k / BOTTOM-k
+        # rank groups (strong_weak_metrics over the rank split).
         thesis_h1 = (
             f'{opening} '
-            f'The videos we called strong averaged <b class="up">{hero["strong_avg"]:.1f}×</b> your typical engagement. '
-            f'The ones we called weak averaged <b class="down">{hero["weak_avg"]:.1f}×</b>.'
+            f'The videos we predicted would be strongest averaged <b class="up">{hero["strong_avg"]:.1f}×</b> your typical engagement. '
+            f'Those we predicted would be weakest averaged <b class="down">{hero["weak_avg"]:.1f}×</b>.'
         )
     elif hero_form == "calls":
-        # Calls form: leads with the panel's hit rate instead of the raw
-        # averages -- picked over averages when the CALLS tier outranks
-        # the AVERAGES tier (see pick_hero_form). Bold "C of N"; green
-        # only when the hit rate clears 2/3, same bar as before. Wording
-        # updated alongside the averages form above: "highest-/lowest-
-        # rated" implied a fixed, symmetric k-and-k count that no longer
-        # holds under unified call semantics (strong/weak counts are
-        # independent now) -- "strong- and weak-scored" is accurate for
-        # any split.
+        # Calls form: leads with the panel's hit rate over the rank groups
+        # instead of the averages -- picked when the CALLS tier outranks the
+        # AVERAGES tier (pick_hero_form). Bold "C of N"; green only when the
+        # hit rate clears 2/3. v4 rank wording.
         ratio = hero["calls_correct"] / hero["calls_total"]
         calls_b = (f'<b class="up">{hero["calls_correct"]} of {hero["calls_total"]}</b>' if ratio >= 0.67
                    else f'<b>{hero["calls_correct"]} of {hero["calls_total"]}</b>')
         thesis_h1 = (
             f'{opening} '
-            f'We made calls on your strong- and weak-scored videos — and got {calls_b} right.'
+            f'We predicted which of your videos would land strongest and weakest — and called {calls_b} right.'
         )
     elif hero_form == "neutral":
         # Neither the averages gap nor the calls record clears even the

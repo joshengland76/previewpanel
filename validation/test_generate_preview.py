@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Track Record v3, Task 1 -- UNIFIED CALL SEMANTICS rewrite. Retires the old
-rank-based topbottom_metrics/mark_top_bottom_pills tests (n=3,4,5,6,8
-tiered top-k/bottom-k coverage) in favor of testing the new
-percentile-THRESHOLD rule (call_type_for/mark_call_chips/
-strong_weak_metrics): a row's call_type is now a direct function of its
-OWN percentile (>=70 strong, <=30 weak, else none), never of how many
-other rows are in the shown set or what rank it holds among them.
+Track Record v4 -- RANK-based call semantics (supersedes the v3 threshold
+rewrite). Tests _topbottom_k (the shared size tiers), mark_call_chips
+(TOP k / BOTTOM k of the shown set, ranked by prediction), and
+strong_weak_metrics over the rank groups. The defining property tested is
+now the OPPOSITE of v3's: a row's call DEPENDS on the set it's ranked in
+(weak in a 6-set, none in an 8-set) -- calls are relative to the creator's
+own graded window, not an absolute per-row percentile threshold.
 
 Polish v5, Task 2's averages_tier/calls_tier/pick_hero_form/
 send_check_verdict coverage is kept and extended: averages_tier is
@@ -32,71 +32,83 @@ import sys
 from datetime import datetime, timezone
 
 from generate_preview import (
-    call_type_for, mark_call_chips, strong_weak_metrics, bet_card_fields,
+    _topbottom_k, mark_call_chips, strong_weak_metrics, bet_card_fields,
     averages_tier, calls_tier, pick_hero_form, send_check_verdict,
     hero_opening_sentence, coverage_note,
 )
 
 
-def test_call_type_for():
-    """call_type_for: strong >=70, weak <=30, none in between, both
-    thresholds inclusive (exact 70/30 resolve to a real call, not a
-    near-miss no-call), None percentile -> None call_type."""
+def _r(prediction, result_x, **kw):
+    """Synthetic section_a row for the RANK tests -- prediction drives the
+    ranking, result_x drives the tick."""
+    return {"prediction": prediction, "result_x": result_x, **kw}
+
+
+def test_topbottom_k():
+    """_topbottom_k: the shared size-tier boundaries read from
+    call_semantics.json. n>=6 -> 3; n in {4,5} -> 2; n<4 -> None. 2k<=n at
+    every tier so the top/bottom groups never overlap. This is the ONE
+    source both surfaces (server.js topBottomK, the PDF) read."""
     failures = []
-    cases = [
-        (100, "strong"), (99, "strong"), (70, "strong"), (71, "strong"),
-        (69, "none"), (50, "none"), (31, "none"), (30, "weak"),
-        (29, "weak"), (1, "weak"), (0, "weak"),
-        (None, None),
-    ]
-    for percentile, expected in cases:
-        got = call_type_for(percentile)
+    cases = [(0, None), (1, None), (3, None), (4, 2), (5, 2), (6, 3), (7, 3), (8, 3), (20, 3)]
+    for n, expected in cases:
+        got = _topbottom_k(n)
         if got != expected:
-            failures.append(f"call_type_for({percentile}): expected {expected!r}, got {got!r}")
+            failures.append(f"_topbottom_k({n}): expected {expected}, got {got}")
     return failures
 
 
 def test_call_chips():
-    """mark_call_chips: call_type/call_tick driven ENTIRELY by each row's
-    own percentile -- confirms two rows with identical percentiles get
-    identical call_type regardless of how many other rows are in the set
-    (the defining difference from the old rank-based pill system, where
-    the SAME row could be 'top' in an 8-row set and unmarked in a 3-row
-    one). Also covers all four tick branches (strong hit/miss, weak
-    hit/miss) and the no-call/no-result guards."""
+    """mark_call_chips (v4 RANK): TOP k -> strong, BOTTOM k -> weak, the
+    middle -> none, ranked by prediction DESC; k from the size tier. Covers
+    the four tick branches, the TOP N/BOTTOM N labels, the below-tier drop,
+    and -- the DEFINING difference from the retired threshold rule -- that
+    the SAME row's call now DEPENDS on the set it's ranked in."""
     failures = []
-    rows = [
-        {"percentile": 92, "result_x": 1.5},   # strong, hit  (>=1.0 -> True)
-        {"percentile": 71, "result_x": 0.8},   # strong, MISS (<1.0 -> False)
-        {"percentile": 55, "result_x": 1.2},   # none -- no chip regardless of result
-        {"percentile": 40, "result_x": 0.9},   # none -- no chip regardless of result
-        {"percentile": 28, "result_x": 0.7},   # weak, hit  (<1.0 -> True)
-        {"percentile": 12, "result_x": 1.3},   # weak, MISS (>=1.0 -> False)
-        {"percentile": 5,  "result_x": None},  # weak percentile but no real result -- no tick
-    ]
-    mark_call_chips(rows)
-    expected_type = ["strong", "strong", "none", "none", "weak", "weak", "weak"]
-    expected_tick = [True, False, None, None, True, False, None]
-    got_type = [v["call_type"] for v in rows]
-    got_tick = [v["call_tick"] for v in rows]
-    if got_type != expected_type:
-        failures.append(f"call_type: expected {expected_type}, got {got_type}")
-    if got_tick != expected_tick:
-        failures.append(f"call_tick: expected {expected_tick}, got {got_tick}")
 
-    # Same percentile, wildly different set sizes/positions -- call_type
-    # must be identical (the whole point of a threshold rule vs. a rank
-    # rule). A percentile=80 row is 'strong' whether it's alone or amid
-    # 7 other rows, top-ranked or not.
-    solo = [{"percentile": 80, "result_x": 1.1}]
-    mark_call_chips(solo)
-    crowded = [{"percentile": 80, "result_x": 1.1}] + [{"percentile": p, "result_x": 1.0} for p in (95, 90, 85, 60, 50)]
-    mark_call_chips(crowded)
-    if solo[0]["call_type"] != crowded[0]["call_type"]:
-        failures.append(
-            f"percentile=80 should be 'strong' regardless of set size/rank: "
-            f"solo={solo[0]['call_type']!r}, crowded={crowded[0]['call_type']!r}"
-        )
+    # 6 rows -> k=3: top 3 strong, bottom 3 weak (6 = 2*3, no middle).
+    rows = [_r(0.9, 1.5), _r(0.7, 0.8), _r(0.5, 1.2), _r(0.3, 0.9), _r(0.1, 0.7), _r(-0.1, 1.3)]
+    mark_call_chips(rows)
+    got_type = {round(v["prediction"], 1): v["call_type"] for v in rows}
+    exp_type = {0.9: "strong", 0.7: "strong", 0.5: "strong", 0.3: "weak", 0.1: "weak", -0.1: "weak"}
+    if got_type != exp_type:
+        failures.append(f"6-row k=3 call_type: expected {exp_type}, got {got_type}")
+    # ticks: strong hit iff result>=1.0; weak hit iff result<1.0.
+    got_tick = {round(v["prediction"], 1): v["call_tick"] for v in rows}
+    exp_tick = {0.9: True, 0.7: False, 0.5: True, 0.3: True, 0.1: True, -0.1: False}
+    if got_tick != exp_tick:
+        failures.append(f"6-row tick: expected {exp_tick}, got {got_tick}")
+    top_label = next(v["call_label"] for v in rows if v["call_type"] == "strong")
+    bot_label = next(v["call_label"] for v in rows if v["call_type"] == "weak")
+    if top_label != "TOP 3" or bot_label != "BOTTOM 3":
+        failures.append(f"labels: expected TOP 3/BOTTOM 3, got {top_label!r}/{bot_label!r}")
+
+    # 5 rows -> k=2: top 2 strong, bottom 2 weak, 1 middle none.
+    rows5 = [_r(0.9, 1.0), _r(0.6, 1.0), _r(0.4, 1.0), _r(0.2, 1.0), _r(0.0, 1.0)]
+    mark_call_chips(rows5)
+    types5 = [v["call_type"] for v in sorted(rows5, key=lambda v: -v["prediction"])]
+    if types5 != ["strong", "strong", "none", "weak", "weak"]:
+        failures.append(f"5-row k=2: expected [strong,strong,none,weak,weak], got {types5}")
+
+    # 3 rows -> k=None: no calls at all (below the tier).
+    rows3 = [_r(0.9, 1.0), _r(0.5, 1.0), _r(0.1, 1.0)]
+    mark_call_chips(rows3)
+    if any(v["call_type"] != "none" for v in rows3):
+        failures.append(f"3-row: expected all none, got {[v['call_type'] for v in rows3]}")
+
+    # RANK DEPENDENCE (the opposite of the retired threshold invariant): the
+    # SAME prediction=0.3 row is a WEAK call in a 6-row set (rank 4 -> in the
+    # bottom 3) but a NONE (middle) call in an 8-row set where it's rank 4 of
+    # 8 (top 3 + middle 2 + bottom 3). A row's call is a function of the set.
+    six = [_r(0.9, 1.0), _r(0.7, 1.0), _r(0.5, 1.0), _r(0.3, 1.0), _r(0.1, 1.0), _r(-0.1, 1.0)]
+    mark_call_chips(six)
+    c6 = next(v for v in six if abs(v["prediction"] - 0.3) < 1e-9)["call_type"]
+    eight = [_r(0.9, 1.0), _r(0.7, 1.0), _r(0.5, 1.0), _r(0.3, 1.0),
+             _r(0.2, 1.0), _r(0.1, 1.0), _r(0.0, 1.0), _r(-0.1, 1.0)]
+    mark_call_chips(eight)
+    c8 = next(v for v in eight if abs(v["prediction"] - 0.3) < 1e-9)["call_type"]
+    if not (c6 == "weak" and c8 == "none"):
+        failures.append(f"rank dependence: prediction=0.3 expected weak in 6-set / none in 8-set, got {c6}/{c8}")
     return failures
 
 
@@ -302,83 +314,78 @@ def test_coverage_honest_copy():
     return failures
 
 
-def _rows(strong_n, weak_n, none_n=0, strong_result=1.0, weak_result=1.0):
-    """Synthetic section_a-shaped rows for strong_weak_metrics: strong_n
-    rows at percentile=90 (all with the SAME result_x, for easy average
-    verification), weak_n at percentile=10, none_n at percentile=50
-    (never counted as a call)."""
-    rows = [{"percentile": 90, "result_x": strong_result} for _ in range(strong_n)]
-    rows += [{"percentile": 10, "result_x": weak_result} for _ in range(weak_n)]
-    rows += [{"percentile": 50, "result_x": 1.0} for _ in range(none_n)]
+def _ranked_rows(n, strong_result=1.0, weak_result=1.0, mid_result=1.0):
+    """n synthetic rows with DISTINCT descending predictions, marked by the
+    rank rule. The TOP k get strong_result, the BOTTOM k weak_result, the
+    middle mid_result (so averages are easy to verify). k = _topbottom_k(n)."""
+    preds = [1.0 - i * 0.1 for i in range(n)]  # strictly descending, distinct
+    k = _topbottom_k(n) or 0
+    rows = []
+    for i, p in enumerate(preds):
+        if i < k:
+            res = strong_result
+        elif i >= n - k:
+            res = weak_result
+        else:
+            res = mid_result
+        rows.append(_r(p, res))
     mark_call_chips(rows)
     return rows
 
 
 def test_strong_weak_metrics():
-    """strong_weak_metrics: needs >=2 strong AND >=2 weak calls (Track
-    Record's own hero-averages floor) to return real metrics; below that
-    -> None regardless of how many total/none-call rows exist. Also
-    confirms ASYMMETRIC counts (impossible under the old forced 2*k
-    split) compute correctly, and that 'none' rows never leak into
-    either group or the total."""
+    """strong_weak_metrics (v4): metrics over the RANK groups (top-k strong,
+    bottom-k weak). Below the tier (n<4 -> k=None) there are no calls ->
+    None. At k>=2 the groups are symmetric (k each). 'none' middle rows and
+    result_x=None rows never enter either group."""
     failures = []
 
-    # 1 strong + 5 weak: strong count fails the >=2 floor -> None, even
-    # though there are plenty of total usable rows (the old n<4 guard
-    # would have accepted this; the new floor is about CALL counts, not
-    # usable-row counts).
-    rows = _rows(strong_n=1, weak_n=5)
-    if strong_weak_metrics(rows) is not None:
-        failures.append("1 strong + 5 weak: expected None (strong count below floor)")
+    # 3 rows -> k=None -> no calls -> None.
+    if strong_weak_metrics(_ranked_rows(3)) is not None:
+        failures.append("3 rows (below tier): expected None (no calls)")
 
-    # 2 strong + 2 weak: exactly at the floor -> real metrics.
-    rows = _rows(strong_n=2, weak_n=2, strong_result=1.5, weak_result=0.6)
+    # 4 rows -> k=2: strong=top2, weak=bottom2, calls_total=4.
+    rows = _ranked_rows(4, strong_result=1.5, weak_result=0.6)
     hero = strong_weak_metrics(rows)
     if hero is None:
-        failures.append("2 strong + 2 weak: expected real metrics, got None")
+        failures.append("4 rows k=2: expected real metrics, got None")
     else:
         if hero["calls_total"] != 4:
-            failures.append(f"2+2: expected calls_total=4, got {hero['calls_total']}")
+            failures.append(f"4 rows: expected calls_total=4, got {hero['calls_total']}")
         if abs(hero["strong_avg"] - 1.5) > 1e-9 or abs(hero["weak_avg"] - 0.6) > 1e-9:
-            failures.append(f"2+2 averages: expected strong_avg=1.5 weak_avg=0.6, got {hero}")
+            failures.append(f"4 rows averages: expected strong_avg=1.5 weak_avg=0.6, got {hero}")
         if hero["calls_correct"] != 4:
-            failures.append(f"2+2 calls_correct: expected 4 (all hits: strong>=1.0, weak<1.0), got {hero['calls_correct']}")
+            failures.append(f"4 rows calls_correct: expected 4 (all hits), got {hero['calls_correct']}")
 
-    # ASYMMETRIC: 7 strong + 2 weak -- impossible under the old forced
-    # 2*k split, routine under unified call semantics. Mixed hit/miss.
-    rows = ([{"percentile": 90, "result_x": 1.2}] * 5 + [{"percentile": 90, "result_x": 0.8}] * 2
-            + [{"percentile": 10, "result_x": 0.5}, {"percentile": 10, "result_x": 1.1}])
-    mark_call_chips(rows)
+    # 6 rows -> k=3: strong=top3, weak=bottom3, calls_total=6. Mixed results.
+    # top3 all 1.2 (hits), bottom3 all 0.8 (weak hits, <1.0) -> 6 correct.
+    rows = _ranked_rows(6, strong_result=1.2, weak_result=0.8)
     hero = strong_weak_metrics(rows)
-    if hero is None:
-        failures.append("7 strong + 2 weak: expected real metrics, got None")
-    else:
-        if hero["calls_total"] != 9:
-            failures.append(f"7+2: expected calls_total=9, got {hero['calls_total']}")
-        # correct: 5 strong hits (>=1.0) + 1 weak hit (<1.0) = 6
-        if hero["calls_correct"] != 6:
-            failures.append(f"7+2 calls_correct: expected 6, got {hero['calls_correct']}")
+    if hero is None or hero["calls_total"] != 6 or hero["calls_correct"] != 6:
+        failures.append(f"6 rows k=3: expected calls_total=6 calls_correct=6, got {hero}")
 
-    # 'none' rows never leak into either group or the total, regardless
-    # of how many there are.
-    rows = _rows(strong_n=3, weak_n=3, none_n=10)
+    # 8 rows -> k=3: strong=top3, weak=bottom3, TWO middle 'none' rows never
+    # counted -> calls_total stays 6, not 8.
+    rows = _ranked_rows(8, strong_result=1.2, weak_result=0.8, mid_result=5.0)
     hero = strong_weak_metrics(rows)
     if hero is None or hero["calls_total"] != 6:
-        failures.append(f"3 strong + 3 weak + 10 none: expected calls_total=6 (none excluded), got {hero}")
+        failures.append(f"8 rows k=3: expected calls_total=6 (2 middle none excluded), got {hero}")
 
-    # Rows with no real result (result_x=None) don't count as a call even
-    # if their percentile crosses a threshold.
-    rows = [{"percentile": 90, "result_x": None}] * 5 + _rows(strong_n=2, weak_n=2)
+    # A top/bottom row missing its result_x drops below the >=2-each floor.
+    rows = _ranked_rows(4)
+    for v in rows:
+        if v["call_type"] == "strong":
+            v["result_x"] = None  # knock both strong rows' results out
     hero = strong_weak_metrics(rows)
-    if hero is None or hero["calls_total"] != 4:
-        failures.append(f"5 no-result strong-percentile rows + 2+2 real: expected calls_total=4 (no-result excluded), got {hero}")
+    if hero is not None:
+        failures.append("4 rows with both strong results missing: expected None (below >=2 floor)")
 
     return failures
 
 
 def run():
     failures = []
-    failures += test_call_type_for()
+    failures += test_topbottom_k()
     failures += test_call_chips()
     failures += test_bet_card()
     failures += test_impressiveness_tiers()
@@ -390,10 +397,10 @@ def run():
         for f in failures:
             print(f"  - {f}")
         sys.exit(1)
-    print("All call_type_for + mark_call_chips + strong_weak_metrics + bet_card_fields + "
+    print("All _topbottom_k + mark_call_chips + strong_weak_metrics + bet_card_fields + "
           "impressiveness-tier/tie-break + coverage-honest-copy tests passed "
-          "(threshold boundaries, same-percentile-different-set-size invariant, "
-          "asymmetric strong/weak counts, calls_tier generalization, "
+          "(v4 RANK: size-tier boundaries, top-k/bottom-k marking, rank-dependence, "
+          "rank-group metrics, calls_tier generalization, "
           "bet card empty/non-empty branches, averages/calls tier boundaries, "
           "pick_hero_form tie-break, send_check_verdict remap, "
           "hero_opening_sentence both branches, coverage_note full/gap/nothing-attempted).")

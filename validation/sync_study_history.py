@@ -15,18 +15,18 @@ y_pred is read from the SAME frozen OOF snapshot generate_preview.py
 by construction: the number Track Record shows for one of these videos is
 the SAME number a --study PDF would show for it.
 
-call_type's percentile is computed HERE, at SYNC time, using
-generate_preview.py's own Python pool port (build_pools/midrank_percentile,
-self-excluding this creator -- same convention --study's own Section A
-scoring uses). This is an honest, documented limitation: it's the pool as
-it exists right now, not as it existed whenever these videos were
-actually posted -- there's no way to reconstruct a historical pool
-snapshot weeks or months later. The live app's own grading path
-(gradeTrackRecordForUser in server.js) has the exact same limitation for
-organic rows, computed at first-grading time instead of sync time; both
-freeze immediately and never recompute afterward. gradeTrackRecordForUser
-reads whatever this script writes here as-is -- it does not overwrite
-call_type/overall_percentile_at_grading for a row that already has them.
+The row's overall-pool percentile (the PILL) is computed HERE, at SYNC
+time, using generate_preview.py's own Python pool port (build_pools/
+midrank_percentile, self-excluding this creator -- same convention
+--study's own Section A scoring uses). This is an honest, documented
+limitation: it's the pool as it exists right now, not as it existed
+whenever these videos were actually posted -- there's no way to
+reconstruct a historical pool snapshot weeks or months later.
+gradeTrackRecordForUser reads this frozen percentile as-is (it does not
+overwrite overall_percentile_at_grading for a row that already has it).
+Track Record v4: call_type is NOT written here -- a call is a RANK over
+the creator's graded window (TOP k / BOTTOM k), which the grading pass
+computes on tab load, not a per-row property decidable at sync time.
 
 Idempotent on tiktok_video_id: a video already present in posted_videos
 from ANY source (prospect_report, validation, a prior sync run) is
@@ -44,36 +44,25 @@ from generate_preview import (
     build_pools, midrank_percentile, creator_research_video_ids, load_oof_predictions,
 )
 
-# Track Record v3, Task 1 -- UNIFIED CALL SEMANTICS. Read from the same
-# shared constants module server.js and generate_preview.py both read
-# (backend/scoring/call_semantics.json) -- no hardcoded 70/30 here
-# anymore, so this script's synthesized rows can never disagree with the
-# live app's grading engine or the PDF about the threshold.
-_call_semantics = json.loads((BACKEND_SCORING / "call_semantics.json").read_text())
-CALL_STRONG_PCTILE = _call_semantics["strongPercentile"]
-CALL_WEAK_PCTILE = _call_semantics["weakPercentile"]
+# Track Record v4 -- RANK-based call semantics. This script no longer
+# pre-computes call_type: a "call" is now the TOP k / BOTTOM k of the
+# creator's graded window (a rank over the whole set), which can't be
+# decided per-row at sync time. It writes overall_percentile_at_grading
+# (the row's own overall-pool percentile -- the PILL, a separate display
+# from the call) and leaves call_type NULL; gradeTrackRecordForUser ranks
+# and fills call_type/verdict over the window on first tab load. See
+# backend/scoring/call_semantics.json.
 
 
 def clamp_percentile(p):
     # Track Record v2, Task 3c -- same clamp as scoreDisplayCopy.js's
     # clampPercentile (JS side) and generate_preview.py's own
     # _clamped_ordinal: never store/display a raw 0 or 100, which reads as
-    # an absolute "literally the worst/best ever" claim. Clamping only
-    # touches the extreme ends, so it can never flip the >=70/<=30
-    # call-type classification below.
+    # an absolute "literally the worst/best ever" claim. The percentile is
+    # the PILL only; it is not the call basis under v4.
     if p is None:
         return None
     return max(1, min(99, round(p)))
-
-
-def call_type_for(percentile):
-    if percentile is None:
-        return None
-    if percentile >= CALL_STRONG_PCTILE:
-        return "strong"
-    if percentile <= CALL_WEAK_PCTILE:
-        return "weak"
-    return "none"
 
 
 def run(handle):
@@ -145,15 +134,15 @@ def run(handle):
         avg_score = float(avg_row[0]) if avg_row and avg_row[0] is not None else None
         is_day30_equiv = r["interval_label"] == "backcatalog_day30_equiv_2026_07"
         percentile = clamp_percentile(midrank_percentile(y_pred, pools["overall"]))
-        call_type = call_type_for(percentile)
-
+        # v4: call_type is left NULL -- the grading pass ranks it over the
+        # graded window. Only the percentile (the pill) is pre-computed here.
         db.query("""
             INSERT INTO posted_videos
               (tiktok_video_id, handle, posted_at, caption, status, y_pred, avg_score, day30_wec_rate,
-               is_day30_equiv, source, overall_percentile_at_grading, call_type, collected_at)
-            VALUES (%s, %s, %s, %s, 'day30_collected', %s, %s, %s, %s, 'study_history', %s, %s, now())
+               is_day30_equiv, source, overall_percentile_at_grading, collected_at)
+            VALUES (%s, %s, %s, %s, 'day30_collected', %s, %s, %s, %s, 'study_history', %s, now())
         """, (tiktok_video_id, handle, r["posted_at"], r["caption"], y_pred, avg_score,
-              float(r["weighted_engagement_rate"]), is_day30_equiv, percentile, call_type))
+              float(r["weighted_engagement_rate"]), is_day30_equiv, percentile))
         # DB (generate_preview.py) never sets autocommit and never calls
         # commit() itself -- without an explicit commit here, psycopg2 rolls
         # back any uncommitted write on conn.close(), which would make this

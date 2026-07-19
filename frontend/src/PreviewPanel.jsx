@@ -522,7 +522,9 @@ function TrackRecordCallChip({ callType }) {
 }
 
 function trRowTitle(row) {
-  return row.captionSnippet || `Posted ${trFormatDate(row.postedAt)}`;
+  // v4 card: caption snippet with the short posted date appended ("… · Aug 2").
+  const d = trFormatDate(row.postedAt);
+  return row.captionSnippet ? `${row.captionSnippet} · ${d}` : `Posted ${d}`;
 }
 
 // Track Record v3, Task 3 -- shared small-caps muted label ("OUR SCORE",
@@ -595,6 +597,26 @@ function TrackRecordPendingRow({ row }) {
 }
 
 function TrackRecordGradedRow({ row }) {
+  // v4 -- no-call rows (the "Other videos in that timeframe" section) are
+  // minimal: caption + date on the left, an italic "no call" on the right,
+  // and NOTHING else (no prediction-score pill, no call chip, no result, no
+  // verdict chip) -- they weren't one of the panel's actual calls.
+  const isCall = row.callType === "strong" || row.callType === "weak";
+  if (!isCall) {
+    return (
+      <div style={{
+        background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
+        padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
+      }}>
+        <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600", flex: 1, minWidth: 0 }}>
+          {trRowTitle(row)}
+        </span>
+        <span style={{ fontSize: "11px", fontStyle: "italic", color: "#aaa", flexShrink: 0 }}>no call</span>
+      </div>
+    );
+  }
+  // Called row: 30-DAY RESULT color-coded (green >=1.0x, rust <1.0x, bold).
+  const resultColor = row.timesTypical >= 1.0 ? "#2E7D32" : "#8D4B36";
   return (
     <div style={{
       background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
@@ -607,7 +629,7 @@ function TrackRecordGradedRow({ row }) {
           </span>
           {row.previewed && <TrackRecordPreviewedBadge />}
         </div>
-        <TrCardLabel>Our score</TrCardLabel>
+        <TrCardLabel>Our prediction score</TrCardLabel>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
           <span style={{
             fontSize: "11px", fontWeight: "700", color: B.brown, background: B.lightBrown,
@@ -617,16 +639,10 @@ function TrackRecordGradedRow({ row }) {
           </span>
           <TrackRecordCallChip callType={row.callType} />
         </div>
-        {row.verdict !== "no_call" && (
-          <>
-            <TrCardLabel>30-day result</TrCardLabel>
-            {/* Result must read as EQUAL WEIGHT to the score above --
-                bold, ink-colored (B.black), never gray/deemphasized. */}
-            <div style={{ fontSize: "13px", fontWeight: "800", color: B.black }}>
-              {row.timesTypical.toFixed(2)}× your typical
-            </div>
-          </>
-        )}
+        <TrCardLabel>30-day result (likes/shares/saves per view)</TrCardLabel>
+        <div style={{ fontSize: "13px", fontWeight: "800", color: resultColor }}>
+          {row.timesTypical.toFixed(2)}× your typical
+        </div>
       </div>
       <div style={{ flexShrink: 0, marginTop: "2px" }}>
         <TrCardVerdictChip verdict={row.verdict} />
@@ -710,96 +726,105 @@ function TrackRecordPanel({ userId, onConnectClick }) {
     );
   }
 
-  // Track Record v2, Task 3b -- SCORE-DESCENDING within the graded section
-  // (mirrors the PDF's own Section-A ranking), not posted-date order.
-  // ungradedResolved rows have no percentile at all (never graded) --
-  // appended after the score-sorted graded ones, in posted-date order,
-  // same as before.
-  const gradedSorted = [...data.graded].sort((a, b) => (b.overallPercentile ?? -1) - (a.overallPercentile ?? -1));
-  const ungradedSorted = [...data.ungradedResolved].sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
-  const gradedRows = [...gradedSorted, ...ungradedSorted];
+  // v4 -- three sections, split by the rank call_type, each score-descending
+  // by the rank basis (prediction). "Other" = graded rows we made no call on
+  // (middle-ranked); pending/no-outcome rows render NOWHERE now.
+  const byScoreDesc = (a, b) => (b.prediction ?? -Infinity) - (a.prediction ?? -Infinity);
+  const topRows = data.graded.filter((g) => g.callType === "strong").sort(byScoreDesc);
+  const bottomRows = data.graded.filter((g) => g.callType === "weak").sort(byScoreDesc);
+  const otherRows = data.graded.filter((g) => g.callType === "none").sort(byScoreDesc);
+  // Baseline-forming rows (have an outcome but the creator isn't gradeable
+  // yet) only exist pre-active; shown as a small still-collecting list so a
+  // just-connected creator's tab isn't blank, never as "pending".
+  const baselineRows = [...data.ungradedResolved].sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
 
-  // Track Record v2, Task 3d -- averages sub-stat needs its OWN floor
-  // (>=2 of EACH type graded), independent of AGGREGATE_MIN gating the
-  // record line itself.
-  const showAverages = data.aggregates
-    && data.aggregates.strongCount >= 2 && data.aggregates.weakCount >= 2;
+  // v4 hero -- line 1 (the stat) stands out; line 2 = window + the
+  // strongest/weakest averages. Averages need >=2 of each call (always true
+  // when aggregates exist under the rank rule, k>=2). The 2-of-3 study claim
+  // moved OUT of the hero (the welcome modal carries it now).
+  const agg = data.aggregates;
+  const showAverages = agg && agg.strongCount >= 2 && agg.weakCount >= 2;
+  const windowLabel = agg && agg.windowStart && agg.windowEnd
+    ? `${trFormatDate(agg.windowStart)}–${trFormatDate(agg.windowEnd)}` : null;
 
   return (
     <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
-      {/* Track Record v3, Task 2 -- hero, mirrors the PDF exactly. Line 1
-          always renders (coverage-honest claim, same spirit as the PDF's
-          own hero_opening_sentence -- we're past no_handle/no_posts_yet
-          here, so there IS at least one scored video to make this claim
-          about). Line 2 (strong/weak averages, bolded green/rust numbers
-          only -- not the words themselves, matching the PDF) needs its
-          own >=2-strong-and->=2-weak floor, independent of whether the
-          "Called it" line itself is showing yet. Lines 3+4 (the record
-          stat + study-context line) keep their existing AGGREGATE_MIN
-          gate; the sub-threshold "building your track record" copy is
-          unchanged for states below that gate. */}
       <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6" }}>
-          We scored every video you've posted — from content alone, never seeing a single view count.
-        </div>
-        {showAverages && (
-          <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6", marginTop: "6px" }}>
-            The videos we called strong averaged <b style={{ color: "#2E7D32" }}>{data.aggregates.avgTimesTypicalStrong.toFixed(1)}×</b> your
-            {" "}typical engagement. The ones we called weak averaged <b style={{ color: "#8D4B36" }}>{data.aggregates.avgTimesTypicalWeak.toFixed(1)}×</b>.
-          </div>
-        )}
-        {data.aggregates ? (
+        {agg ? (
           <>
-            <div style={{ fontSize: "17px", fontWeight: "800", color: B.black, marginTop: "10px" }}>
-              Called it: {data.aggregates.hits} of {data.aggregates.graded}
+            <div style={{ fontSize: "20px", fontWeight: "800", color: B.black, lineHeight: "1.3" }}>
+              We called it on {agg.hits} out of {agg.graded}.
             </div>
-            <div style={{ fontSize: "11.5px", color: "#888", marginTop: "2px" }}>
-              study-wide, our top-tier picks beat typical ~2 in 3
+            <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6", marginTop: "8px" }}>
+              We scored your {windowLabel ? <>{windowLabel} </> : null}TikTok videos — from content alone, never seeing a single view count.
+              {showAverages && (
+                <> The videos we predicted would be strongest averaged{" "}
+                  <b style={{ color: "#2E7D32" }}>{agg.avgTimesTypicalStrong.toFixed(1)}×</b> your typical 30-day engagement.
+                  {" "}Those we predicted would be weakest averaged{" "}
+                  <b style={{ color: "#8D4B36" }}>{agg.avgTimesTypicalWeak.toFixed(1)}×</b>.</>
+              )}
             </div>
           </>
         ) : data.state !== "pending_only" && data.state !== "baseline_forming" ? (
-          <div style={{ fontSize: "12.5px", color: "#888", marginTop: "10px" }}>
+          <div style={{ fontSize: "12.5px", color: "#888" }}>
             Building your track record — {data.gradedCallCount} call{data.gradedCallCount === 1 ? "" : "s"} on the books.
           </div>
-        ) : null}
+        ) : (
+          <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6" }}>
+            We scored your posted videos — from content alone. Day-30 results are still coming in.
+          </div>
+        )}
       </div>
 
-      {/* Track Record v2, Task 3b -- structure mirrors the PDF: predicted-
-          vs-happened (graded) THEN on-the-record (pending), hero first. */}
-      {gradedRows.length > 0 && (
+      {topRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "4px" }}>
-            WHAT WE PREDICTED VS. WHAT HAPPENED
-          </div>
-          {/* Track Record v3, Task 3 -- one subline under the header,
-              replacing the old end-of-list legend (chips are
-              self-documenting now: CALLED STRONG/WEAK + the verdict chip
-              together already say what a row's own call was and whether
-              it landed, with no separate key needed). */}
-          <div style={{ fontSize: "10.5px", color: "#aaa", marginBottom: "8px" }}>
-            Scores = percentile among the last 1,000 videos we've scored · sorted by our score.
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#2E7D32", letterSpacing: "0.05em", marginBottom: "8px" }}>
+            VIDEOS WE PREDICTED AS TOP PERFORMERS
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {gradedRows.map((row) => row.verdict
-              ? <TrackRecordGradedRow key={row.postedVideoId} row={row} />
-              : <TrackRecordBaselineFormingRow key={row.postedVideoId} row={row} baselineMin={data.baselineMin} />
-            )}
+            {topRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}
           </div>
         </div>
       )}
 
-      {data.pending.length > 0 && (
+      {bottomRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: VALENCE.split, letterSpacing: "0.05em", marginBottom: "8px" }}>
-            ON THE RECORD
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#8D4B36", letterSpacing: "0.05em", marginBottom: "8px" }}>
+            VIDEOS WE PREDICTED AS BOTTOM PERFORMERS
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {data.pending.map((row) => <TrackRecordPendingRow key={row.postedVideoId} row={row} />)}
+            {bottomRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}
           </div>
         </div>
       )}
 
-      {data.pending.length === 0 && gradedRows.length === 0 && (
+      {otherRows.length > 0 && (
+        <div>
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
+            OTHER VIDEOS IN THAT TIMEFRAME
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {otherRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}
+          </div>
+        </div>
+      )}
+
+      {/* Vestige option (OFF): a one-line "N more on the record — next result
+          lands <date>." for pending rows. Deliberately not rendered per v4
+          spec (pending renders nowhere). To enable, map data.pending here. */}
+
+      {baselineRows.length > 0 && (
+        <div>
+          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
+            STILL COLLECTING
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {baselineRows.map((row) => <TrackRecordBaselineFormingRow key={row.postedVideoId} row={row} baselineMin={data.baselineMin} />)}
+          </div>
+        </div>
+      )}
+
+      {agg == null && topRows.length === 0 && bottomRows.length === 0 && otherRows.length === 0 && baselineRows.length === 0 && (
         <div style={{ padding: "8px 0 0", textAlign: "center", color: "#aaa", fontSize: "13px" }}>
           Nothing on the record yet.
         </div>
@@ -816,22 +841,24 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 // track_record_welcomed), not localStorage -- see the trigger logic
 // (showWelcomeModal) at its call site for why that's a real robustness
 // improvement over the banner it replaces.
-function TrackRecordWelcomeModal({ scoredCount, gradedCount, onSeeTrackRecord, onDismiss }) {
-  // Welcome copy v2 (post-diagnostic, T6). Two EQUAL-WEIGHT choice cards
-  // (identical styling -- neither is a subordinate "secondary" button), each
-  // with a bold title + a muted subline. gradedCount is no longer surfaced in
-  // the body copy (kept as a prop for call-site compatibility).
-  const choiceCard = {
-    width: "100%", background: B.bg, border: `1.5px solid ${B.border}`,
-    borderRadius: "12px", padding: "13px 16px", textAlign: "left",
+function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss }) {
+  // Welcome copy v3 (Track Record v4, Task 2b). Button 1 is the PRIMARY
+  // action ("Run a video", filled) -> dismiss to the form; button 2 is
+  // secondary ("See how our predictions did", bordered) -> open the tab.
+  // No dynamic counts in the body -- so this can render the instant identity
+  // is confirmed, with no track-record fetch to wait on (Task 2a).
+  const cardBase = {
+    width: "100%", borderRadius: "12px", padding: "13px 16px", textAlign: "left",
     cursor: "pointer", fontFamily: "Montserrat, sans-serif", display: "block",
   };
-  const choiceTitle = { fontSize: "15px", fontWeight: "800", color: B.black, marginBottom: "3px" };
-  const choiceSub = { fontSize: "12px", color: "#777", lineHeight: "1.45" };
+  const titlePrimary = { fontSize: "15px", fontWeight: "800", color: "#fff", marginBottom: "3px" };
+  const subPrimary = { fontSize: "12px", color: "rgba(255,255,255,0.85)", lineHeight: "1.45" };
+  const titleSec = { fontSize: "15px", fontWeight: "800", color: B.black, marginBottom: "3px" };
+  const subSec = { fontSize: "12px", color: "#777", lineHeight: "1.45" };
   return (
     <div style={{
       position: "fixed", inset: 0, background: B.bg, zIndex: 150,
-      display: "flex", alignItems: "center", justifyContent: "center", padding: "20px",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", overflowY: "auto",
     }}>
       <div style={{
         background: "#fff", borderRadius: "18px", padding: "32px 26px",
@@ -841,25 +868,29 @@ function TrackRecordWelcomeModal({ scoredCount, gradedCount, onSeeTrackRecord, o
       }}>
         <img src="/owl-logo.png?v=3" alt="PreviewPanel"
           style={{ height: "64px", width: "auto", margin: "0 auto 18px", display: "block" }} />
-        <div style={{ fontWeight: "800", fontSize: "19px", color: B.black, marginBottom: "10px" }}>
-          We've been keeping score.
+        <div style={{ fontWeight: "800", fontSize: "20px", color: B.black, marginBottom: "12px" }}>
+          Know before you post.
         </div>
         <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
-          PreviewPanel predicts how a video will do before you post it. To prove it, we scored {scoredCount} of
-          your recent TikToks from the content alone — never seeing a single view count — then checked our
-          predictions against how they actually performed. That's your Track Record, and it's ready now.
+          Think of PreviewPanel as a test screening for your feed. Before you post, our panel watches your
+          video the way your audience will — hook, pacing, vibe, all of it — and tells you how it's likely to
+          stack up against your usual numbers, plus what to fix while you still can. This isn't “looks great!”
+          feedback: it's built on thousands of real videos and their real 30-day results, and when we call a
+          video one of your strongest, we're right more than 2 out of 3 times. Don't just take our word for
+          it — we brought receipts.
         </div>
-        <button onClick={onSeeTrackRecord} style={{ ...choiceCard, marginBottom: "10px" }}>
-          <div style={choiceTitle}>See your track record</div>
-          <div style={choiceSub}>How our calls on your videos turned out.</div>
+        <button onClick={onDismiss} style={{
+          ...cardBase, background: B.action, border: "none", marginBottom: "10px",
+        }}>
+          <div style={titlePrimary}>Run a video</div>
+          <div style={subPrimary}>Upload a draft or paste a link — get your score and straight-up feedback before you post.</div>
         </button>
-        <button onClick={onDismiss} style={choiceCard}>
-          <div style={choiceTitle}>Score your next video</div>
-          <div style={choiceSub}>Get its predicted percentile, what's working, and what to fix — before you post.</div>
+        <button onClick={onSeeTrackRecord} style={{
+          ...cardBase, background: "#fff", border: `1.5px solid ${B.border}`,
+        }}>
+          <div style={titleSec}>See how our predictions did on your videos</div>
+          <div style={subSec}>We already scored some of your videos and checked them against their real 30-day results. See what we called — and what actually happened.</div>
         </button>
-        <div style={{ fontSize: "11.5px", color: "#999", marginTop: "18px" }}>
-          Your track record lives under History whenever you want it.
-        </div>
       </div>
     </div>
   );
@@ -1083,6 +1114,12 @@ export default function PreviewPanel() {
   // immediate-hide optimization so the modal doesn't flash back on
   // between clicking a button and the server confirming the write.
   const [welcomeModalDismissedLocally, setWelcomeModalDismissedLocally] = useState(false);
+  // Track Record v4, Task 2a -- welcome-modal TIMING. Set synchronously from
+  // the redemption response's welcomeNeeded flag so the modal renders the
+  // instant identity is confirmed, with no track-record fetch to wait on
+  // (the async fetch is what let the form flash first). The reactive
+  // summary-based condition below remains the fallback for any other path.
+  const [welcomeForced, setWelcomeForced] = useState(false);
   const [history, setHistory] = useState(loadHistory);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadProgressIndeterminate, setUploadProgressIndeterminate] = useState(false);
@@ -1821,30 +1858,25 @@ export default function PreviewPanel() {
           // scrollToTopRobust (not a single scrollTo) to survive late
           // layout shifts after the gate/modal actually unmounts.
           scrollToTopRobust();
-          // Track Record v3, Task 4 -- the welcome modal replaces the old
-          // claim banner. No special-case trigger needed here anymore:
-          // refreshing the summary is enough -- the modal's visibility is
-          // DERIVED reactively (trackRecordSummary.welcomeSeen === false
-          // && trackRecordHasContent, see showWelcomeModal below), a
-          // server-persisted flag rather than a one-shot localStorage
-          // write. This is strictly more robust than the banner's old
-          // design: if THIS load somehow races (grading not caught up
-          // yet), the flag is still false server-side, so the very next
-          // normal refreshTrackRecordSummary() call (e.g. opening History)
-          // shows it instead -- there's no single "only chance" anymore.
+          // Track Record v4, Task 2a -- welcome-modal TIMING. The redemption
+          // response tells us up front whether the just-claimed identity has
+          // content worth the welcome modal; if so, show it SYNCHRONOUSLY now
+          // (same tick the gate closes and the form mounts) so the form never
+          // flashes before it. refreshTrackRecordSummary still runs as the
+          // reactive fallback (welcomeSeen===false && content) for any path
+          // that doesn't come through this response.
+          if (body && body.welcomeNeeded) setWelcomeForced(true);
           refreshTrackRecordSummary();
         }} />
       )}
 
-      {/* Track Record v3, Task 4 -- welcome modal. Shows once real content
-          exists (trackRecordHasContent) and the server flag hasn't been
-          set yet (welcomeSeen === false, not just falsy/undefined -- an
-          unresolved fetch or a no_handle/no_posts_yet response omits the
-          field entirely, which must NOT be treated as "unseen"). */}
-      {trackRecordHasContent && trackRecordSummary?.welcomeSeen === false && !welcomeModalDismissedLocally && (
+      {/* Track Record v4 -- welcome modal (v3 copy). Shows when the redeem
+          response forced it (welcomeForced -- instant, no fetch wait) OR the
+          reactive fallback fires (real content + server welcomeSeen===false,
+          not just falsy/undefined). welcomeModalDismissedLocally hides it the
+          moment a button is clicked, before the server write confirms. */}
+      {(welcomeForced || (trackRecordHasContent && trackRecordSummary?.welcomeSeen === false)) && !welcomeModalDismissedLocally && (
         <TrackRecordWelcomeModal
-          scoredCount={(trackRecordSummary.pending?.length || 0) + (trackRecordSummary.graded?.length || 0) + (trackRecordSummary.ungradedResolved?.length || 0)}
-          gradedCount={trackRecordSummary.graded?.length || 0}
           onSeeTrackRecord={() => {
             setWelcomeModalDismissedLocally(true);
             fetch(`${API_BASE}/api/track-record/welcome-seen`, {
