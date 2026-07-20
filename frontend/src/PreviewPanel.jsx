@@ -492,6 +492,21 @@ function trPillTextShort(p) {
   return p == null ? null : `${trClampedOrdinal(p)} percentile`;
 }
 
+// v4.1 -- the ×typical label must sit on the VERDICT's side of 1.0. Round
+// 1dp; if that shows "1.0" while the true value isn't exactly 1.0, use 2dp;
+// if 2dp still shows "1.00", force "0.99"/"1.01" toward the true side.
+// Mirrors generate_preview.py's fmt_result_x (unit-tested there). Returns
+// the number string (no "×").
+function fmtTimesTypical(v) {
+  const d1 = v.toFixed(1);
+  if (d1 === "1.0" && v !== 1.0) {
+    const d2 = v.toFixed(2);
+    if (d2 === "1.00") return v < 1.0 ? "0.99" : "1.01";
+    return d2;
+  }
+  return d1;
+}
+
 function TrackRecordPreviewedBadge() {
   return (
     <span style={{
@@ -613,10 +628,10 @@ function TrackRecordGradedRow({ row, groupK }) {
   // without the CALLED STRONG/WEAK chip, and their verdict pill is the
   // deemphasized "no call".
   const isCall = row.callType === "strong" || row.callType === "weak";
-  // 30-DAY RESULT color: green >1.0×, rust <1.0×, BLACK at exactly 1.00×
-  // (keyed on the DISPLAYED rounded value so a "1.00×" is never green/rust).
-  const shown = row.timesTypical.toFixed(2);
-  const resultColor = shown === "1.00" ? B.black : (row.timesTypical > 1.0 ? "#2E7D32" : "#8D4B36");
+  // 30-DAY RESULT: rounded to the verdict's side of 1.0 (fmtTimesTypical),
+  // color green >1.0× / rust <1.0× / BLACK at exactly 1.0×.
+  const shown = fmtTimesTypical(row.timesTypical);
+  const resultColor = row.timesTypical === 1.0 ? B.black : (row.timesTypical > 1.0 ? "#2E7D32" : "#8D4B36");
   return (
     <div style={{
       background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
@@ -740,27 +755,45 @@ function TrackRecordPanel({ userId, onConnectClick }) {
   // when aggregates exist under the rank rule, k>=2). The 2-of-3 study claim
   // moved OUT of the hero (the welcome modal carries it now).
   const agg = data.aggregates;
-  const showAverages = agg && agg.strongCount >= 2 && agg.weakCount >= 2;
   const windowLabel = agg && agg.windowStart && agg.windowEnd
     ? `${trFormatDate(agg.windowStart)}–${trFormatDate(agg.windowEnd)}` : null;
+  // v4.1 adaptive hero (Option A) -- heroForm decided server-side from the
+  // shared tiers; the frontend just renders each form.
+  const ratioLabel = agg && agg.ratio != null ? (agg.ratio > 10 ? "10×+" : `${agg.ratio.toFixed(1)}×`) : null;
+  const windowSentence = <>We scored your {windowLabel ? <>{windowLabel} </> : null}TikTok videos — from content alone, never seeing a single view count.</>;
+  const bigLine = { fontSize: "20px", fontWeight: "800", color: B.black, lineHeight: "1.3" };
+  const bodyLine = { fontSize: "13px", color: B.body, lineHeight: "1.6", marginTop: "8px" };
+  const strongNum = agg && <b style={{ color: "#2E7D32" }}>{agg.avgTimesTypicalStrong.toFixed(1)}×</b>;
+  const weakNum = agg && <b style={{ color: "#8D4B36" }}>{agg.avgTimesTypicalWeak.toFixed(1)}×</b>;
 
   return (
     <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
       <div style={{ textAlign: "center" }}>
         {agg ? (
-          <>
-            <div style={{ fontSize: "20px", fontWeight: "800", color: B.black, lineHeight: "1.3" }}>
-              We called it on {agg.hits} out of {agg.graded}.
-            </div>
-            <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6", marginTop: "8px" }}>
-              We scored your {windowLabel ? <>{windowLabel} </> : null}TikTok videos — from content alone, never seeing a single view count.
-              {showAverages && (
-                <> The videos we predicted would be strongest averaged{" "}
-                  <b style={{ color: "#2E7D32" }}>{agg.avgTimesTypicalStrong.toFixed(1)}×</b> your typical 30-day engagement, while those predicted weakest averaged{" "}
-                  <b style={{ color: "#8D4B36" }}>{agg.avgTimesTypicalWeak.toFixed(1)}×</b>.</>
-              )}
-            </div>
-          </>
+          agg.heroForm === "averages" ? (
+            <>
+              <div style={bigLine}>
+                {agg.averagesSubForm === "ratio"
+                  ? <>Our top picks outperformed our bottom picks by <span style={{ color: "#2E7D32" }}>{ratioLabel}</span>.</>
+                  : <>Top picks: {strongNum} · bottom picks: {weakNum}</>}
+              </div>
+              <div style={bodyLine}>
+                <b style={{ color: B.black }}>Called it: {agg.hits} of {agg.graded}.</b> {windowSentence}
+              </div>
+            </>
+          ) : agg.heroForm === "neutral" ? (
+            <>
+              <div style={bigLine}>Every call — hit and miss — below.</div>
+              <div style={bodyLine}>{windowSentence}</div>
+            </>
+          ) : (
+            <>
+              <div style={bigLine}>We called it on {agg.hits} out of {agg.graded}.</div>
+              <div style={bodyLine}>
+                {windowSentence} The videos we predicted would be strongest averaged {strongNum} your typical 30-day engagement, while those predicted weakest averaged {weakNum}.
+              </div>
+            </>
+          )
         ) : data.state !== "pending_only" && data.state !== "baseline_forming" ? (
           <div style={{ fontSize: "12.5px", color: "#888" }}>
             Building your track record — {data.gradedCallCount} call{data.gradedCallCount === 1 ? "" : "s"} on the books.

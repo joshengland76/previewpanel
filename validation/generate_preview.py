@@ -115,7 +115,14 @@ OOF_PARQUET = (
 
 OVERALL_WINDOW = 1000
 OBJECTIVE_WINDOW = 100
-SECTION_A_MAX_ROWS = 8
+# Shared call-semantics config (backend/scoring/call_semantics.json) -- read
+# once, up top, so the graded-window cap below can use it.
+_call_semantics = json.loads(CALL_SEMANTICS_PATH.read_text())
+CALL_SIZE_TIERS = _call_semantics["sizeTiers"]      # [{minGraded,k}], largest minGraded first
+GRADED_WINDOW = _call_semantics["gradedWindow"]     # v4.1 -- rank/display over the N most-recent graded videos (rolling)
+CALLS_TIER = _call_semantics["callsTier"]           # [{minFraction,tier}], adaptive-hero impressiveness
+AVERAGES_TIER = _call_semantics["averagesTier"]     # [{minGap,tier}]
+SECTION_A_MAX_ROWS = GRADED_WINDOW                  # v4.1 -- Section A (the graded window) is now up to 40 rows, not 8
 AGED_MIN_DAYS = 30
 
 PP_API_BASE = os.environ.get("PP_API_BASE", "http://localhost:3001")
@@ -363,22 +370,32 @@ def size_section_a_window(videos_most_recent_first, max_rows=SECTION_A_MAX_ROWS)
     return videos_most_recent_first[:max_rows]
 
 
-_call_semantics = json.loads(CALL_SEMANTICS_PATH.read_text())
-CALL_SIZE_TIERS = _call_semantics["sizeTiers"]  # [{minGraded,k}], largest minGraded first
-
-
 def _topbottom_k(n):
-    """Track Record v4 -- RANK-based call semantics. How many rows count as
-    top/bottom at this shown-set size n, read from the shared sizeTiers
-    (backend/scoring/call_semantics.json) so this and server.js's own
-    topBottomK() can never disagree. n>=6 -> 3; n in {4,5} -> 2; n<4 ->
-    None (not enough spread to call a top-vs-bottom split that isn't
-    noise). A k=3 read at n=5 would pull the middle-ranked row into BOTH
-    groups -- 2*k<=n holds at every tier, so the groups never overlap."""
+    """Track Record v4.1 -- RANK-based call semantics, tiers v3. How many
+    rows count as top/bottom at this in-window graded-count n, read from the
+    shared sizeTiers (backend/scoring/call_semantics.json) so this and
+    server.js's topBottomK() can never disagree. n in 6-8 -> 2; 9-11 -> 3;
+    12-40 -> 4; n<6 -> None (floor raised from 4 in v4). 2*k<=n holds at
+    every tier, so the top/bottom groups never overlap."""
     for t in sorted(CALL_SIZE_TIERS, key=lambda t: -t["minGraded"]):
         if n >= t["minGraded"]:
             return t["k"]
     return None
+
+
+def fmt_result_x(v):
+    """v4.1 -- the ×typical label must sit on the VERDICT's side of 1.0.
+    Round 1dp; if that shows '1.0' while the true value isn't exactly 1.0,
+    use 2dp; if 2dp still shows '1.00', force '0.99'/'1.01' toward the true
+    side. Mirrors the tab's fmtTimesTypical. Returns the number string
+    (no '×')."""
+    d1 = f"{v:.1f}"
+    if d1 == "1.0" and v != 1.0:
+        d2 = f"{v:.2f}"
+        if d2 == "1.00":
+            return "0.99" if v < 1.0 else "1.01"
+        return d2
+    return d1
 
 
 def mark_call_chips(section_a):
@@ -473,47 +490,28 @@ def strong_weak_metrics(section_a_scored):
     }
 
 
-# Polish v5, Task 2 -- impressiveness tier thresholds. Named constants
-# (rather than inlining 0.5/0.2) so send_check_verdict, averages_tier, and
-# its own tests all reference the identical boundary values.
-AVG_TIER_STRONG_GAP = 0.5
-AVG_TIER_GOOD_GAP = 0.2
-
-
 def averages_tier(gap):
-    """Polish v5, Task 2 -- deterministic impressiveness tier from the
-    top/bottom AVERAGES gap. Each named threshold is its bucket's
-    INCLUSIVE lower bound, so an exact boundary value (0.5, 0.2, or 0.0)
-    always resolves to the higher tier named for that threshold -- never
-    ambiguous. gap<0 (top's average actually below bottom's) -> 0."""
-    if gap >= AVG_TIER_STRONG_GAP:
-        return 3
-    if gap >= AVG_TIER_GOOD_GAP:
-        return 2
-    if gap >= 0.0:
-        return 1
+    """v4.1 -- deterministic impressiveness tier from the top/bottom AVERAGES
+    gap, boundaries read from the shared call_semantics.json `averagesTier`
+    (so this and server.js's averagesTierFor can never disagree). Each
+    minGap is its bucket's INCLUSIVE lower bound. gap<0 -> 0."""
+    for t in sorted(AVERAGES_TIER, key=lambda t: -t["minGap"]):
+        if gap >= t["minGap"]:
+            return t["tier"]
     return 0
 
 
 def calls_tier(calls_correct, calls_total):
-    """Track Record v3, Task 1 -- deterministic impressiveness tier from
-    the strong/weak CALLS record. Generalized from the old fixed
-    4-total/6-total lookup tables (rank-based top-k/bottom-k could only
-    ever produce 2*k = 4 or 6) to a proportion-based scale, since the
-    unified strong/weak call count is no longer fixed at a symmetric
-    2*k -- a creator can have any number of strong calls and any number
-    of weak calls now, independently. Boundaries chosen so the old
-    fixed-total cases land on the identical tier they used to: 5/6=.83
-    and 4/4=1.0 -> 3; 4/6=.67 and 3/4=.75 -> 2; 3/6=.5 and 2/4=.5 -> 1."""
+    """v4.1 -- deterministic impressiveness tier from the CALLS record, by
+    the fraction calls_correct/calls_total (= hits / 2k), boundaries read
+    from the shared call_semantics.json `callsTier` (>=5/6 -> 3, >=2/3 -> 2,
+    >=1/2 -> 1, else 0). Shared with server.js's callsTierFor."""
     if calls_total <= 0:
         return 0
-    ratio = calls_correct / calls_total
-    if ratio >= 0.8:
-        return 3
-    if ratio >= 0.65:
-        return 2
-    if ratio >= 0.5:
-        return 1
+    frac = calls_correct / calls_total
+    for t in sorted(CALLS_TIER, key=lambda t: -t["minFraction"]):
+        if frac >= t["minFraction"]:
+            return t["tier"]
     return 0
 
 
@@ -1145,8 +1143,11 @@ def truncate_caption(raw):
 
 
 def row_a_html(v):
-    result_class = "up" if (v["result_x"] or 0) >= 1.0 else "down"
-    result_text = f'{v["result_x"]:.1f}× <small>your typical</small>' if v.get("result_x") is not None else "—"
+    # v4.1 -- result rounded to the verdict's side of 1.0 (fmt_result_x);
+    # green >1.0, rust <1.0, ink at exactly 1.0 ('even' class).
+    rx = v.get("result_x")
+    result_class = "even" if rx == 1.0 else ("up" if (rx or 0) > 1.0 else "down")
+    result_text = f'{fmt_result_x(rx)}× <small>your typical</small>' if rx is not None else "—"
     pill = v.get("pill") or "—"
     # Track Record v4 -- TOP N / BOTTOM N pills (rank-based calls), inline
     # next to the percentile pill, only on rows mark_call_chips classified
@@ -1175,17 +1176,40 @@ def row_a_html(v):
             f'<td class="match">{mark_html}</td></tr>')
 
 
-def build_section_a_rows_html(section_a):
-    """Polish v3: sorted by score descending (fixes the date-sort
-    regression -- an earlier version left rows in the data-source
-    adapters' date order, but the spec was always score-sort). No divider
-    row anymore -- the CALLED STRONG/WEAK chips (row_a_html) mark the
-    split explicitly now, inline, so a separate hairline row would be
-    redundant."""
+def build_three_sections_html(section_a, score_col_sub):
+    """Track Record v4.1 -- one structure, both surfaces. Splits the graded
+    window (section_a, <=40 rows) into TOP performers (call_type strong),
+    BOTTOM performers (weak), and OTHER (none), each a labeled table sorted
+    by prediction DESC -- structurally identical to the app tab's three
+    sections. Same labeled PDF column conventions (OUR PREDICTION SCORE +
+    call pill; 30-DAY RESULT color-coded; CALLED IT? with ✓/✗ or 'no call')."""
     if not section_a:
-        return '<tr><td colspan="5">No videos in this window yet.</td></tr>'
-    by_score = sorted(section_a, key=lambda v: v["prediction"], reverse=True)
-    return "\n    ".join(row_a_html(v) for v in by_score)
+        return '<div class="section-h"><span class="kicker">No graded videos in this window yet</span><span class="rule"></span></div>'
+    header = (
+        '<tr><th>Posted</th><th>Video</th>'
+        f'<th>Our prediction score<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">{score_col_sub}</span></th>'
+        '<th>30-day result<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">likes/shares/saves per view</span></th>'
+        '<th>Called it?</th></tr>'
+    )
+
+    def section(kicker, rows, first=False):
+        by_score = sorted(rows, key=lambda v: v["prediction"], reverse=True)
+        rows_html = "\n    ".join(row_a_html(v) for v in by_score)
+        margin = "" if first else ' style="margin-top:10px;"'
+        return (f'<div class="section-h"{margin}><span class="kicker">{kicker}</span><span class="rule"></span></div>\n'
+                f'  <table>{header}\n    {rows_html}</table>')
+
+    top = [v for v in section_a if v.get("call_type") == "strong"]
+    bottom = [v for v in section_a if v.get("call_type") == "weak"]
+    other = [v for v in section_a if v.get("call_type") == "none"]
+    parts = []
+    if top:
+        parts.append(section("Videos we predicted as top performers", top, first=True))
+    if bottom:
+        parts.append(section("Videos we predicted as bottom performers", bottom, first=not top))
+    if other:
+        parts.append(section("Other videos in that timeframe", other, first=not top and not bottom))
+    return "\n  ".join(parts)
 
 
 def row_b_html(v, checkin_date):
@@ -1236,32 +1260,33 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     # send-check log can never describe two different sentences.
     hero_form = pick_hero_form(hero, strongest)
     if hero_form == "averages":
-        # Track Record v4 -- RANK wording, aligned to the app tab's hero
-        # line 2 ("The videos we predicted would be strongest/weakest"):
-        # strong_avg/weak_avg are the mean ×typical of the TOP-k / BOTTOM-k
-        # rank groups (strong_weak_metrics over the rank split).
-        thesis_h1 = (
-            f'{opening} '
-            f'The videos we predicted would be strongest averaged <b class="up">{hero["strong_avg"]:.1f}×</b> your typical engagement, '
-            f'while those predicted weakest averaged <b class="down">{hero["weak_avg"]:.1f}×</b>.'
-        )
+        # v4.1 ADAPTIVE HERO, Option A -- averages LEAD. Ratio form ("top
+        # picks outperformed bottom picks by R×") when there are >=2 of each
+        # call AND weak_avg>0.1; else a pair form. R capped at "10×+".
+        # "Called it: H of C" moves into the sentence (structurally the same
+        # as the tab's averages-lead body line).
+        if len(hero["strong_rows"]) >= 2 and len(hero["weak_rows"]) >= 2 and hero["weak_avg"] > 0.1:
+            r = hero["strong_avg"] / hero["weak_avg"]
+            r_disp = "10×+" if r > 10 else f"{r:.1f}×"
+            lead = f'Our top picks outperformed our bottom picks by <b class="up">{r_disp}</b>.'
+        else:
+            lead = (f'Top picks averaged <b class="up">{hero["strong_avg"]:.1f}×</b> your typical engagement, '
+                    f'bottom picks <b class="down">{hero["weak_avg"]:.1f}×</b>.')
+        thesis_h1 = f'{opening} {lead} We called it on <b>{hero["calls_correct"]} of {hero["calls_total"]}</b>.'
     elif hero_form == "calls":
-        # Calls form: leads with the panel's hit rate over the rank groups
-        # instead of the averages -- picked when the CALLS tier outranks the
-        # AVERAGES tier (pick_hero_form). Bold "C of N"; green only when the
-        # hit rate clears 2/3. v4 rank wording.
-        ratio = hero["calls_correct"] / hero["calls_total"]
-        calls_b = (f'<b class="up">{hero["calls_correct"]} of {hero["calls_total"]}</b>' if ratio >= 0.67
-                   else f'<b>{hero["calls_correct"]} of {hero["calls_total"]}</b>')
+        # v4.1 Option A -- calls LEAD (picked when the calls tier outranks
+        # averages). Leads with the hit rate, averages in the body -- the
+        # tab's calls-lead form.
         thesis_h1 = (
-            f'{opening} '
-            f'We predicted which of your videos would land strongest and weakest — and called {calls_b} right.'
+            f'{opening} We called it on <b>{hero["calls_correct"]} out of {hero["calls_total"]}</b> — '
+            f'the videos we predicted would be strongest averaged <b class="up">{hero["strong_avg"]:.1f}×</b> '
+            f'your typical engagement, while those predicted weakest averaged <b class="down">{hero["weak_avg"]:.1f}×</b>.'
         )
     elif hero_form == "neutral":
         # Neither the averages gap nor the calls record clears even the
         # lowest impressiveness tier -- no boast is fabricated, ever; the
-        # table itself is the honest account.
-        thesis_h1 = f'{opening} Every call — hit and miss — is in the table below.'
+        # tables below are the honest account.
+        thesis_h1 = f'{opening} Every call — hit and miss — is in the tables below.'
     elif hero_form == "best_bet":
         # Hero-contrast guard: fewer than 4 Section-A rows with a real
         # result isn't enough spread for an honest top-vs-bottom split
@@ -1288,43 +1313,14 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     html = re.sub(r'<div class="sub">.*?</div>', f'<div class="sub">{hero_sub}</div>', html, count=1, flags=re.S)
 
     # Polish v4, Task 1: the OUR SCORE column subline is where the
-    # niche/overall comparison basis now lives (row pills dropped it --
-    # see pill_text_short) -- both tables show the identical subline, one
-    # global replace catches both header cells.
+    # niche/overall comparison basis lives (the row pills dropped it).
     score_col_sub = (f'percentile among recent {objective} videos' if mode == "objective"
                       else "percentile among the last 1,000 videos we've scored")
-    html = html.replace('percentile among recent Makeup videos', score_col_sub)
 
-    bet = bet_card_fields(section_b, mode, objective)
-    if bet["empty"]:
-        bet_replacement = ('<div class="video">Nothing posted in the last 30 days — your next video is '
-                            'your strongest bet. Run it first.</div>')
-    else:
-        bet_replacement = (
-            f'<div class="video">"{bet["caption"]}" · {bet["date"]}</div>\n      '
-            f'<span class="pill">{bet["pill"]}</span>\n      '
-            f'<div class="note">Logged before results exist — day-30 check-in {bet["checkin"]}.</div>'
-        )
-    html = re.sub(
-        r'<div class="video">.*?</div>\s*<span class="pill">.*?</span>\s*<div class="note">.*?</div>',
-        bet_replacement,
-        html, count=1, flags=re.S,
-    )
-
-    rows_a_html = build_section_a_rows_html(section_a)
-    html = ROW_A_RE.sub("@@ROW_A@@", html)
-    html = re.sub(r'(@@ROW_A@@\s*)+', rows_a_html, html)
-
-    # Stamp redesign: flat chip in the section-h line, not a rotated
-    # absolute-positioned badge -- no overlap possible by construction
-    # (see the template's .chip-predicted rule / removed .stamp rule).
-    chip_html = f'Predicted {prepared_date} · before results exist'
-    html = re.sub(r'<span class="chip-predicted">.*?</span>', f'<span class="chip-predicted">{chip_html}</span>', html, count=1)
-    rows_b_html = "\n      ".join(
-        row_b_html(v, fmt_date(v["posted_at"] + timedelta(days=30))) for v in section_b
-    ) or '<tr><td colspan="4">No videos in this window yet.</td></tr>'
-    html = ROW_B_RE.sub("@@ROW_B@@", html)
-    html = re.sub(r'(@@ROW_B@@\s*)+', rows_b_html, html)
+    # v4.1 -- swap the three graded sections (top/bottom/other) into the
+    # @@SECTIONS@@ placeholder. Section B (on-the-record table + bet card) is
+    # gone; nothing to render for it.
+    html = html.replace("@@SECTIONS@@", build_three_sections_html(section_a, score_col_sub))
 
     insight_html = (f'Across your strongest videos, the panel’s highest marks landed on <b>{insight}</b>.'
                      if insight else
@@ -1449,11 +1445,12 @@ def main():
                   f"proceeding anyway (--force). Section A will render coverage-honest and likely near-empty.")
 
         section_a_full, section_a_attempted, section_a_succeeded = study_section_a(db, creator_id, oof_preds, mode, objective)
-        # Section B is scored FRESH by default, via a real (billed) Mac-side
-        # fetch per video -- unless --reuse-section-b-hours (per video,
-        # default 24h) finds a matching prior row for that exact URL.
-        section_b, section_b_attempted, section_b_succeeded = study_section_b(
-            db, creator_id, handle, mode, objective, reuse_within_hours=args.reuse_section_b_hours)
+        # Track Record v4.1 -- Section B (fresh last-30-days videos) is REMOVED
+        # from the document entirely (the pitch band is the forward-looking
+        # element now). --study therefore does NO Section-B fetching and is $0
+        # end-to-end. study_section_b + --reuse-section-b machinery stays in
+        # place but DORMANT (not called) for possible future use.
+        section_b, section_b_attempted, section_b_succeeded = [], 0, 0
         prospect_null_config = False  # study rows are always corpus-config (judged with objective)
     else:
         # Validated-config stamp + mixed-config guard (post-diagnostic, T2).
@@ -1466,11 +1463,11 @@ def main():
                   f"rendering a '{objective}' niche percentile -- the pill's comparison pool ('{objective}') does "
                   f"not match the config the judges scored under ('{prospect_config}').", file=sys.stderr)
         section_a_full, section_a_attempted, section_a_succeeded = prospect_section_a(db, handle)
-        section_b, section_b_attempted, section_b_succeeded = prospect_section_b(db, handle)
-
-    for v in section_b:
-        v["percentile"] = midrank_percentile(v["prediction"], pool)
-        v["pill"] = pill_text_short(v["percentile"])
+        # v4.1 -- Section B removed from the document. --prospect ingest still
+        # fetches fresh (<30d) videos by default (worker.py), but they don't
+        # render here; they surface in the graded window once their day-30
+        # matures (is_day30_equiv). prospect_section_b stays dormant.
+        section_b, section_b_attempted, section_b_succeeded = [], 0, 0
 
     prepared_date = datetime.now(timezone.utc).strftime("%B %-d, %Y")
     niche_line = objective if mode == "objective" else args.descriptor
@@ -1510,13 +1507,15 @@ def main():
     # Section B's own earliest date when Section A has none at all, rather
     # than a placeholder with nothing sensible to substitute into a
     # sentence that assumes a real date exists.
+    # v4.1 -- meta line + hero window sentence key to the GRADED WINDOW's
+    # min/max posted dates (matches the tab's hero window), not "now".
     section_a_dates = [v["posted_at"] for v in section_a if v.get("posted_at")]
     if section_a_dates:
         section_a_start = fmt_date(min(section_a_dates))
+        render_date = fmt_date(max(section_a_dates))
     else:
-        section_b_dates = [v["posted_at"] for v in section_b if v.get("posted_at")]
-        section_a_start = fmt_date(min(section_b_dates)) if section_b_dates else "recently"
-    render_date = fmt_date(datetime.now(timezone.utc))
+        section_a_start = "recently"
+        render_date = fmt_date(datetime.now(timezone.utc))
 
     # Transport hotfix, Task 2 -- coverage-honest copy. A Section-A gap only
     # applies in --study mode (prospect_section_a is trivially full

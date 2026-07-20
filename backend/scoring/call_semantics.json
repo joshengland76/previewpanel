@@ -1,9 +1,21 @@
 {
-  "version": 2,
+  "version": 3,
   "rule": "rank-top-bottom",
+  "gradedWindow": 40,
   "sizeTiers": [
-    { "minGraded": 6, "k": 3 },
-    { "minGraded": 4, "k": 2 }
+    { "minGraded": 12, "k": 4 },
+    { "minGraded": 9, "k": 3 },
+    { "minGraded": 6, "k": 2 }
   ],
-  "_comment": "Track Record v4 -- RANK-based call semantics. SUPERSEDES the v3 percentile-threshold rule (the old strongPercentile/weakPercentile 70/30, removed). A 'call' is the TOP k / BOTTOM k of the creator's graded window, ranked by stored prediction (y_pred) DESCENDING, with a deterministic tie-break: posted_at DESC, then id DESC (so both surfaces rank identically). k comes from sizeTiers by the graded-row count: n>=6 -> k=3, n in {4,5} -> k=2, n<4 -> no calls at all (drop -- not enough spread). The TOP-k rows are 'strong' calls, the BOTTOM-k are 'weak' calls, everything in between is 'none' (a no-call: displayed, never scored hit/miss). Verdict from the frozen 30-day result (times_typical = result / creator-median): a STRONG call is a hit iff times_typical >= 1.0, a WEAK call is a hit iff times_typical < 1.0. This module is the single shared source consumed by BOTH server.js's Track Record grading pass (which writes call_type/verdict as a denormalized cache of this live ranking -- see gradeTrackRecordForUser) and generate_preview.py's PDF Section A (mark_call_chips / strong_weak_metrics). Because the call is a RANK over the creator's own graded set, it is NOT a frozen per-row property: it re-ranks as the set grows (times_typical, the RESULT, stays frozen once written). A row's own overall-pool percentile is a SEPARATE display (the pill) and is not the call basis. Never hardcode the tiers anywhere else -- read this file. See TRACK_RECORD_V4_READOUT.md for the semantics migration."
+  "callsTier": [
+    { "minFraction": 0.8333333333333334, "tier": 3 },
+    { "minFraction": 0.6666666666666666, "tier": 2 },
+    { "minFraction": 0.5, "tier": 1 }
+  ],
+  "averagesTier": [
+    { "minGap": 0.5, "tier": 3 },
+    { "minGap": 0.2, "tier": 2 },
+    { "minGap": 0.0, "tier": 1 }
+  ],
+  "_comment": "Track Record v4.1 -- RANK-based call semantics, tiers v3. A 'call' is the TOP k / BOTTOM k of the creator's GRADED WINDOW, ranked by stored prediction (y_pred) DESC with a deterministic tie-break (posted_at DESC, then id DESC), so both surfaces rank identically. GRADED WINDOW = the `gradedWindow` (40) most-recent graded videos by posted_at: it expands until 40, then ROLLS -- older rows leave the display (their times_typical stays frozen; call_type/verdict re-rank live over the current window). k from sizeTiers by the in-window graded count n: n in 6-8 -> k=2, 9-11 -> k=3, 12-40 -> k=4; n<6 -> no calls at all (floor raised from 4 in v4 -> 6 in v4.1). At the full window k=4/40 = the top/bottom DECILE -- the study's own top-vs-bottom measurement construction. TOP-k rows are 'strong' calls, BOTTOM-k 'weak', the rest 'none' (a no-call: displayed, never scored hit/miss). Verdict from the frozen result (times_typical = result / creator-median): a strong call hits iff times_typical >= 1.0, a weak call iff < 1.0. `callsTier` / `averagesTier` are the shared impressiveness-tier boundaries for the ADAPTIVE HERO (Option A): callsTier by the fraction C_hits/2k (>=5/6 -> 3, >=2/3 -> 2, >=1/2 -> 1, else 0), averagesTier by the gap top_avg-bottom_avg. The hero leads with whichever tier is higher (tie -> averages). Consumed by BOTH server.js (grading pass + /api/track-record hero) and generate_preview.py (PDF). Never hardcode the tiers/window/boundaries anywhere else -- read this file. See TRACK_RECORD_V41_READOUT.md for the tier/floor migration."
 }

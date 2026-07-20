@@ -3594,17 +3594,37 @@ async function claimHandleHistory(userId, handle) {
 // disagree about how many rows count as top/bottom.
 const CALL_SEMANTICS = JSON.parse(fs.readFileSync(path.join(__dirname, "scoring", "call_semantics.json"), "utf8"));
 const CALL_SIZE_TIERS = CALL_SEMANTICS.sizeTiers; // [{minGraded,k}], evaluated largest-minGraded first
+const GRADED_WINDOW = CALL_SEMANTICS.gradedWindow; // v4.1 -- calls rank over the N most-recent graded videos (rolling)
+const CALLS_TIER = CALL_SEMANTICS.callsTier;       // [{minFraction,tier}], hero adaptive-lead impressiveness
+const AVERAGES_TIER = CALL_SEMANTICS.averagesTier; // [{minGap,tier}]
 const BASELINE_MIN = 4;        // a creator needs >= this many collected outcomes before ANY of their rows can be graded
 const AGGREGATE_MIN = 4;       // >= this many graded (hit|miss, excluding no_call) calls before the record line shows
 
-// topBottomK(n) -- how many rows count as top/bottom at this graded-count n,
-// straight from the shared sizeTiers (mirrors generate_preview.py's
-// _topbottom_k). n>=6 -> 3; n in {4,5} -> 2; n<4 -> null (no calls).
+// topBottomK(n) -- how many rows count as top/bottom at this in-window
+// graded-count n, straight from the shared sizeTiers v3 (mirrors
+// generate_preview.py's _topbottom_k). 6-8 -> 2; 9-11 -> 3; 12-40 -> 4;
+// n<6 -> null (no calls; floor raised from 4 in v4).
 function topBottomK(n) {
   for (const t of [...CALL_SIZE_TIERS].sort((a, b) => b.minGraded - a.minGraded)) {
     if (n >= t.minGraded) return t.k;
   }
   return null;
+}
+
+// callsTierFor(fraction)/averagesTierFor(gap) -- shared impressiveness tiers
+// for the adaptive hero (Option A), read from call_semantics.json so this
+// and generate_preview.py can never disagree.
+function callsTierFor(fraction) {
+  for (const t of [...CALLS_TIER].sort((a, b) => b.minFraction - a.minFraction)) {
+    if (fraction >= t.minFraction) return t.tier;
+  }
+  return 0;
+}
+function averagesTierFor(gap) {
+  for (const t of [...AVERAGES_TIER].sort((a, b) => b.minGap - a.minGap)) {
+    if (gap >= t.minGap) return t.tier;
+  }
+  return 0;
 }
 
 // assignRankCalls(rows) -- the shared RANK rule. `rows` each need
@@ -3705,26 +3725,31 @@ async function gradeTrackRecordForUser(userId) {
       row.times_typical = timesTypical; // reflect for the ranking step below
     }
 
-    // STEP 2 -- RANK. Every result-frozen row is (re-)classified TOP k /
-    // BOTTOM k / none over the CURRENT graded window via the shared rank
-    // rule (assignRankCalls). call_type + verdict are a denormalized cache
-    // of this live ranking -- rewritten each pass (NOT frozen; the RESULT
-    // is). This keeps the tab's three sections + "N of M" hero consistent as
-    // the window grows, and identical to the PDF's Section A. Existing rows
-    // carried over from the v3 threshold rule are re-ranked here on the very
-    // first tab load (the semantics migration also does it eagerly).
-    const gradable = outcomeRows.filter((r) => r.times_typical != null && r.y_pred != null);
-    const calls = assignRankCalls(gradable.map((r) => ({
+    // STEP 2 -- RANK over the ROLLING GRADED WINDOW (v4.1). The window is the
+    // GRADED_WINDOW (40) most-recent graded videos by posted_at; the calls are
+    // TOP k / BOTTOM k of THAT set (assignRankCalls). call_type + verdict are a
+    // denormalized cache of this live ranking -- rewritten each pass (NOT
+    // frozen; the RESULT/times_typical is). Rows that have rolled OUT of the
+    // window (older than the 40th) are not ranked and get their call_type/
+    // verdict cleared to null (they render nowhere, and a stale call must not
+    // leak into any count). This keeps the tab's three sections + adaptive
+    // hero identical to the PDF over the same window.
+    const inWindow = outcomeRows
+      .filter((r) => r.times_typical != null && r.y_pred != null)
+      .sort((a, b) => new Date(b.posted_at) - new Date(a.posted_at) || (b.id - a.id))
+      .slice(0, GRADED_WINDOW);
+    const calls = assignRankCalls(inWindow.map((r) => ({
       id: r.id, prediction: r.y_pred, postedAt: r.posted_at, timesTypical: r.times_typical,
     })));
-    for (const row of gradable) {
+    for (const row of inWindow) {
       const c = calls.get(row.id);
       if (!c || (row.call_type === c.callType && row.verdict === c.verdict)) continue; // no-op
-      await queryRW(
-        `UPDATE posted_videos SET call_type = $1, verdict = $2 WHERE id = $3`,
-        [c.callType, c.verdict, row.id]
-      );
+      await queryRW(`UPDATE posted_videos SET call_type = $1, verdict = $2 WHERE id = $3`,
+        [c.callType, c.verdict, row.id]);
     }
+    // Rows that rolled OUT of the window keep their last call_type/verdict --
+    // harmless: the /api/track-record endpoint applies the SAME window and
+    // never displays or counts a row beyond the GRADED_WINDOW most-recent.
   } catch (err) {
     console.error(`[track-record] grading failed for user_id=${userId}: ${err.message}`);
   }
@@ -3933,7 +3958,11 @@ app.get("/api/track-record", async (req, res) => {
       }));
     }
 
-    const graded = collectedRows.filter((r) => r.verdict != null).map((r) => ({
+    // v4.1 ROLLING WINDOW -- display + rank over the GRADED_WINDOW (40)
+    // most-recent graded videos by posted_at. collectedRows is already
+    // posted_at DESC (SQL ORDER BY), so a slice takes the most-recent; rows
+    // beyond it have rolled out (frozen result kept, shown nowhere).
+    const graded = collectedRows.filter((r) => r.verdict != null).slice(0, GRADED_WINDOW).map((r) => ({
       postedVideoId: r.id,
       postedAt: r.posted_at,
       captionSnippet: snippet(r.caption),
@@ -3964,20 +3993,37 @@ app.get("/api/track-record", async (req, res) => {
       const strong = graded.filter((g) => g.callType === "strong" && (g.verdict === "hit" || g.verdict === "miss"));
       const weak = graded.filter((g) => g.callType === "weak" && (g.verdict === "hit" || g.verdict === "miss"));
       const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b.timesTypical, 0) / arr.length : null;
-      // v4 hero window -- min/max posted date over the whole graded set (the
-      // videos shown across all three sections), UTC per the declared date
-      // basis; the frontend renders it short-form.
       const gradedTimes = graded.map((g) => new Date(g.postedAt).getTime()).filter((t) => !isNaN(t));
+      const hits = hitOrMiss.filter((g) => g.verdict === "hit").length;
+      const calls = hitOrMiss.length;
+      const strongAvg = avg(strong), weakAvg = avg(weak);
+
+      // v4.1 ADAPTIVE HERO (Option A). Shared impressiveness tiers
+      // (call_semantics.json): callsTier by the fraction hits/2k,
+      // averagesTier by the gap strongAvg-weakAvg. Lead with the higher
+      // tier (tie -> averages). Averages lead uses the RATIO form
+      // (strongAvg/weakAvg) when there are >=2 of each call AND weakAvg>0.1,
+      // else a PAIR form; the frontend caps the ratio display at "10×+".
+      let heroForm = "calls", averagesSubForm = null;
+      if (strong.length && weak.length) {
+        const gap = strongAvg - weakAvg;
+        const callsFraction = calls ? hits / calls : 0;
+        const aT = averagesTierFor(gap), cT = callsTierFor(callsFraction);
+        if (aT === 0 && cT === 0) heroForm = "neutral";
+        else if (aT >= cT) {
+          heroForm = "averages";
+          averagesSubForm = (strong.length >= 2 && weak.length >= 2 && weakAvg > 0.1) ? "ratio" : "pair";
+        } else heroForm = "calls";
+      }
+
       aggregates = {
-        hits: hitOrMiss.filter((g) => g.verdict === "hit").length,
-        graded: hitOrMiss.length, // v4: = the number of CALLS (strong+weak); a rank call is always hit|miss, never no_call
-        // Track Record v2, Task 3d -- counts (not just averages) so the
-        // frontend can gate the averages sub-stat on >=2 of EACH type,
-        // not just the combined AGGREGATE_MIN.
+        hits, graded: calls, // graded = number of CALLS (strong+weak); a rank call is always hit|miss
         strongCount: strong.length,
         weakCount: weak.length,
-        avgTimesTypicalStrong: avg(strong),
-        avgTimesTypicalWeak: avg(weak),
+        avgTimesTypicalStrong: strongAvg,
+        avgTimesTypicalWeak: weakAvg,
+        ratio: (weakAvg && weakAvg > 0) ? strongAvg / weakAvg : null, // top_avg / bottom_avg (frontend caps at 10x+)
+        heroForm, averagesSubForm,
         windowStart: gradedTimes.length ? new Date(Math.min(...gradedTimes)).toISOString() : null,
         windowEnd: gradedTimes.length ? new Date(Math.max(...gradedTimes)).toISOString() : null,
       };

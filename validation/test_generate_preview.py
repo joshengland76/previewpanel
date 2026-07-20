@@ -45,12 +45,12 @@ def _r(prediction, result_x, **kw):
 
 
 def test_topbottom_k():
-    """_topbottom_k: the shared size-tier boundaries read from
-    call_semantics.json. n>=6 -> 3; n in {4,5} -> 2; n<4 -> None. 2k<=n at
-    every tier so the top/bottom groups never overlap. This is the ONE
-    source both surfaces (server.js topBottomK, the PDF) read."""
+    """_topbottom_k: the shared size-tier boundaries v3 read from
+    call_semantics.json. n in 6-8 -> 2; 9-11 -> 3; 12-40 -> 4; n<6 -> None
+    (floor raised from 4 in v4). 2k<=n at every tier so the groups never
+    overlap. This is the ONE source both surfaces read."""
     failures = []
-    cases = [(0, None), (1, None), (3, None), (4, 2), (5, 2), (6, 3), (7, 3), (8, 3), (20, 3)]
+    cases = [(0, None), (5, None), (6, 2), (8, 2), (9, 3), (11, 3), (12, 4), (20, 4), (40, 4)]
     for n, expected in cases:
         got = _topbottom_k(n)
         if got != expected:
@@ -59,56 +59,78 @@ def test_topbottom_k():
 
 
 def test_call_chips():
-    """mark_call_chips (v4 RANK): TOP k -> strong, BOTTOM k -> weak, the
-    middle -> none, ranked by prediction DESC; k from the size tier. Covers
-    the four tick branches, the TOP N/BOTTOM N labels, the below-tier drop,
-    and -- the DEFINING difference from the retired threshold rule -- that
-    the SAME row's call now DEPENDS on the set it's ranked in."""
+    """mark_call_chips (v4.1 RANK): TOP k -> strong, BOTTOM k -> weak, the
+    middle -> none, ranked by prediction DESC; k from the v3 size tier.
+    Covers tick branches, the TOP N/BOTTOM N labels, the below-floor drop,
+    and the defining rank-dependence property."""
     failures = []
 
-    # 6 rows -> k=3: top 3 strong, bottom 3 weak (6 = 2*3, no middle).
+    # 6 rows -> k=2: top 2 strong, 2 middle none, bottom 2 weak.
     rows = [_r(0.9, 1.5), _r(0.7, 0.8), _r(0.5, 1.2), _r(0.3, 0.9), _r(0.1, 0.7), _r(-0.1, 1.3)]
     mark_call_chips(rows)
-    got_type = {round(v["prediction"], 1): v["call_type"] for v in rows}
-    exp_type = {0.9: "strong", 0.7: "strong", 0.5: "strong", 0.3: "weak", 0.1: "weak", -0.1: "weak"}
-    if got_type != exp_type:
-        failures.append(f"6-row k=3 call_type: expected {exp_type}, got {got_type}")
-    # ticks: strong hit iff result>=1.0; weak hit iff result<1.0.
-    got_tick = {round(v["prediction"], 1): v["call_tick"] for v in rows}
-    exp_tick = {0.9: True, 0.7: False, 0.5: True, 0.3: True, 0.1: True, -0.1: False}
-    if got_tick != exp_tick:
-        failures.append(f"6-row tick: expected {exp_tick}, got {got_tick}")
+    types = [v["call_type"] for v in sorted(rows, key=lambda v: -v["prediction"])]
+    if types != ["strong", "strong", "none", "none", "weak", "weak"]:
+        failures.append(f"6-row k=2 call_type: expected [strong,strong,none,none,weak,weak], got {types}")
     top_label = next(v["call_label"] for v in rows if v["call_type"] == "strong")
     bot_label = next(v["call_label"] for v in rows if v["call_type"] == "weak")
-    if top_label != "TOP 3" or bot_label != "BOTTOM 3":
-        failures.append(f"labels: expected TOP 3/BOTTOM 3, got {top_label!r}/{bot_label!r}")
+    if top_label != "TOP 2" or bot_label != "BOTTOM 2":
+        failures.append(f"labels: expected TOP 2/BOTTOM 2, got {top_label!r}/{bot_label!r}")
+    # ticks: strong hit iff result>=1.0; weak hit iff result<1.0.
+    # ranked: 0.9(1.5)strong->T, 0.7(0.8)strong->F | 0.1(0.7)weak->T, -0.1(1.3)weak->F
+    tick = {round(v["prediction"], 1): v["call_tick"] for v in rows}
+    if not (tick[0.9] is True and tick[0.7] is False and tick[0.1] is True and tick[-0.1] is False
+            and tick[0.5] is None and tick[0.3] is None):
+        failures.append(f"6-row tick: got {tick}")
 
-    # 5 rows -> k=2: top 2 strong, bottom 2 weak, 1 middle none.
+    # 9 rows -> k=3.
+    rows9 = [_r(1.0 - i * 0.1, 1.0) for i in range(9)]
+    mark_call_chips(rows9)
+    if next(v["call_label"] for v in rows9 if v["call_type"] == "strong") != "TOP 3":
+        failures.append("9-row: expected TOP 3 label")
+    if sum(1 for v in rows9 if v["call_type"] == "strong") != 3 or sum(1 for v in rows9 if v["call_type"] == "weak") != 3:
+        failures.append("9-row: expected 3 strong + 3 weak")
+
+    # 5 rows -> below the raised floor -> no calls at all.
     rows5 = [_r(0.9, 1.0), _r(0.6, 1.0), _r(0.4, 1.0), _r(0.2, 1.0), _r(0.0, 1.0)]
     mark_call_chips(rows5)
-    types5 = [v["call_type"] for v in sorted(rows5, key=lambda v: -v["prediction"])]
-    if types5 != ["strong", "strong", "none", "weak", "weak"]:
-        failures.append(f"5-row k=2: expected [strong,strong,none,weak,weak], got {types5}")
+    if any(v["call_type"] != "none" for v in rows5):
+        failures.append(f"5-row (below floor): expected all none, got {[v['call_type'] for v in rows5]}")
 
-    # 3 rows -> k=None: no calls at all (below the tier).
-    rows3 = [_r(0.9, 1.0), _r(0.5, 1.0), _r(0.1, 1.0)]
-    mark_call_chips(rows3)
-    if any(v["call_type"] != "none" for v in rows3):
-        failures.append(f"3-row: expected all none, got {[v['call_type'] for v in rows3]}")
-
-    # RANK DEPENDENCE (the opposite of the retired threshold invariant): the
-    # SAME prediction=0.3 row is a WEAK call in a 6-row set (rank 4 -> in the
-    # bottom 3) but a NONE (middle) call in an 8-row set where it's rank 4 of
-    # 8 (top 3 + middle 2 + bottom 3). A row's call is a function of the set.
-    six = [_r(0.9, 1.0), _r(0.7, 1.0), _r(0.5, 1.0), _r(0.3, 1.0), _r(0.1, 1.0), _r(-0.1, 1.0)]
+    # RANK DEPENDENCE: prediction=0.5 is a STRONG call in a 6-set where it
+    # ranks 2nd (k=2 -> top 2) but NONE in a 12-set where it's mid-ranked
+    # (k=4, ranks 5-8 are middle) -- same value, different call by context.
+    six = [_r(p, 1.0) for p in (0.9, 0.5, 0.3, 0.1, -0.1, -0.3)]  # 0.5 is rank 2 -> top 2
     mark_call_chips(six)
-    c6 = next(v for v in six if abs(v["prediction"] - 0.3) < 1e-9)["call_type"]
-    eight = [_r(0.9, 1.0), _r(0.7, 1.0), _r(0.5, 1.0), _r(0.3, 1.0),
-             _r(0.2, 1.0), _r(0.1, 1.0), _r(0.0, 1.0), _r(-0.1, 1.0)]
-    mark_call_chips(eight)
-    c8 = next(v for v in eight if abs(v["prediction"] - 0.3) < 1e-9)["call_type"]
-    if not (c6 == "weak" and c8 == "none"):
-        failures.append(f"rank dependence: prediction=0.3 expected weak in 6-set / none in 8-set, got {c6}/{c8}")
+    c6 = next(v for v in six if abs(v["prediction"] - 0.5) < 1e-9)["call_type"]
+    twelve = [_r(1.0 - i * 0.1, 1.0) for i in range(12)]  # 0.5 is index 5 -> rank 6 of 12 -> middle
+    mark_call_chips(twelve)
+    c12 = next(v for v in twelve if abs(v["prediction"] - 0.5) < 1e-9)["call_type"]
+    if not (c6 == "strong" and c12 == "none"):
+        failures.append(f"rank dependence: prediction=0.5 expected strong in 6-set / none in 12-set, got {c6}/{c12}")
+    return failures
+
+
+def test_fmt_result_x():
+    """fmt_result_x (v4.1): the ×typical label sits on the VERDICT's side of
+    1.0. 1dp; if that shows '1.0' but true!=1.0 use 2dp; if 2dp shows '1.00'
+    force '0.99'/'1.01' toward the true side. Exactly 1.0 -> '1.0'."""
+    from generate_preview import fmt_result_x
+    failures = []
+    cases = [
+        (0.996, "0.99"),   # 1dp->1.0, 2dp->1.00 -> force 0.99 (below)
+        (0.995, "0.99"),   # 1dp->1.0(or 0.9/1.0), forced below to 0.99
+        (1.004, "1.01"),   # 1dp->1.0, 2dp->1.00 -> force 1.01 (above)
+        (1.0, "1.0"),      # exactly 1.0
+        (1.95, "1.9"),     # ordinary 1dp
+        (0.61, "0.6"),     # ordinary 1dp
+        (0.94, "0.9"),     # 1dp fine, not near 1.0
+        (1.06, "1.1"),     # 1dp fine
+        (1.04, "1.04"),    # 1dp=1.0 but true!=1.0 -> 2dp "1.04" (not 1.00)
+    ]
+    for v, expected in cases:
+        got = fmt_result_x(v)
+        if got != expected:
+            failures.append(f"fmt_result_x({v}): expected {expected!r}, got {got!r}")
     return failures
 
 
@@ -202,19 +224,25 @@ def test_impressiveness_tiers():
         if got != expected:
             failures.append(f"calls_tier({correct}, 4): expected {expected}, got {got}")
 
-    # calls_tier, ASYMMETRIC totals -- impossible under the old rank-based
-    # system (2*k could only ever be 4 or 6), routine now (e.g. 7 strong
-    # calls + 2 weak calls = calls_total=9). Verifies the generalized
-    # proportion scale (>=.8->3, >=.65->2, >=.5->1) behaves sensibly.
-    asym_cases = [
-        (9, 8, 3),   # 0.889 -- clearly tier 3
-        (9, 6, 2),   # 0.667 -- clearly tier 2
-        (9, 5, 1),   # 0.556 -- clearly tier 1
-        (9, 4, 0),   # 0.444 -- below the tier-1 floor
-        (5, 5, 3), (5, 4, 3), (5, 3, 1), (5, 2, 0),
+    # calls_tier, calls_total=8 (the v4.1 k=4 case): fraction/8.
+    # 8,7->3 (>=5/6); 6->2 (>=2/3); 5,4->1 (>=1/2); <=3->0.
+    calls8_cases = [(8, 3), (7, 3), (6, 2), (5, 1), (4, 1), (3, 0), (0, 0)]
+    for correct, expected in calls8_cases:
+        got = calls_tier(correct, 8)
+        if got != expected:
+            failures.append(f"calls_tier({correct}, 8): expected {expected}, got {got}")
+
+    # calls_tier proportion scale (v4.1 boundaries 5/6, 2/3, 1/2) at other
+    # totals -- pure-function coverage across the boundaries.
+    frac_cases = [
+        (9, 8, 3),   # 0.889 >= 5/6 -> 3
+        (9, 6, 2),   # 0.667 >= 2/3 -> 2
+        (9, 5, 1),   # 0.556 >= 1/2 -> 1
+        (9, 4, 0),   # 0.444 -> 0
+        (5, 5, 3), (5, 4, 2), (5, 3, 1), (5, 2, 0),  # 4/5=0.8 < 5/6 -> tier 2 (v4.1)
         (7, 6, 3), (7, 5, 2), (7, 4, 1), (7, 3, 0),
     ]
-    for total, correct, expected in asym_cases:
+    for total, correct, expected in frac_cases:
         got = calls_tier(correct, total)
         if got != expected:
             failures.append(f"calls_tier({correct}, {total}): expected {expected}, got {got}")
@@ -334,51 +362,52 @@ def _ranked_rows(n, strong_result=1.0, weak_result=1.0, mid_result=1.0):
 
 
 def test_strong_weak_metrics():
-    """strong_weak_metrics (v4): metrics over the RANK groups (top-k strong,
-    bottom-k weak). Below the tier (n<4 -> k=None) there are no calls ->
+    """strong_weak_metrics (v4.1): metrics over the RANK groups (top-k strong,
+    bottom-k weak). Below the tier (n<6 -> k=None) there are no calls ->
     None. At k>=2 the groups are symmetric (k each). 'none' middle rows and
-    result_x=None rows never enter either group."""
+    result_x=None rows never enter either group. Floor raised v4 (n>=4) ->
+    v4.1 (n>=6); tiers k=2 @ n6-8, k=3 @ n9-11, k=4 @ n12+."""
     failures = []
 
-    # 3 rows -> k=None -> no calls -> None.
-    if strong_weak_metrics(_ranked_rows(3)) is not None:
-        failures.append("3 rows (below tier): expected None (no calls)")
+    # 5 rows -> k=None (below the raised v4.1 floor) -> no calls -> None.
+    if strong_weak_metrics(_ranked_rows(5)) is not None:
+        failures.append("5 rows (below v4.1 floor): expected None (no calls)")
 
-    # 4 rows -> k=2: strong=top2, weak=bottom2, calls_total=4.
-    rows = _ranked_rows(4, strong_result=1.5, weak_result=0.6)
+    # 6 rows -> k=2: strong=top2, weak=bottom2, calls_total=4.
+    rows = _ranked_rows(6, strong_result=1.5, weak_result=0.6)
     hero = strong_weak_metrics(rows)
     if hero is None:
-        failures.append("4 rows k=2: expected real metrics, got None")
+        failures.append("6 rows k=2: expected real metrics, got None")
     else:
         if hero["calls_total"] != 4:
-            failures.append(f"4 rows: expected calls_total=4, got {hero['calls_total']}")
+            failures.append(f"6 rows: expected calls_total=4, got {hero['calls_total']}")
         if abs(hero["strong_avg"] - 1.5) > 1e-9 or abs(hero["weak_avg"] - 0.6) > 1e-9:
-            failures.append(f"4 rows averages: expected strong_avg=1.5 weak_avg=0.6, got {hero}")
+            failures.append(f"6 rows averages: expected strong_avg=1.5 weak_avg=0.6, got {hero}")
         if hero["calls_correct"] != 4:
-            failures.append(f"4 rows calls_correct: expected 4 (all hits), got {hero['calls_correct']}")
+            failures.append(f"6 rows calls_correct: expected 4 (all hits), got {hero['calls_correct']}")
 
-    # 6 rows -> k=3: strong=top3, weak=bottom3, calls_total=6. Mixed results.
+    # 9 rows -> k=3: strong=top3, weak=bottom3, calls_total=6. Mixed results.
     # top3 all 1.2 (hits), bottom3 all 0.8 (weak hits, <1.0) -> 6 correct.
-    rows = _ranked_rows(6, strong_result=1.2, weak_result=0.8)
+    rows = _ranked_rows(9, strong_result=1.2, weak_result=0.8)
     hero = strong_weak_metrics(rows)
     if hero is None or hero["calls_total"] != 6 or hero["calls_correct"] != 6:
-        failures.append(f"6 rows k=3: expected calls_total=6 calls_correct=6, got {hero}")
+        failures.append(f"9 rows k=3: expected calls_total=6 calls_correct=6, got {hero}")
 
-    # 8 rows -> k=3: strong=top3, weak=bottom3, TWO middle 'none' rows never
-    # counted -> calls_total stays 6, not 8.
-    rows = _ranked_rows(8, strong_result=1.2, weak_result=0.8, mid_result=5.0)
+    # 12 rows -> k=4: strong=top4, weak=bottom4, calls_total=8. FOUR middle
+    # 'none' rows never counted -> calls_total stays 8, not 12.
+    rows = _ranked_rows(12, strong_result=1.2, weak_result=0.8, mid_result=5.0)
     hero = strong_weak_metrics(rows)
-    if hero is None or hero["calls_total"] != 6:
-        failures.append(f"8 rows k=3: expected calls_total=6 (2 middle none excluded), got {hero}")
+    if hero is None or hero["calls_total"] != 8:
+        failures.append(f"12 rows k=4: expected calls_total=8 (4 middle none excluded), got {hero}")
 
     # A top/bottom row missing its result_x drops below the >=2-each floor.
-    rows = _ranked_rows(4)
+    rows = _ranked_rows(6)
     for v in rows:
         if v["call_type"] == "strong":
             v["result_x"] = None  # knock both strong rows' results out
     hero = strong_weak_metrics(rows)
     if hero is not None:
-        failures.append("4 rows with both strong results missing: expected None (below >=2 floor)")
+        failures.append("6 rows with both strong results missing: expected None (below >=2 floor)")
 
     return failures
 
@@ -387,6 +416,7 @@ def run():
     failures = []
     failures += test_topbottom_k()
     failures += test_call_chips()
+    failures += test_fmt_result_x()
     failures += test_bet_card()
     failures += test_impressiveness_tiers()
     failures += test_coverage_honest_copy()
