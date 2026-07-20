@@ -145,8 +145,34 @@ excluded from tester engagement stats (`pipeline_status.py`).
 
 ## `--study` workflow (already-enrolled research creator)
 
-One step — render does its own data pulls (Section A from cached OOF,
-Section B live).
+> **Track Record v4.1 — Section B removed, `--study` now renders for $0.**
+> The document is a single graded-window structure: hero → **top performers
+> (k) → bottom performers (k) → other (remaining graded, no call)**. There is
+> no more Section B (last-30-days on-record table / PREDICTED chips / check-in
+> dates / "strongest recent bet" card) — it lives only as a dormant commented
+> template block. So `--study` does **no live fetching at all** and costs
+> **$0** end to end; **everything below about Section-B reuse, per-video
+> fetching, `--reuse-section-b-hours`, and the stored-features/live-fetched
+> split is DORMANT** (the flags still parse, the machinery is retained for
+> possible future use, but nothing calls it on a `--study` run). `--prospect`
+> ingest is unchanged — it still fetches fresh videos live; a freshly-posted
+> video simply surfaces on the tab/PDF once its **day-30 outcome matures**
+> and it enters the graded window.
+>
+> **Call tiers (`call_semantics.json` v3), by in-window graded count n:**
+>
+> | graded n | k (top / bottom each) | calls total (2k) |
+> |---|---|---|
+> | n < 6 | — no calls | 0 |
+> | 6 – 8 | 2 | 4 |
+> | 9 – 11 | 3 | 6 |
+> | 12 – 40 | 4 | 8 |
+>
+> The graded set is the **40 most-recent graded videos** by `posted_at`
+> (rolling; at the full window k=4/40 is the top/bottom decile). Both the PDF
+> and the app tab read this same file.
+
+One step — render reads Section A from cached OOF and renders (no live pulls).
 
 ```bash
 cd ~/PreviewPanel/validation
@@ -346,10 +372,10 @@ replacement.
 | Step | Cost | Typical duration |
 |---|---|---|
 | `worker.py --prospect` (per video, real live-path scoring) | ~$0.10/video | ~1 min/video (TwelveLabs judges + C_dims), so a full 12-aged + 4-fresh batch runs ~15-18 min end to end, politeness delays included |
-| `generate_preview.py --study` Section B (per video, live link-fetch) | ~$0.10/video | ~1 min/video; a typical last-30-days batch (3-5 videos) runs ~4-6 min |
+| `generate_preview.py --study` (v4.1 — Section B removed) | **$0** | seconds — pure DB read + PDF render, no live fetching at all |
 | `generate_preview.py --prospect` (either mode) | **$0** | seconds — pure DB read + PDF render, no scoring |
-| `generate_preview.py --study` Section B, per video (default, reused within 24h) | **$0** | seconds per reused video -- only the un-reused remainder costs/takes anything |
 | PDF render itself (headless Chrome) | $0 | ~2-3 sec |
+| ~~`--study` Section B live link-fetch / per-video reuse~~ | ~~$0.10/vid · $0 reused~~ | **dormant in v4.1** — Section B no longer fetched; rows kept for reference only |
 
 (TwelveLabs $0.0262/min + C_dims ~$0.028/video — the same constants as
 the rest of the pipeline, `PreviewPanel_Operations_and_Roadmap.md` §3d.)
@@ -376,11 +402,11 @@ sometimes leads with the panel's **calls record** instead of the
 **averages gap** (whichever is the more impressive of the two — see
 "Reading the adaptive hero" below), so the verdict tracks whichever
 signal is actually the stronger one, not the averages gap alone.
-Track Record v3 unified call semantics: "top"/"bottom" (rank-based,
-implied a fixed k-and-k split) are retired in favor of "strong"/"weak"
-(percentile-threshold-based — >=70th percentile is a strong call, <=30th
-is weak, independent of how many other rows are in the set, so the
-counts on each side can be asymmetric, e.g. 7 strong + 2 weak):
+Track Record v4.1 call semantics: calls are **rank-based** — the TOP k /
+BOTTOM k of the 40-most-recent graded window (k=2/3/4 by the tier table
+above), so each side has exactly k calls (2k total). The send-check reports
+both the averages gap and the calls record (H of 2k), plus which hero form
+rendered:
 
 ```
 [generate_preview] SEND-CHECK: MIXED (averages: strong=1.24x weak=1.26x gap=-0.02x (tier 0) | calls: 4 of 6 (tier 2) | max_tier=2) -- hero form: calls
@@ -390,11 +416,9 @@ Both metrics (averages gap AND calls record) and which hero form
 actually rendered are always printed together — never just the verdict.
 
 - **STRONG** (either signal reaches its top impressiveness tier — averages
-  gap ≥ 0.5×, or the panel's calls-correct/calls-total ratio ≥ 0.8, e.g.
-  6/6, 5/6, 4/4, or any other split clearing that bar — strong/weak
-  counts are independent now, so there's no fixed "N-call board" size):
-  a real, visible contrast or a genuinely strong hit rate. Safe to send
-  as-is.
+  gap ≥ 0.5×, or the panel's calls-correct/calls-total ratio ≥ 5⁄6, e.g.
+  8/8, 7/8, 6/6, 5/6, 4/4): a real, visible contrast or a genuinely strong
+  hit rate. Safe to send as-is.
 - **MIXED** (some positive signal, but neither clears the top tier):
   **read the doc before sending.** Still an honest document — the numbers
   are what they are — but worth a second look at which of the two
@@ -407,8 +431,9 @@ actually rendered are always printed together — never just the verdict.
   individual misses produced) — but neither signal is strong enough to
   lead an honest sentence with, so the document needs a human rewrite
   before it goes to a prospect, not an automatic pass.
-- **N/A** (fewer than 4 Section-A videos with a real result): no contrast
-  was computed at all — nothing to check, not a red flag.
+- **N/A** (fewer than **6** graded videos in the window — v4.1 raised the
+  call floor from 4 to 6): no contrast was computed at all — nothing to
+  check, not a red flag.
 
 ## Reading the adaptive hero
 
@@ -417,27 +442,31 @@ changes. Sentence 2 picks whichever of two forms is more impressive,
 tiered 0–3 on each (see `generate_preview.py`'s `averages_tier`/
 `calls_tier` for the exact boundaries) — a tie goes to the **averages**
 form (more visceral), except when both are tier 0, which gets a neutral
-line instead of a fabricated boast. Track Record v4: RANK-based call
-semantics — the "calls" are the **TOP k / BOTTOM k of the shown set**
-(`k` from `_topbottom_k`: n≥6→3, {4,5}→2, n<4→none), and the wording is
-the rank language the app tab uses:
+line instead of a fabricated boast. Track Record v4.1: RANK-based call
+semantics — the "calls" are the **TOP k / BOTTOM k of the graded window**
+(`k` from `_topbottom_k` / `call_semantics.json` v3: **n 6–8→2, 9–11→3,
+12–40→4, n<6→none**; window = 40 most-recent graded), and the wording is
+the rank language the app tab uses. The `calls_tier` boundaries are the
+hit fraction C/2k at **5⁄6 → 3, 2⁄3 → 2, 1⁄2 → 1**:
 
-- **Averages form**: `"The videos we predicted would be strongest
-  averaged X× your typical engagement. Those we predicted would be
-  weakest averaged Y×."` (X/Y = mean ×typical of the TOP-k / BOTTOM-k
-  groups)
-- **Calls form**: `"We predicted which of your videos would land
-  strongest and weakest — and called C of N right."` (bold; green only
-  when C/N ≥ .67)
-- **Neutral form** (both tiers 0): `"Every call — hit and miss — is in
-  the table below."`
+- **Averages form** (v4.1): leads with the ratio —
+  `"Our top picks outperformed our bottom picks by R×."` (R = top_avg /
+  bottom_avg, capped `"10×+"`, 1dp), with `"Called it: H of C."` folded
+  into the body. Guarded: needs ≥2 top and ≥2 bottom calls AND
+  bottom_avg > 0.1, else it falls back to the pair form
+  `"Top picks: X× · bottom picks: Y×."`
+- **Calls form**: `"We called it on H out of C."` with the averages in
+  the body.
+- **Neutral form** (both tiers 0): `"Every call — hit and miss — below."`
 
 The Section-A pills are **TOP k / BOTTOM k** (green/rust tints) — these
 ARE the calls. The in-app Track Record tab shows the same underlying rank
-calls but labels the row chips CALLED STRONG / CALLED WEAK (different
-surface label, same rank; both read `call_semantics.json`'s tiers, so the
-document and the tab can never disagree about how many rows count as
-top/bottom or which ones they are).
+calls and now labels the row chips **Top k / Bottom k** (matching the
+section titles "Top k Predictions" / "Bottom k Predictions"); both surfaces
+read `call_semantics.json`'s tiers, so the document and the tab can never
+disagree about how many rows count as top/bottom or which ones they are.
+The ×typical result label always sits on the verdict's own side of 1.0
+(strong hits read >1.0, weak hits <1.0 — never a rounding-induced 1.0×).
 
 The console SEND-CHECK line always names which form rendered
 (`hero form: averages|calls|neutral|best_bet|pending`) so this never has
