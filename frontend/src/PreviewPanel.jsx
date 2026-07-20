@@ -663,30 +663,6 @@ function TrackRecordGradedRow({ row, groupK }) {
   );
 }
 
-function TrackRecordBaselineFormingRow({ row, baselineMin }) {
-  return (
-    <div style={{
-      background: "#fff", border: `1.5px solid ${B.border}`, borderRadius: "10px",
-      padding: "12px 14px",
-    }}>
-      <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", marginBottom: "8px" }}>
-        <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600" }}>
-          {trRowTitle(row)}
-        </span>
-        {row.previewed && <TrackRecordPreviewedBadge />}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
-        <span style={{ fontSize: "11px", color: "#888" }}>
-          {row.rawEngagement.views != null ? `${row.rawEngagement.views.toLocaleString()} views` : "Engagement collected"}
-        </span>
-        <span style={{ fontSize: "11px", color: "#aaa", fontStyle: "italic" }}>
-          baseline forming ({row.baselineN} of {baselineMin})
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function TrackRecordPanel({ userId, onConnectClick }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -745,10 +721,6 @@ function TrackRecordPanel({ userId, onConnectClick }) {
   const topRows = data.graded.filter((g) => g.callType === "strong").sort(byScoreDesc);
   const bottomRows = data.graded.filter((g) => g.callType === "weak").sort(byScoreDesc);
   const otherRows = data.graded.filter((g) => g.callType === "none").sort(byScoreDesc);
-  // Baseline-forming rows (have an outcome but the creator isn't gradeable
-  // yet) only exist pre-active; shown as a small still-collecting list so a
-  // just-connected creator's tab isn't blank, never as "pending".
-  const baselineRows = [...data.ungradedResolved].sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
 
   // v4 hero -- line 1 (the stat) stands out; line 2 = window + the
   // strongest/weakest averages. Averages need >=2 of each call (always true
@@ -805,6 +777,10 @@ function TrackRecordPanel({ userId, onConnectClick }) {
         )}
       </div>
 
+      <div style={{ textAlign: "center", fontSize: "12px", color: "#888", lineHeight: "1.5" }}>
+        Prediction scores are percentiles among the last 1,000 videos we've scored.
+      </div>
+
       {topRows.length > 0 && (
         <div>
           <div style={{ fontSize: "16px", fontWeight: "800", color: "#2E7D32", marginBottom: "10px" }}>
@@ -829,8 +805,8 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 
       {otherRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
-            OTHER VIDEOS IN THAT TIMEFRAME
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#555", marginBottom: "10px" }}>
+            Other Videos in that timeframe
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {otherRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}
@@ -842,18 +818,7 @@ function TrackRecordPanel({ userId, onConnectClick }) {
           lands <date>." for pending rows. Deliberately not rendered per v4
           spec (pending renders nowhere). To enable, map data.pending here. */}
 
-      {baselineRows.length > 0 && (
-        <div>
-          <div style={{ fontSize: "11.5px", fontWeight: "800", color: "#888", letterSpacing: "0.05em", marginBottom: "8px" }}>
-            STILL COLLECTING
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {baselineRows.map((row) => <TrackRecordBaselineFormingRow key={row.postedVideoId} row={row} baselineMin={data.baselineMin} />)}
-          </div>
-        </div>
-      )}
-
-      {agg == null && topRows.length === 0 && bottomRows.length === 0 && otherRows.length === 0 && baselineRows.length === 0 && (
+      {agg == null && topRows.length === 0 && bottomRows.length === 0 && otherRows.length === 0 && (
         <div style={{ padding: "8px 0 0", textAlign: "center", color: "#aaa", fontSize: "13px" }}>
           Nothing on the record yet.
         </div>
@@ -894,7 +859,7 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss }) {
         animation: "pp-slide 0.25s ease",
       }}>
         <img src="/owl-logo.png?v=3" alt="PreviewPanel"
-          style={{ height: "77px", width: "auto", margin: "0 auto 18px", display: "block" }} />
+          style={{ height: "92px", width: "auto", margin: "0 auto 18px", display: "block" }} />
         <div style={{ fontWeight: "800", fontSize: "20px", color: B.black, marginBottom: "12px" }}>
           Know before you post.
         </div>

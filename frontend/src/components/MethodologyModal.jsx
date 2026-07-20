@@ -135,7 +135,7 @@ function ValidationDetail({ onClose }) {
       <Section title="What we found">
         Held-out rank correlation was +{STUDY_STATS.crossValidatedRankCorrelation} cross-validated
         across all 199 study creators, and +{STUDY_STATS.heldOutRankCorrelation} on a sealed
-        30-creator holdout opened exactly once. Videos the model ranked in its top tier beat
+        30-creator holdout opened exactly once. Videos the model ranked in its top decile beat
         the creator's own typical engagement {STUDY_STATS.precisionAtDecileCasual}. That's true
         in {STUDY_STATS.nNichesWithScores} of the {STUDY_STATS.nNiches} niches we studied —
         {" "}{STUDY_STATS.nNichesWithCaveat} of those also carry a plain-language note that our
@@ -155,7 +155,7 @@ function ValidationDetail({ onClose }) {
         background: B.bg, border: `1px solid ${B.border}`, borderRadius: 14, padding: 14, margin: "16px 0",
       }}>
         <Stat value={`+${STUDY_STATS.crossValidatedRankCorrelation}`} label="Cross-validated correlation" />
-        <Stat value="~68%" label="top-tier precision" />
+        <Stat value="~68%" label="top-decile precision" />
         <Stat value="~4,900" label="videos studied" />
         <Stat value={STUDY_STATS.nCreators} label="creators" />
         <Stat value={`${STUDY_STATS.outcomeWindowDays} days`} label="real engagement window" />

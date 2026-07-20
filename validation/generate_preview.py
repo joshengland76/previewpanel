@@ -1195,8 +1195,10 @@ def build_three_sections_html(section_a, score_col_sub):
     def section(kicker, rows, first=False):
         by_score = sorted(rows, key=lambda v: v["prediction"], reverse=True)
         rows_html = "\n    ".join(row_a_html(v) for v in by_score)
-        margin = "" if first else ' style="margin-top:10px;"'
-        return (f'<div class="section-h"{margin}><span class="kicker">{kicker}</span><span class="rule"></span></div>\n'
+        # Uniform vertical clearance comes from .section-h's own margin (14px
+        # top / 8px bottom) so the kicker never crowds the table above or below
+        # it -- no tight per-section inline override.
+        return (f'<div class="section-h"><span class="kicker">{kicker}</span><span class="rule"></span></div>\n'
                 f'  <table>{header}\n    {rows_html}</table>')
 
     top = [v for v in section_a if v.get("call_type") == "strong"]
@@ -1322,10 +1324,13 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     # gone; nothing to render for it.
     html = html.replace("@@SECTIONS@@", build_three_sections_html(section_a, score_col_sub))
 
-    insight_html = (f'Across your strongest videos, the panel’s highest marks landed on <b>{insight}</b>.'
-                     if insight else
-                     'Not enough scored axis detail on the top videos yet to call out a specific pattern.')
-    html = re.sub(r'<div class="insight">.*?</div>', f'<div class="insight">{insight_html}</div>', html, count=1, flags=re.S)
+    # When there's no scored-axis signal to call out, leave it blank entirely
+    # (remove the div) rather than printing an apologetic "not enough detail" line.
+    if insight:
+        insight_html = f'<div class="insight">Across your strongest videos, the panel’s highest marks landed on <b>{insight}</b>.</div>'
+    else:
+        insight_html = ''
+    html = re.sub(r'<div class="insight">.*?</div>', insight_html, html, count=1, flags=re.S)
 
     if precision_caveat:
         html = html.replace(
