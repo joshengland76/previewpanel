@@ -614,7 +614,20 @@ function TrackRecordPendingRow({ row }) {
   );
 }
 
-function TrackRecordGradedRow({ row, groupK }) {
+// v5 -- muted outlined objective tag shown after the percentile on JOINED
+// cards ("74th percentile [Fitness/Wellness]"). JOINED rows always carry an
+// objective by construction (a scoreless preview can't be graded).
+function TrObjectiveTag({ objective }) {
+  return (
+    <span style={{
+      border: `1.5px solid ${B.border}`, color: "#8A7A6B", fontWeight: "700",
+      fontSize: "11px", padding: "2px 9px", borderRadius: "999px", background: "transparent",
+      whiteSpace: "nowrap",
+    }}>{objective}</span>
+  );
+}
+
+function TrackRecordGradedRow({ row, groupK, objectiveTags }) {
   // Unified card for all three sections. The verdict pill lives on the TOP
   // row (next to the caption), NOT in a right-hand column -- so the
   // OUR PREDICTION SCORE and 30-DAY RESULT sections below use the FULL card
@@ -652,6 +665,7 @@ function TrackRecordGradedRow({ row, groupK }) {
         <span style={{ fontSize: "13px", fontWeight: "800", color: B.black }}>
           {trPillTextShort(row.overallPercentile) || "—"}
         </span>
+        {objectiveTags && row.objective && <TrObjectiveTag objective={row.objective} />}
         {isCall && <TrackRecordCallChip callType={row.callType} k={groupK} />}
       </div>
       <TrCardLabel>30-day result (likes/shares/saves per view)</TrCardLabel>
@@ -677,16 +691,158 @@ function TrGroupSummary({ rows }) {
   );
 }
 
+// ── Track Record v5 -- two-era rendering helpers ────────────────────────────
+function trEraSplit(graded) {
+  const byScoreDesc = (a, b) => (b.prediction ?? -Infinity) - (a.prediction ?? -Infinity);
+  return {
+    topRows: graded.filter((g) => g.callType === "strong").sort(byScoreDesc),
+    bottomRows: graded.filter((g) => g.callType === "weak").sort(byScoreDesc),
+    otherRows: graded.filter((g) => g.callType === "none").sort((a, b) => new Date(a.postedAt) - new Date(b.postedAt)),
+  };
+}
+
+function TrEraHeader({ variant, sub }) {
+  const kickerColor = variant === "joined" ? "#2E7D32" : "#B07D2A"; // green joined / gold blind
+  const kicker = variant === "joined" ? "Since you joined" : "Before you joined — our blind test";
+  return (
+    <div style={{ margin: "2px 0 0" }}>
+      <div style={{ fontSize: "11px", letterSpacing: "0.16em", fontWeight: "800", textTransform: "uppercase", color: kickerColor }}>
+        {kicker}
+      </div>
+      <div style={{ fontSize: "11.5px", color: "#8A7A6B", marginTop: "2px", lineHeight: "1.4" }}>{sub}</div>
+      <div style={{ borderTop: `1px solid ${B.border}`, marginTop: "6px" }} />
+    </div>
+  );
+}
+
+function TrPoolSubline() {
+  return (
+    <div style={{ textAlign: "center", fontSize: "12px", color: "#888", lineHeight: "1.5" }}>
+      Prediction scores are percentiles among the last 1,000 videos we've scored.
+    </div>
+  );
+}
+
+// TrHero -- the live adaptive hero (3 forms), parameterized by the era's own
+// aggregates + a per-era window sentence. Same structure both eras use.
+function TrHero({ agg, windowSentence }) {
+  if (!agg) return null;
+  const bigLine = { fontSize: "20px", fontWeight: "800", color: B.black, lineHeight: "1.3" };
+  const bodyLine = { fontSize: "13px", color: B.body, lineHeight: "1.6", marginTop: "8px" };
+  const ratioLabel = agg.ratio != null ? (agg.ratio > 10 ? "10×+" : `${agg.ratio.toFixed(1)}×`) : null;
+  const strongNum = <b style={{ color: "#2E7D32" }}>{agg.avgTimesTypicalStrong.toFixed(1)}×</b>;
+  const weakNum = <b style={{ color: "#8D4B36" }}>{agg.avgTimesTypicalWeak.toFixed(1)}×</b>;
+  return (
+    <div style={{ textAlign: "center" }}>
+      {agg.heroForm === "averages" ? (
+        <>
+          <div style={bigLine}>
+            {agg.averagesSubForm === "ratio"
+              ? <>Our top picks outperformed our bottom picks by <span style={{ color: "#2E7D32" }}>{ratioLabel}</span>.</>
+              : <>Top picks: {strongNum} · bottom picks: {weakNum}</>}
+          </div>
+          <div style={bodyLine}>
+            <b style={{ color: B.black }}>Called it: {agg.hits} of {agg.graded}.</b> {windowSentence}
+          </div>
+        </>
+      ) : agg.heroForm === "neutral" ? (
+        <>
+          <div style={bigLine}>Every call — hit and miss — below.</div>
+          <div style={bodyLine}>{windowSentence}</div>
+        </>
+      ) : (
+        <>
+          <div style={bigLine}>We called it on {agg.hits} out of {agg.graded}.</div>
+          <div style={bodyLine}>
+            {windowSentence} The videos we predicted would be strongest averaged {strongNum} your typical 30-day engagement, while those predicted weakest averaged {weakNum}.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// TrMiniSummary -- gold card the BLIND era opens with when JOINED owns the hero.
+function TrMiniSummary({ agg }) {
+  if (!agg) return null;
+  const top = agg.avgTimesTypicalStrong != null ? `${agg.avgTimesTypicalStrong.toFixed(1)}×` : null;
+  const bot = agg.avgTimesTypicalWeak != null ? `${agg.avgTimesTypicalWeak.toFixed(1)}×` : null;
+  return (
+    <div style={{
+      background: "#FBF3E2", border: "1px solid #B07D2A", borderRadius: "12px",
+      padding: "10px 12px", fontSize: "12.5px", color: B.black, lineHeight: "1.45",
+    }}>
+      <b style={{ color: "#B07D2A" }}>Blind test: called it on {agg.hits} of {agg.graded}</b>
+      {top && bot ? <> — top picks averaged {top} your typical, bottom picks {bot}.</> : <>.</>} Full board below.
+    </div>
+  );
+}
+
+// TrSections -- Top / Bottom / Other for one era, with the group-average
+// sublines. objectiveTags shows the outlined objective tag (JOINED only).
+function TrSections({ graded, objectiveTags }) {
+  const { topRows, bottomRows, otherRows } = trEraSplit(graded);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+      {topRows.length > 0 && (
+        <div>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#2E7D32", marginBottom: "4px" }}>Top {topRows.length} Predictions</div>
+          <TrGroupSummary rows={topRows} />
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {topRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={topRows.length} objectiveTags={objectiveTags} />)}
+          </div>
+        </div>
+      )}
+      {bottomRows.length > 0 && (
+        <div>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#8D4B36", marginBottom: "4px" }}>Bottom {bottomRows.length} Predictions</div>
+          <TrGroupSummary rows={bottomRows} />
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {bottomRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={bottomRows.length} objectiveTags={objectiveTags} />)}
+          </div>
+        </div>
+      )}
+      {otherRows.length > 0 && (
+        <div>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#555", marginBottom: "10px" }}>Other Videos In That Timeframe</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {otherRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} objectiveTags={objectiveTags} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// TrPlainList -- sub-floor JOINED rows (no calls yet): plain cards, no hero, no
+// sections, no verdict chips. Oldest-first.
+function TrPlainList({ rows, objectiveTags }) {
+  const ordered = [...rows].sort((a, b) => new Date(a.postedAt) - new Date(b.postedAt));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      {ordered.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} objectiveTags={objectiveTags} />)}
+    </div>
+  );
+}
+
 function TrackRecordPanel({ userId, onConnectClick }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!userId) return;
+    // v5 dev fixture mode -- ?trdemo=<name> renders the panel from the endpoint's
+    // in-memory fixture payload through the exact same components (no bypass).
+    const trdemo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("trdemo");
+    if (!userId && !trdemo) return;
     let cancelled = false;
     setData(null); setError(null);
-    const lastSeenAt = localStorage.getItem(TRACK_RECORD_LAST_SEEN_KEY) || "";
-    const qs = new URLSearchParams({ userId, ...(lastSeenAt ? { lastSeenAt } : {}) });
+    let qs;
+    if (trdemo) {
+      qs = new URLSearchParams({ fixture: trdemo });
+    } else {
+      const lastSeenAt = localStorage.getItem(TRACK_RECORD_LAST_SEEN_KEY) || "";
+      qs = new URLSearchParams({ userId, ...(lastSeenAt ? { lastSeenAt } : {}) });
+    }
     fetch(`${API_BASE}/api/track-record?${qs}`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error("failed"))))
       .then((json) => { if (!cancelled) setData(json); })
@@ -728,118 +884,66 @@ function TrackRecordPanel({ userId, onConnectClick }) {
     );
   }
 
-  // v4 -- three sections, split by the rank call_type, each score-descending
-  // by the rank basis (prediction). "Other" = graded rows we made no call on
-  // (middle-ranked); pending/no-outcome rows render NOWHERE now.
-  const byScoreDesc = (a, b) => (b.prediction ?? -Infinity) - (a.prediction ?? -Infinity);
-  const topRows = data.graded.filter((g) => g.callType === "strong").sort(byScoreDesc);
-  const bottomRows = data.graded.filter((g) => g.callType === "weak").sort(byScoreDesc);
-  // OTHER (no-call) rows sort chronologically ascending -- oldest first --
-  // rather than by percentile like the top/bottom call sections.
-  const otherRows = data.graded.filter((g) => g.callType === "none")
-    .sort((a, b) => new Date(a.postedAt) - new Date(b.postedAt));
+  // v5 -- two eras. JOINED (the user's own graded previews) renders first once
+  // it has any graded row; BLIND (the prepopulated blind test) follows unless
+  // retired. Hero ownership + retirement are decided server-side by the real
+  // per-era logic; the frontend just renders the payload.
+  const joined = data.eras?.joined || { graded: [], gradedCount: 0, aggregates: null };
+  const blind = data.eras?.blind || { graded: [], gradedCount: 0, aggregates: null, nullConfig: false };
+  const heroOwner = data.heroOwner;
+  const retired = !!data.retired;
 
-  // v4 hero -- line 1 (the stat) stands out; line 2 = window + the
-  // strongest/weakest averages. Averages need >=2 of each call (always true
-  // when aggregates exist under the rank rule, k>=2). The 2-of-3 study claim
-  // moved OUT of the hero (the welcome modal carries it now).
-  const agg = data.aggregates;
-  const windowLabel = agg && agg.windowStart && agg.windowEnd
-    ? `${trFormatDate(agg.windowStart)}–${trFormatDate(agg.windowEnd)}` : null;
-  // v4.1 adaptive hero (Option A) -- heroForm decided server-side from the
-  // shared tiers; the frontend just renders each form.
-  const ratioLabel = agg && agg.ratio != null ? (agg.ratio > 10 ? "10×+" : `${agg.ratio.toFixed(1)}×`) : null;
-  const windowSentence = <>We scored your {windowLabel ? <>{windowLabel} </> : null}TikTok videos — from content alone, never seeing a single view count.</>;
-  const bigLine = { fontSize: "20px", fontWeight: "800", color: B.black, lineHeight: "1.3" };
-  const bodyLine = { fontSize: "13px", color: B.body, lineHeight: "1.6", marginTop: "8px" };
-  const strongNum = agg && <b style={{ color: "#2E7D32" }}>{agg.avgTimesTypicalStrong.toFixed(1)}×</b>;
-  const weakNum = agg && <b style={{ color: "#8D4B36" }}>{agg.avgTimesTypicalWeak.toFixed(1)}×</b>;
+  const blindWindowLabel = blind.aggregates && blind.aggregates.windowStart && blind.aggregates.windowEnd
+    ? `${trFormatDate(blind.aggregates.windowStart)}–${trFormatDate(blind.aggregates.windowEnd)}` : null;
+  const blindWindowSentence = <>We scored your {blindWindowLabel ? <>{blindWindowLabel} </> : null}TikTok videos — from content alone, never seeing a single view count.</>;
+  const joinedWindowSentence = joined.aggregates && joined.aggregates.windowStart
+    ? <>Your previews since {trFormatDate(joined.aggregates.windowStart)}.</>
+    : <>Your previews, graded against real 30-day results.</>;
+  const blindSub = "Predictions we made on your catalog without ever seeing results."
+    + (blind.nullConfig ? " These were scored without a content category — category choice can shift a video's score." : "");
 
   return (
     <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
-      <div style={{ textAlign: "center" }}>
-        {agg ? (
-          agg.heroForm === "averages" ? (
+      {joined.gradedCount > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <TrEraHeader variant="joined" sub="Your previews, graded against real 30-day results." />
+          {heroOwner === "joined" ? (
             <>
-              <div style={bigLine}>
-                {agg.averagesSubForm === "ratio"
-                  ? <>Our top picks outperformed our bottom picks by <span style={{ color: "#2E7D32" }}>{ratioLabel}</span>.</>
-                  : <>Top picks: {strongNum} · bottom picks: {weakNum}</>}
-              </div>
-              <div style={bodyLine}>
-                <b style={{ color: B.black }}>Called it: {agg.hits} of {agg.graded}.</b> {windowSentence}
-              </div>
+              <TrHero agg={joined.aggregates} windowSentence={joinedWindowSentence} />
+              <TrPoolSubline />
+              <TrSections graded={joined.graded} objectiveTags />
             </>
-          ) : agg.heroForm === "neutral" ? (
+          ) : (
+            <TrPlainList rows={joined.graded} objectiveTags />
+          )}
+        </div>
+      )}
+
+      {!retired && blind.gradedCount > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+          <TrEraHeader variant="blind" sub={blindSub} />
+          {heroOwner === "blind" ? (
             <>
-              <div style={bigLine}>Every call — hit and miss — below.</div>
-              <div style={bodyLine}>{windowSentence}</div>
+              <TrHero agg={blind.aggregates} windowSentence={blindWindowSentence} />
+              <TrPoolSubline />
+              <TrSections graded={blind.graded} />
             </>
           ) : (
             <>
-              <div style={bigLine}>We called it on {agg.hits} out of {agg.graded}.</div>
-              <div style={bodyLine}>
-                {windowSentence} The videos we predicted would be strongest averaged {strongNum} your typical 30-day engagement, while those predicted weakest averaged {weakNum}.
+              <TrMiniSummary agg={blind.aggregates} />
+              <div style={{ opacity: 0.5 }}>
+                <TrSections graded={blind.graded} />
               </div>
             </>
-          )
-        ) : data.state !== "pending_only" && data.state !== "baseline_forming" ? (
-          <div style={{ fontSize: "12.5px", color: "#888" }}>
-            Building your track record — {data.gradedCallCount} call{data.gradedCallCount === 1 ? "" : "s"} on the books.
-          </div>
-        ) : (
-          <div style={{ fontSize: "13px", color: B.body, lineHeight: "1.6" }}>
-            We scored your posted videos — from content alone. Day-30 results are still coming in.
-          </div>
-        )}
-      </div>
-
-      <div style={{ textAlign: "center", fontSize: "12px", color: "#888", lineHeight: "1.5" }}>
-        Prediction scores are percentiles among the last 1,000 videos we've scored.
-      </div>
-
-      {topRows.length > 0 && (
-        <div>
-          <div style={{ fontSize: "16px", fontWeight: "800", color: "#2E7D32", marginBottom: "4px" }}>
-            Top {topRows.length} Predictions
-          </div>
-          <TrGroupSummary rows={topRows} />
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {topRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={topRows.length} />)}
-          </div>
+          )}
         </div>
       )}
 
-      {bottomRows.length > 0 && (
-        <div>
-          <div style={{ fontSize: "16px", fontWeight: "800", color: "#8D4B36", marginBottom: "4px" }}>
-            Bottom {bottomRows.length} Predictions
-          </div>
-          <TrGroupSummary rows={bottomRows} />
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {bottomRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={bottomRows.length} />)}
-          </div>
-        </div>
-      )}
-
-      {otherRows.length > 0 && (
-        <div>
-          <div style={{ fontSize: "16px", fontWeight: "800", color: "#555", marginBottom: "10px" }}>
-            Other Videos In That Timeframe
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {otherRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}
-          </div>
-        </div>
-      )}
-
-      {/* Vestige option (OFF): a one-line "N more on the record — next result
-          lands <date>." for pending rows. Deliberately not rendered per v4
-          spec (pending renders nowhere). To enable, map data.pending here. */}
-
-      {agg == null && topRows.length === 0 && bottomRows.length === 0 && otherRows.length === 0 && (
+      {joined.gradedCount === 0 && (retired || blind.gradedCount === 0) && (
         <div style={{ padding: "8px 0 0", textAlign: "center", color: "#aaa", fontSize: "13px" }}>
-          Nothing on the record yet.
+          {data.state === "baseline_forming"
+            ? "We scored your posted videos — day-30 results are still coming in."
+            : "Nothing on the record yet."}
         </div>
       )}
     </div>
@@ -1018,7 +1122,25 @@ const OBJECTIVE_OPTIONS = [
   "ASMR", "Myth Busting", "Educational/How-To", "Aesthetic/Vibes", "Business/Finance",
 ];
 
-export default function PreviewPanel() {
+// v5 -- dev fixture viewer. ?trdemo=<name> renders JUST the Track Record panel
+// (fed by the endpoint's in-memory fixture, through the real components) in a
+// phone-width frame, past the beta gate. No links point here; it's a URL Josh
+// opens directly on his phone to review the states.
+function TrackRecordDemoFrame() {
+  return (
+    <div style={{ maxWidth: "430px", margin: "0 auto", minHeight: "100vh", background: B.bg }}>
+      <TrackRecordPanel userId={null} onConnectClick={() => {}} />
+    </div>
+  );
+}
+
+export default function PreviewPanelRoot() {
+  const trdemo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("trdemo");
+  if (trdemo) return <TrackRecordDemoFrame />;
+  return <PreviewPanelApp />;
+}
+
+function PreviewPanelApp() {
   // Scroll-to-top, for real (Track Record v2, Task 1) -- the prior fix
   // (a single window.scrollTo(0,0) on gate close) didn't survive real
   // iPhone testing. Root cause: iOS Safari's scroll-position restoration

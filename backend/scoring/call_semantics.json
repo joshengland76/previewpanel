@@ -2,6 +2,7 @@
   "version": 3,
   "rule": "rank-top-bottom",
   "gradedWindow": 40,
+  "joinedRetirement": 20,
   "sizeTiers": [
     { "minGraded": 12, "k": 4 },
     { "minGraded": 9, "k": 3 },

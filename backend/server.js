@@ -3607,6 +3607,7 @@ async function claimHandleHistory(userId, handle) {
 const CALL_SEMANTICS = JSON.parse(fs.readFileSync(path.join(__dirname, "scoring", "call_semantics.json"), "utf8"));
 const CALL_SIZE_TIERS = CALL_SEMANTICS.sizeTiers; // [{minGraded,k}], evaluated largest-minGraded first
 const GRADED_WINDOW = CALL_SEMANTICS.gradedWindow; // v4.1 -- calls rank over the N most-recent graded videos (rolling)
+const JOINED_RETIREMENT = CALL_SEMANTICS.joinedRetirement; // v5 -- once JOINED graded n >= this, the BLIND era stops rendering
 const CALLS_TIER = CALL_SEMANTICS.callsTier;       // [{minFraction,tier}], hero adaptive-lead impressiveness
 const AVERAGES_TIER = CALL_SEMANTICS.averagesTier; // [{minGap,tier}]
 const BASELINE_MIN = 4;        // a creator needs >= this many collected outcomes before ANY of their rows can be graded
@@ -3667,6 +3668,70 @@ function assignRankCalls(rows) {
   return out;
 }
 
+// ── Track Record v5 -- two-era shaping (BLIND vs JOINED) ────────────────────
+// computeEraAggregates(graded) + shapeEra(candidates) are the SHARED, PURE
+// display logic: they take an era's candidate graded rows (each already
+// carrying its FROZEN timesTypical + the prediction it was ranked on) and
+// produce that era's rolling window, rank calls, and adaptive hero -- computed
+// per era, INDEPENDENTLY (eras never rank against each other). Both the live
+// /api/track-record endpoint and the dev fixture harness call these, so a
+// fixture renders through the exact same logic as production (never hardcoded).
+function computeEraAggregates(graded) {
+  const hitOrMiss = graded.filter((g) => g.verdict === "hit" || g.verdict === "miss");
+  if (hitOrMiss.length < AGGREGATE_MIN) return null;
+  const strong = graded.filter((g) => g.callType === "strong" && (g.verdict === "hit" || g.verdict === "miss"));
+  const weak = graded.filter((g) => g.callType === "weak" && (g.verdict === "hit" || g.verdict === "miss"));
+  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b.timesTypical, 0) / arr.length : null;
+  const gradedTimes = graded.map((g) => new Date(g.postedAt).getTime()).filter((t) => !isNaN(t));
+  const hits = hitOrMiss.filter((g) => g.verdict === "hit").length;
+  const calls = hitOrMiss.length;
+  const strongAvg = avg(strong), weakAvg = avg(weak);
+  let heroForm = "calls", averagesSubForm = null;
+  if (strong.length && weak.length) {
+    const gap = strongAvg - weakAvg;
+    const callsFraction = calls ? hits / calls : 0;
+    const aT = averagesTierFor(gap), cT = callsTierFor(callsFraction);
+    if (aT === 0 && cT === 0) heroForm = "neutral";
+    else if (aT >= cT) {
+      heroForm = "averages";
+      averagesSubForm = (strong.length >= 2 && weak.length >= 2 && weakAvg > 0.1) ? "ratio" : "pair";
+    } else heroForm = "calls";
+  }
+  return {
+    hits, graded: calls, strongCount: strong.length, weakCount: weak.length,
+    avgTimesTypicalStrong: strongAvg, avgTimesTypicalWeak: weakAvg,
+    ratio: (weakAvg && weakAvg > 0) ? strongAvg / weakAvg : null,
+    heroForm, averagesSubForm,
+    windowStart: gradedTimes.length ? new Date(Math.min(...gradedTimes)).toISOString() : null,
+    windowEnd: gradedTimes.length ? new Date(Math.max(...gradedTimes)).toISOString() : null,
+  };
+}
+
+// shapeEra(candidates) -- candidates are display rows that ALREADY have a
+// frozen timesTypical + the prediction. Applies the rolling GRADED_WINDOW,
+// ranks the calls, and computes aggregates. Returns { graded, aggregates,
+// gradedCount, hasCalls }. hasCalls = at least one strong/weak row (n>=6),
+// which is what makes an era eligible to own the hero.
+function shapeEra(candidates) {
+  const inWindow = candidates
+    .filter((r) => r.timesTypical != null && r.prediction != null)
+    .sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt) || (b.postedVideoId - a.postedVideoId))
+    .slice(0, GRADED_WINDOW);
+  const calls = assignRankCalls(inWindow.map((r) => ({
+    id: r.postedVideoId, prediction: r.prediction, postedAt: r.postedAt, timesTypical: r.timesTypical,
+  })));
+  const graded = inWindow.map((r) => {
+    const c = calls.get(r.postedVideoId);
+    return { ...r, callType: c.callType, verdict: c.verdict };
+  });
+  return {
+    graded,
+    aggregates: computeEraAggregates(graded),
+    gradedCount: graded.length,
+    hasCalls: graded.some((g) => g.callType !== "none"),
+  };
+}
+
 // gradeTrackRecordForUser(userId) -- idempotent, safe to call on every tab
 // load (the /api/track-record call site below) and after the day-30
 // collector writes new outcomes. Only THIS user's own rows are touched.
@@ -3683,85 +3748,88 @@ function assignRankCalls(rows) {
 // the very outcome the collector just wrote) naturally re-runs this pass
 // and picks it up. Adding a push path from the Python collector into this
 // endpoint would be a second trigger for the exact same effect.
+// rowEra(row) -- v5 era discriminator from existing provenance. BLIND =
+// prepopulated study_history / prospect_report rows. JOINED = the user's own
+// posted video that fingerprint-matched one of their previews (match_tier 1|2).
+// Anything else (an own post with no matching preview) belongs to neither
+// displayed era and is skipped.
+function rowEra(row) {
+  if (row.source === "study_history" || row.source === "prospect_report") return "blind";
+  if (row.match_tier != null && row.match_tier <= 2) return "joined";
+  return null;
+}
+
 async function gradeTrackRecordForUser(userId) {
   if (!pgPool || !userId) return;
   try {
-    // Every one of this creator's collected outcomes -- this IS the
-    // baseline pool ("median WEC_rate of all their collected outcomes at
-    // that moment"), regardless of whether each individual row has been
-    // graded yet. An already-graded row's own outcome still counts toward
-    // a later row's baseline the same as it always did -- freezing a
-    // VERDICT doesn't remove that row's WEC_rate from the shared pool.
     const { rows: outcomeRows } = await pgPool.query(
       `SELECT id, posted_at, day30_wec_rate, y_pred, times_typical, call_type, verdict,
-              overall_percentile_at_grading FROM posted_videos
+              overall_percentile_at_grading, source, match_tier FROM posted_videos
        WHERE user_id = $1 AND status = 'day30_collected' AND day30_wec_rate IS NOT NULL
          AND test_row IS NOT TRUE`,
       [userId]
     );
-    const baselineN = outcomeRows.length;
-    if (baselineN < BASELINE_MIN) return; // not enough data to grade ANYTHING yet -- "baseline forming" state
-
-    const sortedRates = outcomeRows.map((r) => r.day30_wec_rate).sort((a, b) => a - b);
-    const mid = Math.floor(sortedRates.length / 2);
-    const typical = sortedRates.length % 2 === 0
-      ? (sortedRates[mid - 1] + sortedRates[mid]) / 2
-      : sortedRates[mid];
-    if (!(typical > 0)) return; // degenerate creator baseline -- nothing gradeable yet
-
-    // STEP 1 -- freeze the RESULT. times_typical (30-day result / creator
-    // median) and the pill's overall percentile are frozen ONCE, the first
-    // time a row is gradeable, and never recomputed -- this is the freeze
-    // that survives v4 (the RESULT is frozen; the CALL re-ranks in step 2).
-    // times_typical uses the median AS OF this moment; overall_percentile is
-    // the row's own overall-pool rank (sync_study_history.py pre-computes it
-    // at sync time -- reused when present, per its at-sync-time-pool note).
-    // A row whose judging never produced a usable y_pred can't be ranked or
-    // graded and is left untouched (surfaces as ungradedResolved).
+    // v5 -- grade each ERA INDEPENDENTLY: its own median ("typical"), its own
+    // rolling window, its own call ranking. A BLIND outcome NEVER enters the
+    // JOINED median or ranking and vice-versa, so a call is always ranked
+    // against its own regime. Per-era floors: JOINED grades from its first
+    // outcome (it renders as soon as >=1 row is graded), BLIND keeps the
+    // BASELINE_MIN gate. (A frozen times_typical against a tiny early JOINED
+    // median is a deliberate tradeoff, same freeze semantics as BLIND.)
+    const byEra = { blind: [], joined: [] };
+    for (const r of outcomeRows) {
+      const era = rowEra(r);
+      if (era) byEra[era].push(r);
+    }
     let pools = null;
-    for (const row of outcomeRows) {
-      if (row.times_typical != null) continue; // result already frozen
-      if (row.y_pred == null) continue;         // no prediction -- ungradeable
-      let overallPercentile = row.overall_percentile_at_grading;
-      if (overallPercentile == null) {
-        if (!pools) pools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
-        overallPercentile = clampPercentile(midrankPercentile(row.y_pred, pools.overall));
-      }
-      const timesTypical = row.day30_wec_rate / typical;
-      await queryRW(
-        `UPDATE posted_videos SET times_typical = $1, graded_at = now(),
-           baseline_n_at_grading = $2, overall_percentile_at_grading = $3
-         WHERE id = $4 AND times_typical IS NULL`,
-        [timesTypical, baselineN, overallPercentile, row.id]
-      );
-      row.times_typical = timesTypical; // reflect for the ranking step below
-    }
+    for (const [era, rows] of Object.entries(byEra)) {
+      const floor = era === "joined" ? 1 : BASELINE_MIN;
+      if (rows.length < floor) continue;
+      const sortedRates = rows.map((r) => r.day30_wec_rate).sort((a, b) => a - b);
+      const mid = Math.floor(sortedRates.length / 2);
+      const typical = sortedRates.length % 2 === 0
+        ? (sortedRates[mid - 1] + sortedRates[mid]) / 2
+        : sortedRates[mid];
+      if (!(typical > 0)) continue; // degenerate era baseline
 
-    // STEP 2 -- RANK over the ROLLING GRADED WINDOW (v4.1). The window is the
-    // GRADED_WINDOW (40) most-recent graded videos by posted_at; the calls are
-    // TOP k / BOTTOM k of THAT set (assignRankCalls). call_type + verdict are a
-    // denormalized cache of this live ranking -- rewritten each pass (NOT
-    // frozen; the RESULT/times_typical is). Rows that have rolled OUT of the
-    // window (older than the 40th) are not ranked and get their call_type/
-    // verdict cleared to null (they render nowhere, and a stale call must not
-    // leak into any count). This keeps the tab's three sections + adaptive
-    // hero identical to the PDF over the same window.
-    const inWindow = outcomeRows
-      .filter((r) => r.times_typical != null && r.y_pred != null)
-      .sort((a, b) => new Date(b.posted_at) - new Date(a.posted_at) || (b.id - a.id))
-      .slice(0, GRADED_WINDOW);
-    const calls = assignRankCalls(inWindow.map((r) => ({
-      id: r.id, prediction: r.y_pred, postedAt: r.posted_at, timesTypical: r.times_typical,
-    })));
-    for (const row of inWindow) {
-      const c = calls.get(row.id);
-      if (!c || (row.call_type === c.callType && row.verdict === c.verdict)) continue; // no-op
-      await queryRW(`UPDATE posted_videos SET call_type = $1, verdict = $2 WHERE id = $3`,
-        [c.callType, c.verdict, row.id]);
+      // STEP 1 -- freeze the RESULT (times_typical = 30-day result / era
+      // median) + pill percentile, once per row, never recomputed.
+      for (const row of rows) {
+        if (row.times_typical != null) continue;
+        if (row.y_pred == null) continue;
+        let overallPercentile = row.overall_percentile_at_grading;
+        if (overallPercentile == null) {
+          if (!pools) pools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
+          overallPercentile = clampPercentile(midrankPercentile(row.y_pred, pools.overall));
+        }
+        const timesTypical = row.day30_wec_rate / typical;
+        await queryRW(
+          `UPDATE posted_videos SET times_typical = $1, graded_at = now(),
+             baseline_n_at_grading = $2, overall_percentile_at_grading = $3
+           WHERE id = $4 AND times_typical IS NULL`,
+          [timesTypical, rows.length, overallPercentile, row.id]
+        );
+        row.times_typical = timesTypical;
+      }
+
+      // STEP 2 -- rank the era's rolling window (call_type/verdict denormalized
+      // cache). The v5 endpoint recomputes calls per era via shapeEra (using
+      // the era's display prediction -- the PREVIEW score for JOINED), so this
+      // cache is legacy/compat only; the freeze above is the load-bearing part.
+      const inWindow = rows
+        .filter((r) => r.times_typical != null && r.y_pred != null)
+        .sort((a, b) => new Date(b.posted_at) - new Date(a.posted_at) || (b.id - a.id))
+        .slice(0, GRADED_WINDOW);
+      const calls = assignRankCalls(inWindow.map((r) => ({
+        id: r.id, prediction: r.y_pred, postedAt: r.posted_at, timesTypical: r.times_typical,
+      })));
+      for (const row of inWindow) {
+        const c = calls.get(row.id);
+        if (!c || (row.call_type === c.callType && row.verdict === c.verdict)) continue;
+        await queryRW(`UPDATE posted_videos SET call_type = $1, verdict = $2 WHERE id = $3`,
+          [c.callType, c.verdict, row.id]);
+      }
     }
-    // Rows that rolled OUT of the window keep their last call_type/verdict --
-    // harmless: the /api/track-record endpoint applies the SAME window and
-    // never displays or counts a row beyond the GRADED_WINDOW most-recent.
   } catch (err) {
     console.error(`[track-record] grading failed for user_id=${userId}: ${err.message}`);
   }
@@ -3910,6 +3978,152 @@ app.post("/api/invite/redeem", async (req, res) => {
   }
 });
 
+// assembleTrackRecordResponse -- shared by the live endpoint and the fixture
+// harness. Decides hero ownership + retirement from the two shaped eras and
+// asserts no posted video leaked across eras.
+function assembleTrackRecordResponse({ handle, welcomeSeen, state, blind, joined, blindNullConfig }) {
+  const heroOwner = joined.hasCalls ? "joined" : "blind";
+  const retired = joined.gradedCount >= JOINED_RETIREMENT;
+  const blindIds = new Set(blind.graded.map((g) => g.postedVideoId));
+  if (joined.graded.some((g) => blindIds.has(g.postedVideoId))) {
+    console.error(`[track-record] ERA LEAKAGE: a posted video appears in BOTH eras (handle=${handle}) -- window must never mix eras`);
+  }
+  return {
+    state, handle, welcomeSeen, heroOwner, retired,
+    eras: {
+      joined: { graded: joined.graded, aggregates: joined.aggregates, gradedCount: joined.gradedCount, hasCalls: joined.hasCalls },
+      blind: { graded: blind.graded, aggregates: blind.aggregates, gradedCount: blind.gradedCount, hasCalls: blind.hasCalls, nullConfig: !!blindNullConfig },
+    },
+    blindGradedCount: blind.gradedCount, // welcome modal "we scored N of your videos" sources from BLIND
+    gradedCallCount: [blind, joined].reduce((n, e) =>
+      n + e.graded.filter((g) => g.verdict === "hit" || g.verdict === "miss").length, 0), // tab badge fallback
+    baselineMin: BASELINE_MIN, aggregateMin: AGGREGATE_MIN,
+  };
+}
+
+// ── Track Record v5 fixture harness (DEV-ONLY, Task 8) ──────────────────────
+// GET /api/track-record?fixture=<name> returns the SAME payload shape as the
+// live endpoint, computed by the REAL shaping/grading/tier/hero functions
+// (shapeEra/computeEraAggregates) over IN-MEMORY rows. NO DB reads, NO writes,
+// no scoring spend. k, calls, verdicts, group averages, hero form/ownership and
+// retirement are all computed by the real logic -- never hardcoded here; the
+// fixtures only supply realistic predictions + outcomes. Absent/unknown name =>
+// null (falls through to normal behavior).
+const TR_FIXTURE_OBJS = ["Fitness/Wellness", "Food & Drinks/Cooking", "Fashion", "Shopping",
+  "Makeup/Beauty", "Storytelling", "Travel", "Gaming", "Pets/Animals", "Business/Finance"];
+const TR_FIXTURE_CAPS = [
+  "POV: leg day but make it fun 🏋️", "what I eat before a 10k, honestly", "gym fit check, zero budget edition",
+  "5 stretches your hips are begging for", "unboxing my new gym bag #ad", "the meal prep that changed my week",
+  "how I edit my reels in 4 minutes", "storytime: the gym crush saga", "3 pieces, 9 outfits", "budget grocery haul under $40",
+  "my honest skincare morning routine", "reacting to my old videos 😭", "the trip that almost didn't happen",
+  "why your form is holding you back", "a day in my life (chaotic edition)", "things I wish I knew at 22",
+  "come thrift with me", "this recipe broke my comments", "the truth about my 'clean' feed", "packing cubes changed my life",
+  "answering your DMs about macros", "we tried the viral pasta", "get unready with me", "my cat runs this account",
+];
+function trFixtureDate(i) { // spread rows across a plausible window, oldest-first index i
+  const base = new Date("2026-04-12T00:00:00Z").getTime();
+  return new Date(base + i * 4 * 24 * 3600 * 1000).toISOString();
+}
+// Build an era from raw fixture rows: compute per-era median -> times_typical,
+// then hand to the REAL shapeEra so k/calls/verdicts/hero are real, not faked.
+function trFixtureEra(rawRows) {
+  const outcomes = rawRows.map((r) => r.outcome).filter((v) => v != null).sort((a, b) => a - b);
+  let typical = null;
+  if (outcomes.length) {
+    const m = Math.floor(outcomes.length / 2);
+    typical = outcomes.length % 2 ? outcomes[m] : (outcomes[m - 1] + outcomes[m]) / 2;
+  }
+  const candidates = rawRows.map((r) => ({
+    postedVideoId: r.id, postedAt: r.postedAt, captionSnippet: r.caption,
+    prediction: r.prediction, overallPercentile: r.percentile, objective: r.objective ?? null,
+    timesTypical: (typical && typical > 0 && r.outcome != null) ? r.outcome / typical : null,
+    previewed: !!r.previewed, gradedAt: r.postedAt,
+  }));
+  return shapeEra(candidates);
+}
+function trFixtureRows(specs, { joined }) {
+  // specs: array of {prediction, percentile, outcome}. Adds realistic
+  // captions/dates/objectives; JOINED rows carry an objective + previewed flag.
+  return specs.map((s, i) => ({
+    id: (joined ? 10000 : 20000) + i,
+    postedAt: trFixtureDate(i),
+    caption: TR_FIXTURE_CAPS[(joined ? 0 : 12) + i] || TR_FIXTURE_CAPS[i % TR_FIXTURE_CAPS.length],
+    prediction: s.prediction, percentile: s.percentile, outcome: s.outcome,
+    objective: joined ? TR_FIXTURE_OBJS[i % TR_FIXTURE_OBJS.length] : null,
+    previewed: joined,
+  }));
+}
+// A generic BLIND set (6 calls-worth, k=2) reused where a fixture just needs a
+// populated blind era. Descending predictions; outcomes give a clear top>bottom.
+const TR_BLIND_SPECS = [
+  { prediction: 0.92, percentile: 79, outcome: 2.1 },
+  { prediction: 0.74, percentile: 71, outcome: 1.7 },
+  { prediction: 0.51, percentile: 58, outcome: 1.3 },
+  { prediction: 0.33, percentile: 44, outcome: 1.0 },
+  { prediction: 0.08, percentile: 22, outcome: 0.7 },
+  { prediction: -0.14, percentile: 9, outcome: 0.6 },
+];
+function buildTrackRecordFixture(name) {
+  const blank = () => trFixtureEra([]);
+  let blindRows = [], joinedRows = [], blindNullConfig = false;
+  if (name === "blind-only") {
+    blindRows = trFixtureRows(TR_BLIND_SPECS, { joined: false });
+  } else if (name === "building") {
+    blindRows = trFixtureRows(TR_BLIND_SPECS, { joined: false });
+    joinedRows = trFixtureRows([ // n=3 -> k=null -> no calls
+      { prediction: 0.6, percentile: 74, outcome: 1.6 },
+      { prediction: 0.2, percentile: 41, outcome: 0.9 },
+      { prediction: 0.45, percentile: 63, outcome: 1.2 },
+    ], { joined: true });
+  } else if (name === "handoff") {
+    blindRows = trFixtureRows(TR_BLIND_SPECS, { joined: false });
+    joinedRows = trFixtureRows([ // n=7 -> k=2 -> owns hero
+      { prediction: 0.9, percentile: 74, outcome: 1.9 },
+      { prediction: 0.72, percentile: 68, outcome: 1.6 },
+      { prediction: 0.55, percentile: 60, outcome: 1.2 },
+      { prediction: 0.4, percentile: 52, outcome: 1.05 },
+      { prediction: 0.2, percentile: 44, outcome: 0.95 },
+      { prediction: -0.05, percentile: 29, outcome: 1.1 },
+      { prediction: -0.2, percentile: 12, outcome: 0.6 },
+    ], { joined: true });
+  } else if (name === "mixed") {
+    blindRows = trFixtureRows(TR_BLIND_SPECS, { joined: false });
+    joinedRows = trFixtureRows([ // n=9 -> k=3; engineered top-pick miss + weak miss
+      { prediction: 0.9, percentile: 88, outcome: 0.8 },   // top strong, low outcome -> MISS
+      { prediction: 0.8, percentile: 82, outcome: 2.0 },   // strong hit
+      { prediction: 0.7, percentile: 74, outcome: 1.8 },   // strong hit
+      { prediction: 0.5, percentile: 60, outcome: 1.2 },   // none
+      { prediction: 0.4, percentile: 52, outcome: 1.0 },   // none
+      { prediction: 0.3, percentile: 45, outcome: 1.1 },   // none
+      { prediction: 0.1, percentile: 30, outcome: 1.6 },   // weak, high outcome -> MISS
+      { prediction: -0.1, percentile: 12, outcome: 0.5 },  // weak hit
+      { prediction: -0.3, percentile: 6, outcome: 0.4 },   // weak hit
+    ], { joined: true });
+  } else if (name === "null-blind") {
+    blindRows = trFixtureRows(TR_BLIND_SPECS, { joined: false });
+    blindNullConfig = true;
+  } else if (name === "retired") {
+    blindRows = trFixtureRows(TR_BLIND_SPECS, { joined: false });
+    // n=21 -> k=4, retired (>= JOINED_RETIREMENT). Descending predictions, a
+    // clear top>bottom gradient so the real logic produces a strong record.
+    const specs = [];
+    for (let i = 0; i < 21; i++) {
+      const frac = i / 20;
+      specs.push({ prediction: 0.95 - frac * 1.2, percentile: Math.round(96 - frac * 90),
+        outcome: 2.4 - frac * 2.0 });
+    }
+    joinedRows = trFixtureRows(specs, { joined: true });
+  } else {
+    return null;
+  }
+  return assembleTrackRecordResponse({
+    handle: "demo.creator", welcomeSeen: true, state: "active",
+    blind: blindRows.length ? trFixtureEra(blindRows) : blank(),
+    joined: joinedRows.length ? trFixtureEra(joinedRows) : blank(),
+    blindNullConfig,
+  });
+}
+
 // GET /api/track-record?userId=X&lastSeenAt=<ISO> -- Track Record tab
 // (Task 2). Runs the grading pass for this user first (idempotent, see
 // gradeTrackRecordForUser), then reads back the now-current state. Optional
@@ -3921,10 +4135,21 @@ app.post("/api/invite/redeem", async (req, res) => {
 // different way.
 app.get("/api/track-record", async (req, res) => {
   const userId = (req.query.userId || "").toString().trim();
-  const lastSeenAt = (req.query.lastSeenAt || "").toString().trim() || null;
-  if (!pgPool) return res.status(503).json({ error: "Database not available" });
-  if (!userId) return res.json({ state: "no_handle", handle: null });
+  const fixture = (req.query.fixture || "").toString().trim();
+  if (!pgPool && !fixture) return res.status(503).json({ error: "Database not available" });
 
+  // DEV-ONLY fixture harness (Task 8) -- real shaping over in-memory rows, no
+  // DB, no writes, no scoring spend. Unknown name falls through to normal.
+  if (fixture) {
+    const payload = buildTrackRecordFixture(fixture);
+    if (payload) {
+      console.log(`[track-record] fixture render: ${fixture} (in-memory, no DB, no writes)`);
+      payload.unseenGradedCount = payload.eras.blind.gradedCount + payload.eras.joined.gradedCount;
+      return res.json(payload);
+    }
+  }
+
+  if (!userId) return res.json({ state: "no_handle", handle: null });
   try {
     const { rows: userRows } = await pgPool.query(`SELECT tiktok_handle, track_record_welcomed FROM users WHERE user_id = $1`, [userId]);
     const handle = userRows[0]?.tiktok_handle || null;
@@ -3933,132 +4158,79 @@ app.get("/api/track-record", async (req, res) => {
 
     // Optional safety net (Task 2) -- idempotent, see claimHandleHistory.
     await claimHandleHistory(userId, handle);
-    // Idempotent grading pass -- see gradeTrackRecordForUser's own comment
-    // for why "runs on tab load" already covers "and after collector writes."
+    // Idempotent per-era grading pass -- see gradeTrackRecordForUser.
     await gradeTrackRecordForUser(userId);
 
     const { rows: allRows } = await pgPool.query(
-      `SELECT id, posted_at, caption, status, match_tier, day30_wec_rate, day30_views, day30_likes,
-              day30_comments, day30_shares, day30_saves, call_type, times_typical, verdict, graded_at,
-              baseline_n_at_grading, overall_percentile_at_grading, y_pred
+      `SELECT id, posted_at, caption, status, source, match_tier, matched_submission_id,
+              day30_wec_rate, times_typical, overall_percentile_at_grading, y_pred, graded_at
        FROM posted_videos WHERE user_id = $1 AND test_row IS NOT TRUE ORDER BY posted_at DESC`,
       [userId]
     );
     if (allRows.length === 0) return res.json({ state: "no_posts_yet", handle });
 
     const collectedRows = allRows.filter((r) => r.status === "day30_collected" && r.day30_wec_rate != null);
-    const pendingRows = allRows.filter((r) => r.status === "scored" || r.status === "matched");
-
     const snippet = (c) => (c ? (c.length > 90 ? c.slice(0, 90).trim() + "…" : c) : null);
-    const checkInDate = (postedAt) => new Date(new Date(postedAt).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    // y_pred is read directly off posted_videos (written at ingest time from
-    // the same shadowResult.prediction shadow_scores itself stores) rather
-    // than joined from shadow_scores -- this is the row Track Record
-    // actually owns and displays, so its percentile pill shouldn't depend on
-    // a separate table's row surviving.
-    let pending = [];
-    if (pendingRows.length > 0) {
-      const pools = pendingRows.some((r) => r.y_pred != null) ? await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows) : null;
-      pending = pendingRows.map((r) => ({
-        postedVideoId: r.id,
-        postedAt: r.posted_at,
-        captionSnippet: snippet(r.caption),
-        overallPercentile: r.y_pred != null && pools ? clampPercentile(midrankPercentile(r.y_pred, pools.overall)) : null,
-        checkInDate: checkInDate(r.posted_at),
-        previewed: r.match_tier != null && r.match_tier <= 2,
-      }));
+    // v5 -- split graded rows by ERA. JOINED display prediction/percentile/
+    // objective come from the MATCHED PREVIEW (the number the user actually
+    // saw), NEVER a rescore -- read from shadow_scores by matched_submission_id.
+    const gradedRows = collectedRows.filter((r) => r.times_typical != null && r.y_pred != null);
+    const joinedDbRows = gradedRows.filter((r) => rowEra(r) === "joined");
+    const blindDbRows = gradedRows.filter((r) => rowEra(r) === "blind");
+
+    const previewBySub = new Map();
+    const subIds = [...new Set(joinedDbRows.map((r) => r.matched_submission_id).filter(Boolean))];
+    if (subIds.length) {
+      const { rows: prevs } = await pgPool.query(
+        `SELECT submission_id, prediction, calibrated_percentile, objective FROM shadow_scores
+         WHERE submission_id = ANY($1) AND is_posted_video IS NOT TRUE`, [subIds]);
+      for (const p of prevs) previewBySub.set(p.submission_id, p);
     }
-
-    // v4.1 ROLLING WINDOW -- display + rank over the GRADED_WINDOW (40)
-    // most-recent graded videos by posted_at. collectedRows is already
-    // posted_at DESC (SQL ORDER BY), so a slice takes the most-recent; rows
-    // beyond it have rolled out (frozen result kept, shown nowhere).
-    const graded = collectedRows.filter((r) => r.verdict != null).slice(0, GRADED_WINDOW).map((r) => ({
-      postedVideoId: r.id,
-      postedAt: r.posted_at,
-      captionSnippet: snippet(r.caption),
-      callType: r.call_type,
-      timesTypical: r.times_typical,
-      verdict: r.verdict,
-      overallPercentile: r.overall_percentile_at_grading,
-      prediction: r.y_pred, // v4 -- the rank basis; the frontend sorts each section by it (score-descending)
-      gradedAt: r.graded_at,
-      previewed: r.match_tier != null && r.match_tier <= 2,
-    }));
-
-    const ungradedResolved = collectedRows.filter((r) => r.verdict == null).map((r) => ({
-      postedVideoId: r.id,
-      postedAt: r.posted_at,
-      captionSnippet: snippet(r.caption),
-      rawEngagement: {
-        views: r.day30_views, likes: r.day30_likes, comments: r.day30_comments,
-        shares: r.day30_shares, saves: r.day30_saves, wecRate: r.day30_wec_rate,
-      },
-      baselineN: collectedRows.length, // current count -- this row simply hasn't cleared BASELINE_MIN yet (or has no usable prediction)
-      previewed: r.match_tier != null && r.match_tier <= 2,
-    }));
-
-    const hitOrMiss = graded.filter((g) => g.verdict === "hit" || g.verdict === "miss");
-    let aggregates = null;
-    if (hitOrMiss.length >= AGGREGATE_MIN) {
-      const strong = graded.filter((g) => g.callType === "strong" && (g.verdict === "hit" || g.verdict === "miss"));
-      const weak = graded.filter((g) => g.callType === "weak" && (g.verdict === "hit" || g.verdict === "miss"));
-      const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b.timesTypical, 0) / arr.length : null;
-      const gradedTimes = graded.map((g) => new Date(g.postedAt).getTime()).filter((t) => !isNaN(t));
-      const hits = hitOrMiss.filter((g) => g.verdict === "hit").length;
-      const calls = hitOrMiss.length;
-      const strongAvg = avg(strong), weakAvg = avg(weak);
-
-      // v4.1 ADAPTIVE HERO (Option A). Shared impressiveness tiers
-      // (call_semantics.json): callsTier by the fraction hits/2k,
-      // averagesTier by the gap strongAvg-weakAvg. Lead with the higher
-      // tier (tie -> averages). Averages lead uses the RATIO form
-      // (strongAvg/weakAvg) when there are >=2 of each call AND weakAvg>0.1,
-      // else a PAIR form; the frontend caps the ratio display at "10×+".
-      let heroForm = "calls", averagesSubForm = null;
-      if (strong.length && weak.length) {
-        const gap = strongAvg - weakAvg;
-        const callsFraction = calls ? hits / calls : 0;
-        const aT = averagesTierFor(gap), cT = callsTierFor(callsFraction);
-        if (aT === 0 && cT === 0) heroForm = "neutral";
-        else if (aT >= cT) {
-          heroForm = "averages";
-          averagesSubForm = (strong.length >= 2 && weak.length >= 2 && weakAvg > 0.1) ? "ratio" : "pair";
-        } else heroForm = "calls";
-      }
-
-      aggregates = {
-        hits, graded: calls, // graded = number of CALLS (strong+weak); a rank call is always hit|miss
-        strongCount: strong.length,
-        weakCount: weak.length,
-        avgTimesTypicalStrong: strongAvg,
-        avgTimesTypicalWeak: weakAvg,
-        ratio: (weakAvg && weakAvg > 0) ? strongAvg / weakAvg : null, // top_avg / bottom_avg (frontend caps at 10x+)
-        heroForm, averagesSubForm,
-        windowStart: gradedTimes.length ? new Date(Math.min(...gradedTimes)).toISOString() : null,
-        windowEnd: gradedTimes.length ? new Date(Math.max(...gradedTimes)).toISOString() : null,
+    const blindCandidate = (r) => ({
+      postedVideoId: r.id, postedAt: r.posted_at, captionSnippet: snippet(r.caption),
+      prediction: r.y_pred, timesTypical: r.times_typical,
+      overallPercentile: r.overall_percentile_at_grading, objective: null,
+      gradedAt: r.graded_at, previewed: false,
+    });
+    const joinedCandidate = (r) => {
+      const p = previewBySub.get(r.matched_submission_id) || {};
+      return {
+        postedVideoId: r.id, postedAt: r.posted_at, captionSnippet: snippet(r.caption),
+        prediction: p.prediction != null ? p.prediction : r.y_pred, // the preview's own score
+        timesTypical: r.times_typical,
+        overallPercentile: p.calibrated_percentile != null ? p.calibrated_percentile : r.overall_percentile_at_grading,
+        objective: p.objective || null,
+        gradedAt: r.graded_at, previewed: true,
       };
-    }
+    };
+    const blind = shapeEra(blindDbRows.map(blindCandidate));
+    const joined = shapeEra(joinedDbRows.map(joinedCandidate));
 
-    let unseenGradedCount = 0;
-    if (lastSeenAt) {
-      const cutoff = new Date(lastSeenAt);
-      unseenGradedCount = graded.filter((g) => g.gradedAt && new Date(g.gradedAt) > cutoff).length;
-    } else {
-      unseenGradedCount = graded.length; // never opened the tab before -- every graded row is "unseen"
+    // BLIND null-config: a prospect_report graded row scored WITHOUT a category
+    // (null objective on its pool-eligible shadow_score). study_history rows
+    // always carry an objective (study-config -> no null sentence).
+    let blindNullConfig = false;
+    const blindIds = blind.graded.map((g) => g.postedVideoId);
+    if (blindIds.length) {
+      const { rows: cfg } = await pgPool.query(
+        `SELECT DISTINCT s.objective FROM posted_videos pv JOIN shadow_scores s ON s.posted_video_id = pv.id
+         WHERE pv.id = ANY($1) AND pv.source = 'prospect_report' AND s.pool_eligible`, [blindIds]);
+      blindNullConfig = cfg.length > 0 && cfg.some((r) => r.objective == null);
     }
 
     const state = collectedRows.length === 0 ? "pending_only"
-      : collectedRows.length < BASELINE_MIN ? "baseline_forming"
-      : "active";
+      : (blind.gradedCount + joined.gradedCount) === 0 ? "baseline_forming" : "active";
 
-    res.json({
-      state, handle, pending, graded, ungradedResolved, aggregates,
-      gradedCallCount: hitOrMiss.length, // hit|miss count regardless of the AGGREGATE_MIN gate -- feeds the sub-threshold "N calls on the books" copy
-      unseenGradedCount, baselineMin: BASELINE_MIN, aggregateMin: AGGREGATE_MIN,
-      welcomeSeen, // Task 4 -- server-side welcome-modal flag; false here means the frontend should show it
-    });
+    const payload = assembleTrackRecordResponse({ handle, welcomeSeen, state, blind, joined, blindNullConfig });
+
+    const lastSeenAt = (req.query.lastSeenAt || "").toString().trim() || null;
+    const allGraded = [...blind.graded, ...joined.graded];
+    payload.unseenGradedCount = lastSeenAt
+      ? allGraded.filter((g) => g.gradedAt && new Date(g.gradedAt) > new Date(lastSeenAt)).length
+      : allGraded.length;
+
+    res.json(payload);
   } catch (err) {
     console.error(`[track-record] fetch failed for user_id=${userId}: ${err.message}`);
     res.status(500).json({ error: "Failed to load track record" });
