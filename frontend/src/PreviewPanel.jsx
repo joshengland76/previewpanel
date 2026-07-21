@@ -648,10 +648,9 @@ function TrackRecordGradedRow({ row, groupK, objectiveTags }) {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px", marginBottom: "8px" }}>
         <span style={{ fontSize: "12.5px", color: B.black, fontWeight: "600", flex: 1, minWidth: 0 }}>
           {trRowTitle(row)}
-          {row.previewed && <TrackRecordPreviewedBadge />}
         </span>
-        {/* No-call (OTHER) rows drop the verdict chip entirely -- there's no
-            call to report -- which frees the row for a longer description. */}
+        {/* No-call rows drop the verdict chip entirely -- there's no call to
+            report -- so the caption uses the FULL card width (no reserved space). */}
         {isCall && (
           <span style={{ flexShrink: 0, marginTop: "1px" }}>
             <TrCardVerdictChip verdict={row.verdict} />
@@ -715,10 +714,14 @@ function TrEraHeader({ variant, sub }) {
   );
 }
 
-function TrPoolSubline() {
+function TrPoolSubline({ variant, nullConfig }) {
+  const base = "Prediction scores are percentiles among the last 1,000 videos we've scored";
+  const text = variant === "joined"
+    ? base + " across all content categories."
+    : base + "." + (nullConfig ? " These videos were scored without a content category - category choice can shift a video's score." : "");
   return (
     <div style={{ textAlign: "center", fontSize: "12px", color: "#888", lineHeight: "1.5" }}>
-      Prediction scores are percentiles among the last 1,000 videos we've scored.
+      {text}
     </div>
   );
 }
@@ -804,7 +807,7 @@ function TrSections({ graded, objectiveTags }) {
       )}
       {otherRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "16px", fontWeight: "800", color: "#555", marginBottom: "10px" }}>Other Videos In That Timeframe</div>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#555", marginBottom: "10px" }}>Other Videos in That Timeframe</div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {otherRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} objectiveTags={objectiveTags} />)}
           </div>
@@ -899,8 +902,9 @@ function TrackRecordPanel({ userId, onConnectClick }) {
   const joinedWindowSentence = joined.aggregates && joined.aggregates.windowStart
     ? <>Your previews since {trFormatDate(joined.aggregates.windowStart)}.</>
     : <>Your previews, graded against real 30-day results.</>;
-  const blindSub = "Predictions we made on your catalog without ever seeing results."
-    + (blind.nullConfig ? " These were scored without a content category — category choice can shift a video's score." : "");
+  // v5 -- the null-config caveat moved to the BLIND pool subline (below the
+  // hero); the era sub is just the plain era description now.
+  const blindSub = "Predictions we made on your catalog without ever seeing results.";
 
   return (
     <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -910,7 +914,7 @@ function TrackRecordPanel({ userId, onConnectClick }) {
           {heroOwner === "joined" ? (
             <>
               <TrHero agg={joined.aggregates} windowSentence={joinedWindowSentence} />
-              <TrPoolSubline />
+              <TrPoolSubline variant="joined" />
               <TrSections graded={joined.graded} objectiveTags />
             </>
           ) : (
@@ -925,7 +929,7 @@ function TrackRecordPanel({ userId, onConnectClick }) {
           {heroOwner === "blind" ? (
             <>
               <TrHero agg={blind.aggregates} windowSentence={blindWindowSentence} />
-              <TrPoolSubline />
+              <TrPoolSubline variant="blind" nullConfig={blind.nullConfig} />
               <TrSections graded={blind.graded} />
             </>
           ) : (
@@ -1128,7 +1132,7 @@ const OBJECTIVE_OPTIONS = [
 // opens directly on his phone to review the states.
 function TrackRecordDemoFrame() {
   return (
-    <div style={{ maxWidth: "430px", margin: "0 auto", minHeight: "100vh", background: B.bg }}>
+    <div style={{ maxWidth: "430px", margin: "0 auto", minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
       <TrackRecordPanel userId={null} onConnectClick={() => {}} />
     </div>
   );
