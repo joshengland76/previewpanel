@@ -734,10 +734,10 @@ function TrackRecordPanel({ userId, onConnectClick }) {
   const byScoreDesc = (a, b) => (b.prediction ?? -Infinity) - (a.prediction ?? -Infinity);
   const topRows = data.graded.filter((g) => g.callType === "strong").sort(byScoreDesc);
   const bottomRows = data.graded.filter((g) => g.callType === "weak").sort(byScoreDesc);
-  // OTHER (no-call) rows sort chronologically -- most recent first -- rather
-  // than by percentile like the top/bottom call sections.
+  // OTHER (no-call) rows sort chronologically ascending -- oldest first --
+  // rather than by percentile like the top/bottom call sections.
   const otherRows = data.graded.filter((g) => g.callType === "none")
-    .sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
+    .sort((a, b) => new Date(a.postedAt) - new Date(b.postedAt));
 
   // v4 hero -- line 1 (the stat) stands out; line 2 = window + the
   // strongest/weakest averages. Averages need >=2 of each call (always true

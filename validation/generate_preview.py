@@ -1211,9 +1211,9 @@ def build_three_sections_html(section_a, score_col_sub):
                 '<td class="match"></td></tr>')
 
     def section(kicker, rows, chrono=False, show_called=True, total=False):
-        # top/bottom rank by prediction; OTHER sorts chronologically (most
-        # recent first) and drops the Called-it column (no call to report).
-        ordered = (sorted(rows, key=_ts, reverse=True) if chrono
+        # top/bottom rank by prediction; OTHER sorts chronologically ascending
+        # (oldest first) and drops the Called-it column (no call to report).
+        ordered = (sorted(rows, key=_ts) if chrono
                    else sorted(rows, key=lambda v: v["prediction"], reverse=True))
         rows_html = "\n    ".join(row_a_html(v, show_called=show_called) for v in ordered)
         if total:
