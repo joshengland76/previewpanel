@@ -3553,8 +3553,20 @@ async function claimHandleHistory(userId, handle) {
   const normalizedHandle = normalizeHandle(handle, "tiktok");
   if (!normalizedHandle) return { claimedPostedVideos: 0, claimedShadowScores: 0, skipped: 0 };
 
+  // Unowned rows are always claimed (first-owns -- the original behavior for a
+  // real user connecting their own handle). Staging rows (study_history /
+  // prospect_report) are ALSO re-claimed when a DIFFERENT user already owns
+  // them: these are synthesized research/demo rows, never a real user's own
+  // posted content, so a fresh redeem (e.g. a new incognito session opening a
+  // pre-linked demo/test code) re-populates the board instead of showing empty.
+  // A real user's own submitted videos use a different source and stay
+  // first-owns (the multi-device limitation above still applies only to them).
   const { rows: pvRows } = await queryRW(
-    `UPDATE posted_videos SET user_id = $1 WHERE handle = $2 AND user_id IS NULL RETURNING id`,
+    `UPDATE posted_videos SET user_id = $1
+       WHERE handle = $2
+         AND (user_id IS NULL
+              OR (user_id <> $1 AND source IN ('study_history', 'prospect_report')))
+     RETURNING id`,
     [userId, normalizedHandle]
   );
   const claimedIds = pvRows.map((r) => r.id);
@@ -3562,7 +3574,7 @@ async function claimHandleHistory(userId, handle) {
   let shadowClaimed = 0;
   if (claimedIds.length > 0) {
     const { rows: ssRows } = await queryRW(
-      `UPDATE shadow_scores SET user_id = $1 WHERE posted_video_id = ANY($2::int[]) AND user_id IS NULL RETURNING id`,
+      `UPDATE shadow_scores SET user_id = $1 WHERE posted_video_id = ANY($2::int[]) AND user_id IS DISTINCT FROM $1 RETURNING id`,
       [userId, claimedIds]
     );
     shadowClaimed = ssRows.length;
