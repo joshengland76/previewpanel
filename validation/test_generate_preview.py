@@ -111,21 +111,20 @@ def test_call_chips():
 
 
 def test_fmt_result_x():
-    """fmt_result_x (v4.1): the ×typical label sits on the VERDICT's side of
-    1.0. 1dp; if that shows '1.0' but true!=1.0 use 2dp; if 2dp shows '1.00'
-    force '0.99'/'1.01' toward the true side. Exactly 1.0 -> '1.0'."""
+    """fmt_result_x: the ×typical label is rounded to the nearest tenth (always
+    1dp, never hundredths) -- including values that land near 1.0."""
     from generate_preview import fmt_result_x
     failures = []
     cases = [
-        (0.996, "0.99"),   # 1dp->1.0, 2dp->1.00 -> force 0.99 (below)
-        (0.995, "0.99"),   # 1dp->1.0(or 0.9/1.0), forced below to 0.99
-        (1.004, "1.01"),   # 1dp->1.0, 2dp->1.00 -> force 1.01 (above)
-        (1.0, "1.0"),      # exactly 1.0
-        (1.95, "1.9"),     # ordinary 1dp
-        (0.61, "0.6"),     # ordinary 1dp
-        (0.94, "0.9"),     # 1dp fine, not near 1.0
-        (1.06, "1.1"),     # 1dp fine
-        (1.04, "1.04"),    # 1dp=1.0 but true!=1.0 -> 2dp "1.04" (not 1.00)
+        (0.996, "1.0"),   # rounds up to a tenth (no forced 0.99)
+        (1.004, "1.0"),   # rounds down to a tenth (no forced 1.01)
+        (1.04, "1.0"),    # was 2dp under v4.1 -- now a plain tenth
+        (1.0, "1.0"),     # exactly 1.0
+        (0.61, "0.6"),
+        (0.94, "0.9"),
+        (1.06, "1.1"),
+        (2.34, "2.3"),
+        (0.24, "0.2"),
     ]
     for v, expected in cases:
         got = fmt_result_x(v)

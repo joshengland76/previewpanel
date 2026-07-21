@@ -498,13 +498,8 @@ function trPillTextShort(p) {
 // Mirrors generate_preview.py's fmt_result_x (unit-tested there). Returns
 // the number string (no "×").
 function fmtTimesTypical(v) {
-  const d1 = v.toFixed(1);
-  if (d1 === "1.0" && v !== 1.0) {
-    const d2 = v.toFixed(2);
-    if (d2 === "1.00") return v < 1.0 ? "0.99" : "1.01";
-    return d2;
-  }
-  return d1;
+  // ×typical label, rounded to the nearest tenth (always 1dp -- no hundredths).
+  return v.toFixed(1);
 }
 
 function TrackRecordPreviewedBadge() {
@@ -642,9 +637,13 @@ function TrackRecordGradedRow({ row, groupK }) {
           {trRowTitle(row)}
           {row.previewed && <TrackRecordPreviewedBadge />}
         </span>
-        <span style={{ flexShrink: 0, marginTop: "1px" }}>
-          <TrCardVerdictChip verdict={row.verdict} />
-        </span>
+        {/* No-call (OTHER) rows drop the verdict chip entirely -- there's no
+            call to report -- which frees the row for a longer description. */}
+        {isCall && (
+          <span style={{ flexShrink: 0, marginTop: "1px" }}>
+            <TrCardVerdictChip verdict={row.verdict} />
+          </span>
+        )}
       </div>
       <TrCardLabel>Our prediction score</TrCardLabel>
       <div style={{ display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap", marginBottom: "8px" }}>
@@ -720,7 +719,10 @@ function TrackRecordPanel({ userId, onConnectClick }) {
   const byScoreDesc = (a, b) => (b.prediction ?? -Infinity) - (a.prediction ?? -Infinity);
   const topRows = data.graded.filter((g) => g.callType === "strong").sort(byScoreDesc);
   const bottomRows = data.graded.filter((g) => g.callType === "weak").sort(byScoreDesc);
-  const otherRows = data.graded.filter((g) => g.callType === "none").sort(byScoreDesc);
+  // OTHER (no-call) rows sort chronologically -- most recent first -- rather
+  // than by percentile like the top/bottom call sections.
+  const otherRows = data.graded.filter((g) => g.callType === "none")
+    .sort((a, b) => new Date(b.postedAt) - new Date(a.postedAt));
 
   // v4 hero -- line 1 (the stat) stands out; line 2 = window + the
   // strongest/weakest averages. Averages need >=2 of each call (always true
@@ -806,7 +808,7 @@ function TrackRecordPanel({ userId, onConnectClick }) {
       {otherRows.length > 0 && (
         <div>
           <div style={{ fontSize: "16px", fontWeight: "800", color: "#555", marginBottom: "10px" }}>
-            Other Videos in that timeframe
+            Other Videos In That Timeframe
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {otherRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} />)}

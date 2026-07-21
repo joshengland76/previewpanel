@@ -384,18 +384,9 @@ def _topbottom_k(n):
 
 
 def fmt_result_x(v):
-    """v4.1 -- the ×typical label must sit on the VERDICT's side of 1.0.
-    Round 1dp; if that shows '1.0' while the true value isn't exactly 1.0,
-    use 2dp; if 2dp still shows '1.00', force '0.99'/'1.01' toward the true
-    side. Mirrors the tab's fmtTimesTypical. Returns the number string
-    (no '×')."""
-    d1 = f"{v:.1f}"
-    if d1 == "1.0" and v != 1.0:
-        d2 = f"{v:.2f}"
-        if d2 == "1.00":
-            return "0.99" if v < 1.0 else "1.01"
-        return d2
-    return d1
+    """×typical label, rounded to the nearest tenth (always 1dp -- no
+    hundredths). Mirrors the tab's fmtTimesTypical."""
+    return f"{v:.1f}"
 
 
 def mark_call_chips(section_a):
@@ -1142,9 +1133,10 @@ def truncate_caption(raw):
     return cut + "…"
 
 
-def row_a_html(v):
-    # v4.1 -- result rounded to the verdict's side of 1.0 (fmt_result_x);
-    # green >1.0, rust <1.0, ink at exactly 1.0 ('even' class).
+def row_a_html(v, show_called=True):
+    # result rounded to the nearest tenth (fmt_result_x); green >1.0, rust
+    # <1.0, ink at exactly 1.0 ('even' class). show_called=False blanks the
+    # Called-it cell (OTHER section) while the column keeps its width.
     rx = v.get("result_x")
     result_class = "even" if rx == 1.0 else ("up" if (rx or 0) > 1.0 else "down")
     result_text = f'{fmt_result_x(rx)}× <small>your typical</small>' if rx is not None else "—"
@@ -1162,7 +1154,9 @@ def row_a_html(v):
     # "no call" (Polish v4, Task 4) instead of a blank cell -- their
     # percentile wasn't extreme enough to be one of the panel's actual
     # calls, and that's worth saying rather than leaving unexplained.
-    if v.get("call_tick") is None:
+    if not show_called:
+        mark_html = ''
+    elif v.get("call_tick") is None:
         mark_html = '<span class="no-call">no call</span>'
     elif v["call_tick"]:
         mark_html = '<span class="tick">✓</span>'
@@ -1185,32 +1179,42 @@ def build_three_sections_html(section_a, score_col_sub):
     call pill; 30-DAY RESULT color-coded; CALLED IT? with ✓/✗ or 'no call')."""
     if not section_a:
         return '<div class="section-h"><span class="kicker">No graded videos in this window yet</span><span class="rule"></span></div>'
-    header = (
-        '<tr><th>Posted</th><th>Video</th>'
-        f'<th>Our prediction score<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">{score_col_sub}</span></th>'
-        '<th>30-day result<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">likes/shares/saves per view</span></th>'
-        '<th>Called it?</th></tr>'
-    )
+    def header(called="Called it?"):
+        # The Called-it column keeps a fixed width (th.called / td.match in the
+        # template) so blanking it for the OTHER section leaves the column space
+        # intact -- the other columns don't reflow.
+        return (
+            '<tr><th>Posted</th><th>Video</th>'
+            f'<th>Our prediction score<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">{score_col_sub}</span></th>'
+            '<th>30-day result<br><span style="font-weight:600; letter-spacing:0; text-transform:none;">likes/shares/saves per view</span></th>'
+            f'<th class="called">{called}</th></tr>'
+        )
 
-    def section(kicker, rows, first=False):
-        by_score = sorted(rows, key=lambda v: v["prediction"], reverse=True)
-        rows_html = "\n    ".join(row_a_html(v) for v in by_score)
-        # Uniform vertical clearance comes from .section-h's own margin (14px
-        # top / 8px bottom) so the kicker never crowds the table above or below
-        # it -- no tight per-section inline override.
+    def _ts(v):  # posted_at -> epoch seconds (tz-safe), for chronological sort
+        try:
+            return v["posted_at"].timestamp()
+        except (AttributeError, ValueError, OSError, KeyError):
+            return 0.0
+
+    def section(kicker, rows, chrono=False, show_called=True):
+        # top/bottom rank by prediction; OTHER sorts chronologically (most
+        # recent first) and drops the Called-it column (no call to report).
+        ordered = (sorted(rows, key=_ts, reverse=True) if chrono
+                   else sorted(rows, key=lambda v: v["prediction"], reverse=True))
+        rows_html = "\n    ".join(row_a_html(v, show_called=show_called) for v in ordered)
         return (f'<div class="section-h"><span class="kicker">{kicker}</span><span class="rule"></span></div>\n'
-                f'  <table>{header}\n    {rows_html}</table>')
+                f'  <table>{header() if show_called else header("")}\n    {rows_html}</table>')
 
     top = [v for v in section_a if v.get("call_type") == "strong"]
     bottom = [v for v in section_a if v.get("call_type") == "weak"]
     other = [v for v in section_a if v.get("call_type") == "none"]
     parts = []
     if top:
-        parts.append(section("Videos we predicted as top performers", top, first=True))
+        parts.append(section("Videos we predicted as top performers", top))
     if bottom:
-        parts.append(section("Videos we predicted as bottom performers", bottom, first=not top))
+        parts.append(section("Videos we predicted as bottom performers", bottom))
     if other:
-        parts.append(section("Other videos in that timeframe", other, first=not top and not bottom))
+        parts.append(section("Other videos in that timeframe", other, chrono=True, show_called=False))
     return "\n  ".join(parts)
 
 
