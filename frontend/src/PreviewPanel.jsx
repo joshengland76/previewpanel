@@ -714,14 +714,14 @@ function TrEraHeader({ variant, sub }) {
   );
 }
 
-function TrPoolSubline({ variant, nullConfig }) {
-  const base = "Prediction scores are percentiles among the last 1,000 videos we've scored";
-  const text = variant === "joined"
-    ? base + " across all content categories."
-    : base + "." + (nullConfig ? " These videos were scored without a content category - category choice can shift a video's score." : "");
+// Both eras report percentiles against the same overall last-1,000 pool. Only a
+// null-config BLIND set appends the category caveat.
+const TR_POOL_SENTENCE = "Prediction scores are percentiles among the last 1,000 videos we've scored.";
+const TR_NULLCONFIG_SENTENCE = " These videos were scored without a content category - category choice can shift a video's score.";
+function TrPoolSubline({ nullConfig }) {
   return (
     <div style={{ textAlign: "center", fontSize: "12px", color: "#888", lineHeight: "1.5" }}>
-      {text}
+      {TR_POOL_SENTENCE + (nullConfig ? TR_NULLCONFIG_SENTENCE : "")}
     </div>
   );
 }
@@ -898,23 +898,29 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 
   const blindWindowLabel = blind.aggregates && blind.aggregates.windowStart && blind.aggregates.windowEnd
     ? `${trFormatDate(blind.aggregates.windowStart)}–${trFormatDate(blind.aggregates.windowEnd)}` : null;
-  const blindWindowSentence = <>We scored your {blindWindowLabel ? <>{blindWindowLabel} </> : null}TikTok videos — from content alone, never seeing a single view count.</>;
+  const blindWindowSentence = <>We scored your {blindWindowLabel ? <>{blindWindowLabel} </> : null}TikTok videos — from content alone, never seeing a single like, share, or save.</>;
   const joinedWindowSentence = joined.aggregates && joined.aggregates.windowStart
     ? <>Your previews since {trFormatDate(joined.aggregates.windowStart)}.</>
     : <>Your previews, graded against real 30-day results.</>;
   // v5 -- the null-config caveat moved to the BLIND pool subline (below the
   // hero); the era sub is just the plain era description now.
   const blindSub = "Predictions we made on your catalog without ever seeing results.";
+  // JOINED sub: when the JOINED hero renders, the pool sentence lives in the
+  // pool subline below it; when there's no hero yet (sub-floor), the pool
+  // sentence is appended to the era sub instead.
+  const joinedSub = heroOwner === "joined"
+    ? "Your previews, graded against real 30-day results."
+    : "Your previews, graded against real 30-day results. " + TR_POOL_SENTENCE;
 
   return (
     <div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "18px" }}>
       {joined.gradedCount > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <TrEraHeader variant="joined" sub="Your previews, graded against real 30-day results." />
+          <TrEraHeader variant="joined" sub={joinedSub} />
           {heroOwner === "joined" ? (
             <>
               <TrHero agg={joined.aggregates} windowSentence={joinedWindowSentence} />
-              <TrPoolSubline variant="joined" />
+              <TrPoolSubline />
               <TrSections graded={joined.graded} objectiveTags />
             </>
           ) : (
@@ -929,12 +935,19 @@ function TrackRecordPanel({ userId, onConnectClick }) {
           {heroOwner === "blind" ? (
             <>
               <TrHero agg={blind.aggregates} windowSentence={blindWindowSentence} />
-              <TrPoolSubline variant="blind" nullConfig={blind.nullConfig} />
+              <TrPoolSubline nullConfig={blind.nullConfig} />
               <TrSections graded={blind.graded} />
             </>
           ) : (
             <>
-              <TrMiniSummary agg={blind.aggregates} />
+              {/* Compressed BLIND: the SAME hero as the normal blind era, boxed
+                  in gold, with the pool subline below it -- then the faded board. */}
+              <div style={{ background: "#FBF3E2", border: "1px solid #B07D2A", borderRadius: "12px", padding: "14px" }}>
+                <TrHero agg={blind.aggregates} windowSentence={blindWindowSentence} />
+                <div style={{ marginTop: "10px" }}>
+                  <TrPoolSubline nullConfig={blind.nullConfig} />
+                </div>
+              </div>
               <div style={{ opacity: 0.5 }}>
                 <TrSections graded={blind.graded} />
               </div>

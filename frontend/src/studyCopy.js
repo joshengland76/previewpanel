@@ -55,7 +55,7 @@ export const METHODOLOGY_MODAL_TEXT =
   "signals our judges do — hook, emotion, pacing, clarity — across 56 " +
   "correlated variables in total, and turns them into a single prediction. In held-out " +
   "testing on creators the model had never seen, videos it ranked in its " +
-  "top tier beat the creator's typical engagement 68% of the time — more " +
+  "top decile beat the creator's typical engagement 68% of the time — more " +
   "than 2 in 3 (coin flip = 1 in 2). " +
   "It's a ranking aid, not a crystal ball: it tells you which of your " +
   "videos looks strongest, not whether a video will go viral. See how we " +

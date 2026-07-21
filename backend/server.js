@@ -4193,13 +4193,23 @@ app.get("/api/track-record", async (req, res) => {
       overallPercentile: r.overall_percentile_at_grading, objective: null,
       gradedAt: r.graded_at, previewed: false,
     });
+    // JOINED percentile in the tab is the OVERALL last-1,000 (all-objective)
+    // rank of the PREVIEW's prediction -- the same basis the BLIND rows use and
+    // the big-gauge number the user saw at preview time. It is NOT the preview's
+    // stored per-objective calibrated_percentile (that would rank different
+    // videos against different objective distributions).
+    let joinedPools = null;
+    if (joinedDbRows.length) joinedPools = await getPools(SCORE_DISPLAY_FETCHERS.fetchShadowRows);
     const joinedCandidate = (r) => {
       const p = previewBySub.get(r.matched_submission_id) || {};
+      const pred = p.prediction != null ? p.prediction : r.y_pred; // the preview's own score
       return {
         postedVideoId: r.id, postedAt: r.posted_at, captionSnippet: snippet(r.caption),
-        prediction: p.prediction != null ? p.prediction : r.y_pred, // the preview's own score
+        prediction: pred,
         timesTypical: r.times_typical,
-        overallPercentile: p.calibrated_percentile != null ? p.calibrated_percentile : r.overall_percentile_at_grading,
+        overallPercentile: (pred != null && joinedPools)
+          ? clampPercentile(midrankPercentile(pred, joinedPools.overall))
+          : r.overall_percentile_at_grading,
         objective: p.objective || null,
         gradedAt: r.graded_at, previewed: true,
       };
