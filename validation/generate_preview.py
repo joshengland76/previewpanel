@@ -1196,12 +1196,28 @@ def build_three_sections_html(section_a, score_col_sub):
         except (AttributeError, ValueError, OSError, KeyError):
             return 0.0
 
-    def section(kicker, rows, chrono=False, show_called=True):
+    def total_row(rows):
+        # A summary line at the bottom of a call table: how the whole group of
+        # picks performed on average (mean ×typical), color-coded like the rows.
+        vals = [v["result_x"] for v in rows if v.get("result_x") is not None]
+        if not vals:
+            return ""
+        avg = sum(vals) / len(vals)
+        cls = "even" if avg == 1.0 else ("up" if avg > 1.0 else "down")
+        return ('<tr class="total"><td></td>'
+                '<td class="video"><span class="total-label">These picks averaged</span></td>'
+                '<td></td>'
+                f'<td class="result {cls}">{fmt_result_x(avg)}× <small>your typical</small></td>'
+                '<td class="match"></td></tr>')
+
+    def section(kicker, rows, chrono=False, show_called=True, total=False):
         # top/bottom rank by prediction; OTHER sorts chronologically (most
         # recent first) and drops the Called-it column (no call to report).
         ordered = (sorted(rows, key=_ts, reverse=True) if chrono
                    else sorted(rows, key=lambda v: v["prediction"], reverse=True))
         rows_html = "\n    ".join(row_a_html(v, show_called=show_called) for v in ordered)
+        if total:
+            rows_html += "\n    " + total_row(ordered)
         return (f'<div class="section-h"><span class="kicker">{kicker}</span><span class="rule"></span></div>\n'
                 f'  <table>{header() if show_called else header("")}\n    {rows_html}</table>')
 
@@ -1210,9 +1226,9 @@ def build_three_sections_html(section_a, score_col_sub):
     other = [v for v in section_a if v.get("call_type") == "none"]
     parts = []
     if top:
-        parts.append(section("Videos we predicted as top performers", top))
+        parts.append(section("Videos we predicted as top performers", top, total=True))
     if bottom:
-        parts.append(section("Videos we predicted as bottom performers", bottom))
+        parts.append(section("Videos we predicted as bottom performers", bottom, total=True))
     if other:
         parts.append(section("Other videos in that timeframe", other, chrono=True, show_called=False))
     return "\n  ".join(parts)

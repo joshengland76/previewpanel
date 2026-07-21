@@ -662,6 +662,21 @@ function TrackRecordGradedRow({ row, groupK }) {
   );
 }
 
+// Group summary under a Top/Bottom section label: how the whole group of picks
+// performed on average, e.g. "2.0× your typical 30-day engagement" -- the
+// "?.?× your typical" clause color-coded (green above 1.0×, rust below).
+function TrGroupSummary({ rows }) {
+  const vals = rows.map((r) => r.timesTypical).filter((v) => v != null);
+  if (!vals.length) return null;
+  const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
+  const color = avg === 1.0 ? B.black : (avg > 1.0 ? "#2E7D32" : "#8D4B36");
+  return (
+    <div style={{ fontSize: "12.5px", color: B.body, marginBottom: "10px" }}>
+      <span style={{ fontWeight: "800", color }}>{fmtTimesTypical(avg)}× your typical</span> 30-day engagement
+    </div>
+  );
+}
+
 function TrackRecordPanel({ userId, onConnectClick }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -785,9 +800,10 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 
       {topRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "16px", fontWeight: "800", color: "#2E7D32", marginBottom: "10px" }}>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#2E7D32", marginBottom: "4px" }}>
             Top {topRows.length} Predictions
           </div>
+          <TrGroupSummary rows={topRows} />
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {topRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={topRows.length} />)}
           </div>
@@ -796,9 +812,10 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 
       {bottomRows.length > 0 && (
         <div>
-          <div style={{ fontSize: "16px", fontWeight: "800", color: "#8D4B36", marginBottom: "10px" }}>
+          <div style={{ fontSize: "16px", fontWeight: "800", color: "#8D4B36", marginBottom: "4px" }}>
             Bottom {bottomRows.length} Predictions
           </div>
+          <TrGroupSummary rows={bottomRows} />
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {bottomRows.map((row) => <TrackRecordGradedRow key={row.postedVideoId} row={row} groupK={bottomRows.length} />)}
           </div>
