@@ -765,22 +765,6 @@ function TrHero({ agg, windowSentence }) {
   );
 }
 
-// TrMiniSummary -- gold card the BLIND era opens with when JOINED owns the hero.
-function TrMiniSummary({ agg }) {
-  if (!agg) return null;
-  const top = agg.avgTimesTypicalStrong != null ? `${agg.avgTimesTypicalStrong.toFixed(1)}×` : null;
-  const bot = agg.avgTimesTypicalWeak != null ? `${agg.avgTimesTypicalWeak.toFixed(1)}×` : null;
-  return (
-    <div style={{
-      background: "#FBF3E2", border: "1px solid #B07D2A", borderRadius: "12px",
-      padding: "10px 12px", fontSize: "12.5px", color: B.black, lineHeight: "1.45",
-    }}>
-      <b style={{ color: "#B07D2A" }}>Blind test: called it on {agg.hits} of {agg.graded}</b>
-      {top && bot ? <> — top picks averaged {top} your typical, bottom picks {bot}.</> : <>.</>} Full board below.
-    </div>
-  );
-}
-
 // TrSections -- Top / Bottom / Other for one era, with the group-average
 // sublines. objectiveTags shows the outlined objective tag (JOINED only).
 function TrSections({ graded, objectiveTags }) {
@@ -929,30 +913,14 @@ function TrackRecordPanel({ userId, onConnectClick }) {
         </div>
       )}
 
+      {/* BLIND era renders the SAME way regardless of whether JOINED owns the
+          primary hero -- full hero + pool statement + board, no box, no fade. */}
       {!retired && blind.gradedCount > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           <TrEraHeader variant="blind" sub={blindSub} />
-          {heroOwner === "blind" ? (
-            <>
-              <TrHero agg={blind.aggregates} windowSentence={blindWindowSentence} />
-              <TrPoolSubline nullConfig={blind.nullConfig} />
-              <TrSections graded={blind.graded} />
-            </>
-          ) : (
-            <>
-              {/* Compressed BLIND: the SAME hero as the normal blind era, boxed
-                  in gold, with the pool subline below it -- then the faded board. */}
-              <div style={{ background: "#FBF3E2", border: "1px solid #B07D2A", borderRadius: "12px", padding: "14px" }}>
-                <TrHero agg={blind.aggregates} windowSentence={blindWindowSentence} />
-                <div style={{ marginTop: "10px" }}>
-                  <TrPoolSubline nullConfig={blind.nullConfig} />
-                </div>
-              </div>
-              <div style={{ opacity: 0.5 }}>
-                <TrSections graded={blind.graded} />
-              </div>
-            </>
-          )}
+          <TrHero agg={blind.aggregates} windowSentence={blindWindowSentence} />
+          <TrPoolSubline nullConfig={blind.nullConfig} />
+          <TrSections graded={blind.graded} />
         </div>
       )}
 
