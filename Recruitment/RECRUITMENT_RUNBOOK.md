@@ -42,6 +42,15 @@ cd ~/PreviewPanel/validation
 Two steps: ingest (real API cost, ~15 min for a full batch), then render
 (free, repeatable).
 
+> **Track Record v5 note:** a prospect ingest's `--objective` (or its absence)
+> shapes the **BLIND era only** — the prepopulated "before you joined" board a
+> creator sees at mint. It has no bearing on the JOINED era: once a creator
+> posts a video they previewed, that posted video is rescored under a **uniform
+> null config** (the borrow-from-matched-preview objective path was removed,
+> research rider), and its JOINED-tab percentile is the *preview's own* stored
+> score, not the rescore. So `--objective` here is purely a BLIND-era / prospect-
+> document choice.
+
 ```bash
 cd ~/PreviewPanel/validation
 export PP_API_BASE=https://previewpanel.onrender.com

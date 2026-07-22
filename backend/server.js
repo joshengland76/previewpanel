@@ -5007,15 +5007,19 @@ app.post("/api/validation/ingest", requireResearchAuth, (req, res, next) => {
       }
     }
 
-    // Borrow the matched preview's objective (there is no user-submitted
-    // objective for a posted video) -- null for an unmatched (Tier 3) video,
-    // which the scoring pipeline already handles gracefully. An explicit
-    // objective (transport hotfix) always wins when supplied.
-    let objective = explicitObjective;
-    if (!objective && matchedSubmissionId) {
-      const { rows } = await pgPool.query(`SELECT objective FROM submissions WHERE id = $1`, [matchedSubmissionId]);
-      objective = rows[0]?.objective ?? null;
-    }
+    // Track Record v5 research rider -- UNIFORM NULL CONFIG for posted-video
+    // rescores. The old borrow-from-matched-preview objective path is removed:
+    // every posted-video rescore now runs objective-blind (null config) unless
+    // an --objective is passed explicitly. This keeps the C3 primary metric
+    // (within-user ranking of a creator's own posted videos) measured under a
+    // SINGLE scoring regime -- the objective-blind null path scores structurally
+    // differently from the category-lens path (OBJECTIVE_CONDITIONING_DIAGNOSTIC.md),
+    // and mixing the two inside one user's window makes their y_pred values not
+    // comparable. Preview-vs-outcome (the JOINED-era secondary metric) still
+    // reflects the user-chosen config, since JOINED display reads the PREVIEW's
+    // own stored score, never this rescore. An explicit --objective still wins
+    // (it shapes the BLIND era of a prospect ingest only).
+    const objective = explicitObjective;
 
     // Upsert the posted_videos row -- tiktok_video_id is UNIQUE, so a re-run
     // (worker retry, or Task 4's --file test mode re-posting the same id)
