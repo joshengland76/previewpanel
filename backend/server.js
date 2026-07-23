@@ -1043,6 +1043,7 @@ async function initDb() {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS milestone_6_shown BOOLEAN DEFAULT false`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS milestone_9_shown BOOLEAN DEFAULT false`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS milestone_12_shown BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS milestone_40_shown BOOLEAN DEFAULT false`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS beta_submission_events (
         id         BIGSERIAL PRIMARY KEY,
@@ -4000,12 +4001,13 @@ app.post("/api/invite/redeem", async (req, res) => {
 // displaying). Rules: welcome outranks on first visit; a first-visit record that
 // already qualifies is backfilled (no modal); once welcome is seen, the highest
 // uncrossed tier surfaces. Shared by the endpoint and the fixture harness.
+const MILESTONE_TIERS = [6, 9, 12, 40];
 function computeMilestone(heroWindowN, welcomeSeen, flags) {
   if (!welcomeSeen && heroWindowN >= 6) {
-    return { milestoneModal: null, backfill: [6, 9, 12].filter((t) => heroWindowN >= t && !flags[t]) };
+    return { milestoneModal: null, backfill: MILESTONE_TIERS.filter((t) => heroWindowN >= t && !flags[t]) };
   }
   if (welcomeSeen) {
-    for (const t of [12, 9, 6]) if (heroWindowN >= t && !flags[t]) return { milestoneModal: t, backfill: [] };
+    for (const t of [...MILESTONE_TIERS].reverse()) if (heroWindowN >= t && !flags[t]) return { milestoneModal: t, backfill: [] };
   }
   return { milestoneModal: null, backfill: [] };
 }
@@ -4142,9 +4144,9 @@ function buildTrackRecordFixture(name) {
         outcome: 2.4 - frac * 2.0 });
     }
     joinedRows = trFixtureRows(specs, { joined: true });
-  } else if (name === "badge-fresh" || name === "badge-seen" || name === "badge-mixed" ||
+  } else if (name === "badge-fresh" || name === "badge-seen" || name === "badge-mixed" || name === "badge-sub6" ||
              name === "milestone-6" || name === "milestone-9" || name === "milestone-12" ||
-             name === "welcome-noprepop") {
+             name === "milestone-40" || name === "welcome-noprepop") {
     // v5.1 badge/modal fixtures -- real era shaping; badge counts + modal flags
     // computed here to demo the outer button / segments / modals. A gradient of
     // n rows with a clear top>bottom slope.
@@ -4171,6 +4173,16 @@ function buildTrackRecordFixture(name) {
       // Real logic decides the modal (welcome already seen, no flags set yet).
       p.milestoneModal = computeMilestone(heroWindowN, true, {}).milestoneModal;
       p.blindGradedCount = 0; p.totalGradedCount = heroWindowN; p.unseenGradedCount = heroWindowN; p.previewsCount = heroWindowN;
+      return p;
+    }
+    if (name === "badge-sub6") {
+      // Below the 6-graded threshold -> the red unseen badge is SUPPRESSED even
+      // though there are freshly-graded rows; only the neutral "Track Record (4)"
+      // count shows. Sub-floor JOINED board (n=4, no calls).
+      const joined = grad(4, true);
+      const p = assembleTrackRecordResponse({ handle: "demo.creator", welcomeSeen: true, state: "active", blind: blank(), joined, blindNullConfig: false });
+      p.blindGradedCount = 0; p.totalGradedCount = joined.gradedCount; p.previewsCount = 0; p.milestoneModal = null;
+      p.unseenGradedCount = p.totalGradedCount < 6 ? 0 : p.totalGradedCount; // suppressed below 6
       return p;
     }
     // badge-* : a 14-row blind board (like a day-one pre-linked user)
@@ -4227,7 +4239,7 @@ app.get("/api/track-record", async (req, res) => {
   try {
     const { rows: userRows } = await pgPool.query(
       `SELECT tiktok_handle, track_record_welcomed, track_record_last_seen,
-              milestone_6_shown, milestone_9_shown, milestone_12_shown
+              milestone_6_shown, milestone_9_shown, milestone_12_shown, milestone_40_shown
        FROM users WHERE user_id = $1`, [userId]);
     const handle = userRows[0]?.tiktok_handle || null;
     const welcomeSeen = !!userRows[0]?.track_record_welcomed;
@@ -4322,15 +4334,19 @@ app.get("/api/track-record", async (req, res) => {
     payload.totalGradedCount = blind.gradedCount + joined.gradedCount;
     const lastSeen = userRows[0]?.track_record_last_seen ? new Date(userRows[0].track_record_last_seen) : null;
     const allGraded = [...blind.graded, ...joined.graded];
-    payload.unseenGradedCount = lastSeen
-      ? allGraded.filter((g) => g.gradedAt && new Date(g.gradedAt) > lastSeen).length
-      : allGraded.length;
+    // v5.1 -- the red unseen badge is SUPPRESSED until there are >= 6 graded
+    // videos (we don't call attention to graded results below the point where
+    // calls start). The neutral "Track Record (M)" count is unaffected.
+    payload.unseenGradedCount = payload.totalGradedCount < 6 ? 0
+      : lastSeen
+        ? allGraded.filter((g) => g.gradedAt && new Date(g.gradedAt) > lastSeen).length
+        : allGraded.length;
 
     // v5.1 MILESTONE MODALS -- fire on the hero-owning era's graded window (the
     // window governing the displayed calls). One-time server flags; the backfill
     // guard (first-visit qualifying records) marks flags without a modal.
     const heroWindowN = payload.eras[payload.heroOwner].gradedCount;
-    const flags = { 6: !!userRows[0]?.milestone_6_shown, 9: !!userRows[0]?.milestone_9_shown, 12: !!userRows[0]?.milestone_12_shown };
+    const flags = { 6: !!userRows[0]?.milestone_6_shown, 9: !!userRows[0]?.milestone_9_shown, 12: !!userRows[0]?.milestone_12_shown, 40: !!userRows[0]?.milestone_40_shown };
     const { milestoneModal, backfill } = computeMilestone(heroWindowN, welcomeSeen, flags);
     if (backfill.length) {
       await queryRW(`UPDATE users SET ${backfill.map((t) => `milestone_${t}_shown = true`).join(", ")} WHERE user_id = $1`, [userId]);
@@ -4413,7 +4429,7 @@ app.post("/api/track-record/milestone-seen", async (req, res) => {
   const userId = (req.body.userId || "").toString().trim();
   const milestone = parseInt(req.body.milestone, 10);
   if (!userId) return res.status(400).json({ error: "Missing userId" });
-  if (![6, 9, 12].includes(milestone)) return res.status(400).json({ error: "Invalid milestone" });
+  if (![6, 9, 12, 40].includes(milestone)) return res.status(400).json({ error: "Invalid milestone" });
   try {
     await queryRW(`INSERT INTO users (user_id, milestone_${milestone}_shown) VALUES ($1, true)
                    ON CONFLICT (user_id) DO UPDATE SET milestone_${milestone}_shown = true`, [userId]);

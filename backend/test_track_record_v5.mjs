@@ -64,7 +64,7 @@ const fns = ["topBottomK", "callsTierFor", "averagesTierFor", "assignRankCalls",
   "computeEraAggregates", "shapeEra", "computeMilestone", "assembleTrackRecordResponse", "rowEra",
   "trFixtureDate", "trFixtureEra", "trFixtureRows", "buildTrackRecordFixture"]
   .map(fnSource).join("\n\n");
-const consts = ["TR_FIXTURE_OBJS", "TR_FIXTURE_CAPS", "TR_BLIND_SPECS"].map(constSource).join("\n");
+const consts = ["TR_FIXTURE_OBJS", "TR_FIXTURE_CAPS", "TR_BLIND_SPECS", "MILESTONE_TIERS"].map(constSource).join("\n");
 const api = new Function(
   "CALL_SIZE_TIERS,CALLS_TIER,AVERAGES_TIER,GRADED_WINDOW,JOINED_RETIREMENT,AGGREGATE_MIN,BASELINE_MIN,console",
   fns + "\n" + consts + "\nreturn { shapeEra, assembleTrackRecordResponse, buildTrackRecordFixture, trFixtureEra, trFixtureRows, rowEra, topBottomK, computeMilestone };"
@@ -157,12 +157,17 @@ const blindEra = (n) => gradientEra(n, false);
   ok(cm(12, true, { 6: true, 9: true }).milestoneModal === 12, "milestone: highest uncrossed = 12");
   ok(cm(12, true, { 6: true, 9: true, 12: true }).milestoneModal === null, "milestone: all crossed -> none");
   ok(cm(9, true, { 6: true }).milestoneModal === 9, "milestone: 6 crossed, n=9 -> 9");
+  // 4th tier at n>=40 (window cap)
+  ok(cm(40, true, {}).milestoneModal === 40, "milestone: n=40 -> 40");
+  ok(cm(40, true, { 6: true, 9: true, 12: true }).milestoneModal === 40, "milestone: highest uncrossed = 40");
+  ok(cm(12, true, { 6: true, 9: true, 12: true }).milestoneModal === null, "milestone: n=12 all-of-12 crossed, 40 not reached -> none");
   // welcome outranks on first visit -> no modal, just backfill
   ok(cm(9, false, {}).milestoneModal === null, "milestone: welcome-unseen -> no modal (welcome outranks)");
   // BACKFILL GUARD: first-visit qualifying record marks all applicable tiers, no modal
   const bf = cm(14, false, {});
   ok(bf.milestoneModal === null && JSON.stringify(bf.backfill) === JSON.stringify([6, 9, 12]),
-    "backfill guard: first-visit n=14 marks [6,9,12], shows nothing (ballerinafarm day one)");
+    "backfill guard: first-visit n=14 marks [6,9,12] (not 40, n<40), shows nothing (ballerinafarm day one)");
+  ok(JSON.stringify(cm(40, false, {}).backfill) === JSON.stringify([6, 9, 12, 40]), "backfill guard: first-visit n=40 marks all four");
   ok(JSON.stringify(cm(7, false, {}).backfill) === JSON.stringify([6]), "backfill guard: first-visit n=7 marks [6] only");
 }
 
@@ -177,9 +182,14 @@ const blindEra = (n) => gradientEra(n, false);
     "badge: red unseen = 14 fresh, 0 after seen (clears on view)");
   ok(mixed.previewsCount === 24 && mixed.unseenGradedCount === 3, "badge-mixed: 24 previews + red 3");
   ok(fresh.previewsCount === 0, "badge: previews count 0 hides (zero-hiding)");
+  // red unseen SUPPRESSED below 6 graded (neutral count still shows)
+  const sub6 = api.buildTrackRecordFixture("badge-sub6");
+  ok(sub6.totalGradedCount === 4 && sub6.unseenGradedCount === 0,
+    "badge-sub6: 4 graded, red suppressed (0) below the 6-graded threshold");
   // milestone fixtures compute their modal via real logic
   ok(api.buildTrackRecordFixture("milestone-6").milestoneModal === 6, "fixture milestone-6 -> modal 6");
   ok(api.buildTrackRecordFixture("milestone-12").milestoneModal === 12, "fixture milestone-12 -> modal 12");
+  ok(api.buildTrackRecordFixture("milestone-40").milestoneModal === 40, "fixture milestone-40 -> modal 40");
   // welcome-noprepop: no blind data, welcome unseen
   const wp = api.buildTrackRecordFixture("welcome-noprepop");
   ok(wp.blindGradedCount === 0 && wp.welcomeSeen === false, "welcome-noprepop: no blind data + welcome unseen (no-prepop variant)");

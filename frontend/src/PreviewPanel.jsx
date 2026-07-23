@@ -1003,9 +1003,10 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss, noPrepop }) {
 // crosses a tier (server decides via milestoneModal). Same overlay/card as the
 // welcome modal; primary "See your calls" opens the TR segment, quiet "Later".
 const TR_MILESTONES = {
-  6: { title: "Your track record is live.", body: "You've got enough graded videos for us to start making calls — your top 2 and bottom 2 predictions are now on the board, checked against what actually happened." },
-  9: { title: "Your record just got sharper.", body: "With more graded videos, we now call your top 3 and bottom 3 — stronger stakes, same rule: every call gets checked against your real 30-day results." },
-  12: { title: "Full-strength track record.", body: "Your record now makes top-4 and bottom-4 calls — the same top-and-bottom-slice construction our study measured, where our strongest picks beat a creator's typical engagement more than 2 times in 3." },
+  6: { title: "Your track record is live.", body: "It's still a small sample, but you've got enough videos with 30-day results to see how our top 2 and bottom 2 predictions panned out." },
+  9: { title: "Your record just got sharper.", body: "With more 30-day videos, you can now see how our top 3 and bottom 3 predictions performed. The more videos you run, the more accurate our predictions become." },
+  12: { title: "Your track record is maturing", body: "With a track record of 12 videos with 30-day results, you can now see how our top and bottom 4 predictions are looking." },
+  40: { title: "Full-strength track record", body: "40 videos with 30-day performance is a strong record. Our top-4 and bottom-4 on that sample size is the same slice construction our study measured, where our strongest picks beat a creator's typical engagement more than 2 out of 3 times. From now on we'll keep your track record at your 40 most recent 30-day videos." },
 };
 function TrackRecordMilestoneModal({ milestone, onSeeCalls, onDismiss }) {
   const m = TR_MILESTONES[milestone];
@@ -1029,7 +1030,7 @@ function TrackRecordMilestoneModal({ milestone, onSeeCalls, onDismiss }) {
           width: "100%", height: "50px", background: B.action, border: "none", borderRadius: "10px",
           color: "#fff", fontSize: "15px", fontWeight: "800", cursor: "pointer",
           fontFamily: "Montserrat, sans-serif", marginBottom: "10px",
-        }}>See your calls</button>
+        }}>See how our predictions are doing</button>
         <button onClick={onDismiss} style={{
           width: "100%", height: "44px", background: "none", border: "none",
           color: "#999", fontSize: "13.5px", fontWeight: "700", cursor: "pointer", fontFamily: "Montserrat, sans-serif",
