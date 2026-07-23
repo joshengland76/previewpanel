@@ -2691,10 +2691,20 @@ export async function synthesizePanel(judges, video, panel, scoringContext) {
       model: SYNTHESIS_MODEL,
       max_tokens: 2000,
       temperature: 0.3,
-      system: systemPrompt,
+      // Prompt caching (5-min ephemeral). The system block is a file-loaded
+      // module constant (SYNTHESIS_SYSTEM_PROMPT / _V25) -- byte-identical on
+      // every synthesis call -- so it is a stable cache prefix; the per-video
+      // user JSON below stays uncached. Converting the string to a single
+      // text block is a FORMAT change ONLY: the prompt bytes and their order
+      // are unchanged (cache-enablement HARD RULE -- no text/order edits).
+      system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: JSON.stringify(userPayload) }],
     });
     raw = (msg.content || []).map((b) => b.text || "").join("");
+    // Cache telemetry -- write (cache_creation) vs read (cache_read) tokens on
+    // the cached system prefix, alongside the plain in/out counts.
+    const u = msg.usage || {};
+    console.log(`[synthesis] cache write=${u.cache_creation_input_tokens ?? 0} read=${u.cache_read_input_tokens ?? 0} in=${u.input_tokens ?? 0} out=${u.output_tokens ?? 0} model=${SYNTHESIS_MODEL} prompt=${SYNTHESIS_V25 ? SYNTHESIS_PROMPT_VERSION_V25 : SYNTHESIS_PROMPT_VERSION}`);
   } catch (err) {
     console.error(`[synthesis] Anthropic call failed: ${err.message}`);
     return null;
