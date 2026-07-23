@@ -3291,6 +3291,25 @@ async function runShadowScoringForJob(jobId) {
       ).catch((e) => console.error(`[${jobId}] [validation] posted_videos update failed: ${e.message}`));
     }
 
+    // v5.1 own-video link path -- write this preview's prediction onto its own
+    // JOINED posted_videos row (created earlier in recordSubmissionForJob). The
+    // JOINED tab DISPLAYS the matched preview's stored score (via
+    // matched_submission_id, not this y_pred), but gradeTrackRecordForUser needs
+    // a non-null y_pred to freeze times_typical and rank the row -- for a
+    // link-run the posted video IS this preview, so its prediction is the honest
+    // value. Guarded `y_pred IS NULL`: idempotent on a repeat link-run, and a
+    // migrated blind row keeps its own prior prediction (already non-null).
+    if (job.ownVideo && shadowResult && pgPool) {
+      const rawScores = Object.values(scores).filter((v) => typeof v === "number");
+      const rawAvg = rawScores.length ? parseFloat((rawScores.reduce((a, b) => a + b, 0) / rawScores.length).toFixed(2)) : null;
+      await queryRW(
+        `UPDATE posted_videos SET y_pred = $1, avg_score = COALESCE(avg_score, $2),
+           prompt_version = COALESCE(prompt_version, $3), pegasus_model = COALESCE(pegasus_model, $4)
+         WHERE tiktok_video_id = $5 AND y_pred IS NULL`,
+        [shadowResult.prediction, rawAvg, JUDGE_PROMPT_VERSION, PEGASUS_MODEL, job.ownVideo.tiktokVideoId]
+      ).catch((e) => console.error(`[${jobId}] [own-video] y_pred write-back failed: ${e.message}`));
+    }
+
     // Score display (Phase B3/B3b, Task 5) — DISPLAY_SCORE default false.
     // Reuses shadowResult.prediction rather than rescoring. Niche/overall
     // percentiles come from the pool engine (corpus seed UNION shadow_scores,
