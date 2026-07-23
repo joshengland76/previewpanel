@@ -311,7 +311,7 @@ function InviteGateScreen({ userId, onBound }) {
         animation: "pp-slide 0.25s ease",
       }}>
         <img src="/owl-logo.png?v=3" alt="PreviewPanel"
-          style={{ height: "64px", width: "auto", margin: "0 auto 18px", display: "block" }} />
+          style={{ height: "92px", width: "auto", margin: "0 auto 18px", display: "block" }} />
         {confirmInfo ? (
           <>
             <div style={{ fontWeight: "800", fontSize: "18px", color: B.black, marginBottom: "10px" }}>
