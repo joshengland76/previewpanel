@@ -41,7 +41,7 @@ welcomeSeen, flags)` is the single decision, shared by the endpoint and fixtures
 |---|---|---|
 | 6 (k=2) | Your track record is live. | still a small sample; top 2 / bottom 2 |
 | 9 (k=3) | Your record just got sharper. | top 3 / bottom 3; more videos → more accurate |
-| 12 (k=4) | Your track record is maturing | 12 videos; top & bottom 4 |
+| 12 (k=4) | Your track record is maturing | 12 videos; top & bottom 4; well on the way to a full 40 |
 | 40 | Full-strength track record | the 40-video window cap = the study's measured slice; kept at your 40 most recent |
 
 All buttons: **"See how our predictions are doing"** (+ quiet "Later").

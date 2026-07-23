@@ -1005,7 +1005,7 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss, noPrepop }) {
 const TR_MILESTONES = {
   6: { title: "Your track record is live.", body: "It's still a small sample, but you've got enough videos with 30-day results to see how our top 2 and bottom 2 predictions panned out." },
   9: { title: "Your record just got sharper.", body: "With more 30-day videos, you can now see how our top 3 and bottom 3 predictions performed. The more videos you run, the more accurate our predictions become." },
-  12: { title: "Your track record is maturing", body: "With a track record of 12 videos with 30-day results, you can now see how our top and bottom 4 predictions are looking." },
+  12: { title: "Your track record is maturing", body: "With a track record of 12 videos with 30-day results, you can now see how our top and bottom 4 predictions are looking. Your track record will be fully mature when you get to 40 videos - you're well on your way!" },
   40: { title: "Full-strength track record", body: "40 videos with 30-day performance is a strong record. Our top-4 and bottom-4 on that sample size is the same slice construction our study measured, where our strongest picks beat a creator's typical engagement more than 2 out of 3 times. From now on we'll keep your track record at your 40 most recent 30-day videos." },
 };
 function TrackRecordMilestoneModal({ milestone, onSeeCalls, onDismiss }) {
