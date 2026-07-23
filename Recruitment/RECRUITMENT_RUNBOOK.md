@@ -37,6 +37,61 @@ cd ~/PreviewPanel/validation
   export PP_API_BASE=https://previewpanel.onrender.com
   ```
 
+## Decision rules — which path for whom, and how to freshen
+
+Before typing anything, decide which of these a creator is. The wrong path
+either wastes an ingest (money) or renders an empty/redirected document.
+
+- **Study creator (OOF-covered — already in the research corpus's
+  morning-chain OOF predictions):** **no ingest, ever.** Their catalog is
+  already scored. `beta_admin.py mint --handle <handle>` stages their
+  aged, outcome-resolved study history (`sync_study_history.py`), and
+  `generate_preview.py --study <handle> --objective "…"` renders the
+  document for **$0** (pure DB read + PDF, no live fetch). The `--study`
+  gate refuses and tells you to use `--prospect` if the handle has no OOF
+  coverage — so if `--study` redirects, they were never a study creator;
+  switch paths.
+- **Everyone else (no OOF coverage):** **`worker.py --prospect <handle>`**
+  ingests + scores their public posts (real API cost, ~$0.10/video). Add
+  **`--objective "<exact string>"`** *only when the creator is niche-pure*
+  (their catalog is coherently one objective) — that shapes the BLIND-era
+  board; omit it for a mixed catalog (null-config BLIND). Then
+  **`generate_preview.py --prospect <handle>`** renders for $0.
+
+### Freshening an existing creator (new posts since last ingest)
+
+- **Freshen a study creator's live record:** re-run
+  **`worker.py --prospect <handle> --objective "<the study objective>"`**,
+  then render `--prospect`. It's **idempotent on `tiktok_video_id`** —
+  it fetches ONLY videos not already ingested (~$0.10 each), so a freshen
+  of a creator with 3 new posts costs ~$0.30, not a full re-ingest. The
+  Track Record tab absorbs both provenances (the original study-history
+  BLIND rows AND the newly-ingested ones) automatically. *(A study
+  creator freshened this way gains prospect-ingested rows alongside their
+  study-history rows; both are BLIND-era.)*
+- **A plain `--prospect` re-run IS the freshener** — the idempotent skip
+  is the mechanism. Nothing special to invoke.
+- **`--force-redraw` is NOT a freshener.** It re-*scores* videos already
+  ingested (fresh draws over the SAME posts) — outlier insurance only
+  (see below), ~$1.50 a handle. It adds no new videos. Don't reach for it
+  to pick up new posts; reach for a plain `--prospect` re-run.
+
+### New: users can build a graded record themselves (own-video link-run)
+
+A connected user can **link-run one of their OWN posted TikToks** in the
+app (paste its link) and get a graded Track Record row immediately — no
+recruiter action, no ingest command. On a link-fetch the backend extracts
+the author handle; if it matches the user's connected TikTok handle it
+stages a JOINED `posted_videos` row tied to that very preview (Tier-1,
+identical file). Outcome by the video's age at run time: **<30d** waits
+for the day-30 collector (clock from posted date); **30–100d** captures
+the current counters as the day-30 EQUIVALENT on the spot (graded next
+pass — *a 30-day grade the moment they paste the link*); **>100d** stages
+the row but never grades it (too old to be a valid day-30 proxy). Linking
+*another creator's* video is silently just a normal preview — no row.
+This is additive to everything above; it doesn't replace `--prospect`
+prepopulation, it's how a creator's record grows after they join.
+
 ## `--prospect` workflow (not-yet-enrolled creator)
 
 Two steps: ingest (real API cost, ~15 min for a full batch), then render

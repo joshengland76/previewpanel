@@ -3757,14 +3757,27 @@ function shapeEra(candidates) {
 // the very outcome the collector just wrote) naturally re-runs this pass
 // and picks it up. Adding a push path from the Python collector into this
 // endpoint would be a second trigger for the exact same effect.
-// rowEra(row) -- v5 era discriminator from existing provenance. BLIND =
-// prepopulated study_history / prospect_report rows. JOINED = the user's own
-// posted video that fingerprint-matched one of their previews (match_tier 1|2).
+// rowEra(row) -- v5 era discriminator from existing provenance. JOINED = the
+// user's own posted video that fingerprint-matched one of their previews
+// (match_tier 1|2). BLIND = prepopulated study_history / prospect_report rows.
 // Anything else (an own post with no matching preview) belongs to neither
 // displayed era and is skipped.
+//
+// CROSS-ERA DEDUP (v5.1 addendum): the match_tier check comes FIRST, so JOINED
+// WINS a collision. When a user link-runs a video that was ALSO prepopulated on
+// their blind board, the ON CONFLICT (tiktok_video_id) upsert attaches
+// match_tier to that one physical row (tiktok_video_id is UNIQUE -- there is
+// never a second row) while leaving its blind `source` intact for provenance.
+// Resolving match_tier ahead of source migrates that row to JOINED and thereby
+// EXCLUDES it from the blind board's display, calls, and hero math -- one video,
+// one visible verdict, the user's own preview wins; the blind grade columns are
+// retained on the row but superseded at display. A study/prospect row only ever
+// carries a match_tier via such a link-run (the worker never fingerprint-matches
+// prepopulated rows), so this precedence touches nothing else. The blind board
+// stays single-config by construction: nothing a user link-runs can enter it.
 function rowEra(row) {
-  if (row.source === "study_history" || row.source === "prospect_report") return "blind";
   if (row.match_tier != null && row.match_tier <= 2) return "joined";
+  if (row.source === "study_history" || row.source === "prospect_report") return "blind";
   return null;
 }
 
@@ -4267,6 +4280,13 @@ app.get("/api/track-record", async (req, res) => {
     // v5 -- split graded rows by ERA. JOINED display prediction/percentile/
     // objective come from the MATCHED PREVIEW (the number the user actually
     // saw), NEVER a rescore -- read from shadow_scores by matched_submission_id.
+    // CROSS-ERA DEDUP is inherent here: rowEra resolves each physical row to
+    // exactly one era, JOINED winning any collision (see rowEra). A video the
+    // user link-ran that was also on their blind board is one row with a
+    // match_tier, so it lands in joinedDbRows and is absent from blindDbRows --
+    // excluded from the blind board's display, calls, AND hero math below, with
+    // no separate filter needed (tiktok_video_id is UNIQUE; there is never a
+    // duplicate blind row to strip).
     const gradedRows = collectedRows.filter((r) => r.times_typical != null && r.y_pred != null);
     const joinedDbRows = gradedRows.filter((r) => rowEra(r) === "joined");
     const blindDbRows = gradedRows.filter((r) => rowEra(r) === "blind");
@@ -4529,6 +4549,132 @@ function cleanDisplayUrl(href) {
   return clean;
 }
 
+// ── Own-video link path (Track Record v5.1) ─────────────────────────────────
+// When a connected user link-runs one of their OWN already-posted TikToks, that
+// run's preview IS the same file as the posted video, so we can stage a JOINED
+// posted_videos row immediately (Tier-1 self-match) instead of waiting for the
+// worker to discover-and-match the post days later. The three functions below
+// pull the pieces a posted_videos row needs straight out of the yt-dlp metadata
+// we already fetched for the preview — no extra network cost.
+
+// Author handle: prefer the @segment in the canonical TikTok URL path
+// (/@handle/video/123), fall back to the info-dict's uploader fields. Returned
+// raw; the caller normalizes with normalizeHandle() before comparing.
+function tiktokAuthorFromUrlOrMeta(parsed, meta) {
+  const m = (parsed?.pathname || "").match(/@([A-Za-z0-9._]+)/);
+  if (m) return m[1];
+  return meta?.uploader_id || meta?.uploader || meta?.channel_id || null;
+}
+
+// posted_at from the video-ID timestamp: a TikTok video ID is a 63-bit Snowflake
+// whose top 32 bits are the unix-second creation time (id >> 32). That's the
+// "clock from posted date" source the day-30 collector keys off, so we derive it
+// here rather than trusting a mutable metadata field. Falls back to the
+// info-dict timestamp/upload_date only if the shift lands outside a sane range.
+function tiktokPostedAtFromId(videoId, meta) {
+  try {
+    const digits = String(videoId).replace(/\D/g, "");
+    if (digits) {
+      const secs = Number(BigInt(digits) >> 32n);
+      if (secs > 1500000000 && secs < 2000000000) return new Date(secs * 1000); // ~2017–2033
+    }
+  } catch { /* fall through to metadata */ }
+  if (meta?.timestamp) return new Date(meta.timestamp * 1000);
+  if (meta?.upload_date && /^\d{8}$/.test(meta.upload_date)) {
+    const d = meta.upload_date;
+    return new Date(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T00:00:00Z`);
+  }
+  return null;
+}
+
+// Same weighted-engagement-rate formula collect_day30.py.compute_wec_rate uses
+// ((likes + 3·shares + 5·saves) / views) — replicated in JS so a 30–100d
+// day-30-EQUIVALENT capture writes a value byte-identical to a genuine 30-days-
+// later collection. Kept in lockstep with the Python; if one changes, change both.
+function computeWecRate(views, likes, shares, saves) {
+  const v = views || 0, l = likes || 0, s = shares || 0, sv = saves || 0;
+  if (v <= 0) return null;
+  return (l + 3 * s + 5 * sv) / v;
+}
+
+// Stages (or idempotently no-ops) the JOINED posted_videos row for a user's own
+// link-run. Called from recordSubmissionForJob once this preview HAS a
+// submission_id, so the Tier-1 tie (matched_submission_id → this preview's
+// shadow_score) is valid. Age at run time decides outcome handling:
+//   <30d   → status 'matched', no outcome yet; the existing day-30 collector
+//            takes it when posted_at+30 arrives ("clock from posted date").
+//   30–100d→ capture CURRENT counters as the day-30 equivalent immediately
+//            (is_day30_equiv=true, phase5c license); grading picks it up next pass.
+//   >100d  → row WITHOUT outcome capture — outside the equivalence license, a
+//            >100-day-old video's current counters are no longer a valid day-30
+//            proxy, so we never grade it; the row exists only for idempotency.
+// Idempotent against BOTH a prior worker ingest AND a repeat link-run: ON
+// CONFLICT only fills ownership/caption gaps (COALESCE) and NEVER overwrites an
+// existing status or a real collected outcome.
+// Pure age→outcome decision, factored out of ensureOwnVideoPostedRow so it can
+// be unit-tested without a DB. `age` is the video's age in days at run time:
+//   30–100 → day-30 EQUIVALENT captured now (is_day30_equiv, phase5c license);
+//   >100   → 'day30_unavailable' terminal, NO outcome (outside the equivalence
+//            license — current counters are no longer a valid day-30 proxy —
+//            so it never grades; the row exists only for idempotency);
+//   <30 / unknown → 'matched', awaiting the collector at posted_at+30.
+function ownVideoOutcomeForAge(age, counters) {
+  const c = counters || {};
+  if (age != null && age >= 30 && age <= 100) {
+    return {
+      status: "day30_collected",
+      day30: {
+        views: c.views ?? null, likes: c.likes ?? null, comments: c.comments ?? null,
+        shares: c.shares ?? null, saves: c.saves ?? null,
+        wec: computeWecRate(c.views, c.likes, c.shares, c.saves),
+        equiv: true, ageAtCollection: age,
+      },
+    };
+  }
+  if (age != null && age > 100) return { status: "day30_unavailable", day30: {} };
+  return { status: "matched", day30: {} };
+}
+
+async function ensureOwnVideoPostedRow(jobId, ov, submissionId, userId) {
+  if (!pgPool) return;
+  const age = ov.ageDays;
+  const { status, day30: d30 } = ownVideoOutcomeForAge(age, ov.counters);
+  await queryRW(
+    `INSERT INTO posted_videos
+       (user_id, tiktok_video_id, handle, posted_at, caption, source, status,
+        matched_submission_id, match_tier, match_overlap, audio_match, possibly_related,
+        day30_views, day30_likes, day30_comments, day30_shares, day30_saves, day30_wec_rate,
+        is_day30_equiv, video_age_days_at_collection, collected_at)
+     VALUES ($1,$2,$3,$4,$5,'link_fetch',$6, $7,1,1,true,false,
+             $8,$9,$10,$11,$12,$13, $14,$15, ${status === "day30_collected" ? "now()" : "NULL"})
+     ON CONFLICT (tiktok_video_id) DO UPDATE SET
+       user_id               = COALESCE(posted_videos.user_id, EXCLUDED.user_id),
+       matched_submission_id = COALESCE(posted_videos.matched_submission_id, EXCLUDED.matched_submission_id),
+       match_tier            = COALESCE(posted_videos.match_tier, EXCLUDED.match_tier),
+       caption               = COALESCE(posted_videos.caption, EXCLUDED.caption),
+       -- Cross-era migration (v5.1 addendum): if this video was a BLIND row
+       -- (no prior match_tier) and this link-run is attaching the user's own
+       -- preview, the row moves BLIND→JOINED (see rowEra). Its frozen BLIND
+       -- grade was computed against the blind median -- the wrong pool for its
+       -- new era -- so clear the grade cache here; the JOINED grading pass
+       -- re-freezes times_typical/verdict against the JOINED median. A repeat
+       -- link-run (match_tier already set) leaves the JOINED grade untouched
+       -- (idempotent). The day-30 outcome itself (day30_* / status) is never
+       -- cleared -- data retained, only the derived grade is recomputed.
+       times_typical                 = CASE WHEN posted_videos.match_tier IS NULL THEN NULL ELSE posted_videos.times_typical END,
+       verdict                       = CASE WHEN posted_videos.match_tier IS NULL THEN NULL ELSE posted_videos.verdict END,
+       call_type                     = CASE WHEN posted_videos.match_tier IS NULL THEN NULL ELSE posted_videos.call_type END,
+       graded_at                     = CASE WHEN posted_videos.match_tier IS NULL THEN NULL ELSE posted_videos.graded_at END,
+       overall_percentile_at_grading = CASE WHEN posted_videos.match_tier IS NULL THEN NULL ELSE posted_videos.overall_percentile_at_grading END`,
+    [userId, ov.tiktokVideoId, ov.handle, ov.postedAt, ov.caption, status, submissionId,
+     d30.views ?? null, d30.likes ?? null, d30.comments ?? null, d30.shares ?? null,
+     d30.saves ?? null, d30.wec ?? null, d30.equiv ?? false, d30.ageAtCollection ?? null]
+  );
+  console.log(`[${jobId}] [own-video] staged posted_video tiktok_video_id=${ov.tiktokVideoId} ` +
+    `handle=@${ov.handle} age=${age == null ? "?" : age + "d"} status=${status} ` +
+    `→ Tier-1 tie to submission_id=${submissionId} (identical file)`);
+}
+
 app.post("/api/fetch-video", async (req, res) => {
   const { url: rawUrl, platform: _ignoredPlatform, objective = "", judges: judgesParam, userId = null } = req.body;
   const ip = (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map((s) => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })();
@@ -4591,6 +4737,39 @@ app.post("/api/fetch-video", async (req, res) => {
     return res.status(422).json({ error: `Video is ${mins}:${String(secs).padStart(2, "0")} long. PreviewPanel currently supports videos up to 5:00. Please link a shorter video.` });
   }
 
+  // ── Own-video link path (Track Record v5.1) ──────────────────────────────
+  // If this link is the connected user's OWN posted TikTok, stash the pieces a
+  // JOINED posted_videos row needs; the row itself is written later, from
+  // recordSubmissionForJob, once this preview has a submission_id to tie to.
+  // Silent exclusion of everyone else: a link to another creator's video (no
+  // connected handle, or a handle mismatch) leaves ownVideo null → a plain
+  // preview with NO posted row and zero track-record UI. We never build a
+  // track record from a video the user doesn't own.
+  let ownVideo = null;
+  if (userId && meta.id && pgPool) {
+    try {
+      const author = normalizeHandle(tiktokAuthorFromUrlOrMeta(parsed, meta), "tiktok");
+      const { rows: uRows } = await pgPool.query(`SELECT tiktok_handle FROM users WHERE user_id = $1`, [userId]);
+      const connected = normalizeHandle(uRows[0]?.tiktok_handle || null, "tiktok");
+      if (author && connected && author === connected) {
+        const postedAt = tiktokPostedAtFromId(meta.id, meta);
+        const ageDays = postedAt ? Math.floor((Date.now() - postedAt.getTime()) / 86400000) : null;
+        ownVideo = {
+          tiktokVideoId: String(meta.id), handle: connected, postedAt, ageDays,
+          caption: meta.description || null,
+          counters: {
+            views: meta.view_count ?? null, likes: meta.like_count ?? null,
+            comments: meta.comment_count ?? null, shares: meta.repost_count ?? null,
+            saves: meta.save_count ?? null,
+          },
+        };
+        console.log(`[link-fetch] own-video match — @${connected} tiktok_video_id=${meta.id} age=${ageDays == null ? "?" : ageDays + "d"}`);
+      }
+    } catch (e) {
+      console.error(`[link-fetch] own-video detection failed (continuing as plain preview): ${e.message}`);
+    }
+  }
+
   const jobId = `job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const destPath = path.join(__dirname, "uploads", `${jobId}_linkfetch.mp4`);
 
@@ -4631,6 +4810,7 @@ app.post("/api/fetch-video", async (req, res) => {
     objective,
     userId: userId || null,
     source: "link_fetch", // Provenance -- see the source-tagging comment in runShadowScoringForJob.
+    ownVideo, // v5.1 own-video link path -- non-null only when this is the user's own posted TikTok (see ensureOwnVideoPostedRow).
     results: {},
     error: null,
     createdAt: Date.now(),
@@ -5625,6 +5805,13 @@ async function recordSubmissionForJob(jobId, finalStatus) {
   if (submissionId != null && job.fingerprintId != null && pgPool) {
     queryRW(`UPDATE preview_fingerprints SET submission_id = $1 WHERE id = $2`, [submissionId, job.fingerprintId])
       .catch((e) => console.error(`[${jobId}] [fingerprint] submission_id backfill failed: ${e.message}`));
+  }
+  // v5.1 own-video link path -- now that this preview has a submission_id, stage
+  // its JOINED posted_videos row (Tier-1 self-match to this very submission).
+  // Fire-and-forget: never blocks or fails the user's preview.
+  if (job.ownVideo && submissionId != null) {
+    ensureOwnVideoPostedRow(jobId, job.ownVideo, submissionId, job.userId)
+      .catch((e) => console.error(`[${jobId}] [own-video] posted-row staging failed: ${e.message}`));
   }
   job.completedAt = Date.now();
   // Set AFTER submissionId/completedAt populate so waitForJobCompletion can

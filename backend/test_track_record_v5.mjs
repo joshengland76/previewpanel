@@ -62,12 +62,14 @@ const GRADED_WINDOW = CS.gradedWindow, JOINED_RETIREMENT = CS.joinedRetirement, 
 
 const fns = ["topBottomK", "callsTierFor", "averagesTierFor", "assignRankCalls",
   "computeEraAggregates", "shapeEra", "computeMilestone", "assembleTrackRecordResponse", "rowEra",
-  "trFixtureDate", "trFixtureEra", "trFixtureRows", "buildTrackRecordFixture"]
+  "trFixtureDate", "trFixtureEra", "trFixtureRows", "buildTrackRecordFixture",
+  // v5.1 own-video link path
+  "computeWecRate", "ownVideoOutcomeForAge", "tiktokPostedAtFromId", "tiktokAuthorFromUrlOrMeta"]
   .map(fnSource).join("\n\n");
 const consts = ["TR_FIXTURE_OBJS", "TR_FIXTURE_CAPS", "TR_BLIND_SPECS", "MILESTONE_TIERS"].map(constSource).join("\n");
 const api = new Function(
   "CALL_SIZE_TIERS,CALLS_TIER,AVERAGES_TIER,GRADED_WINDOW,JOINED_RETIREMENT,AGGREGATE_MIN,BASELINE_MIN,console",
-  fns + "\n" + consts + "\nreturn { shapeEra, assembleTrackRecordResponse, buildTrackRecordFixture, trFixtureEra, trFixtureRows, rowEra, topBottomK, computeMilestone };"
+  fns + "\n" + consts + "\nreturn { shapeEra, assembleTrackRecordResponse, buildTrackRecordFixture, trFixtureEra, trFixtureRows, rowEra, topBottomK, computeMilestone, computeWecRate, ownVideoOutcomeForAge, tiktokPostedAtFromId, tiktokAuthorFromUrlOrMeta };"
 )(CALL_SIZE_TIERS, CALLS_TIER, AVERAGES_TIER, GRADED_WINDOW, JOINED_RETIREMENT, AGGREGATE_MIN, BASELINE_MIN, console);
 
 let failures = [];
@@ -195,9 +197,74 @@ const blindEra = (n) => gradientEra(n, false);
   ok(wp.blindGradedCount === 0 && wp.welcomeSeen === false, "welcome-noprepop: no blind data + welcome unseen (no-prepop variant)");
 }
 
+// 10. v5.1 OWN-VIDEO LINK PATH -- age→outcome branches (esp. >100d), WEC parity,
+//     posted_at-from-id derivation, author extraction, cross-era dedup.
+{
+  const counters = { views: 1000, likes: 100, comments: 10, shares: 20, saves: 5 };
+
+  // <30d -> 'matched', NO outcome captured (day-30 collector takes it later).
+  const young = api.ownVideoOutcomeForAge(12, counters);
+  ok(young.status === "matched" && young.day30.wec == null && young.day30.equiv !== true,
+    "own-video <30d: status='matched', no day-30 outcome captured yet");
+
+  // 30-100d -> immediate day-30 EQUIVALENT (is_day30_equiv, wec computed).
+  const mid = api.ownVideoOutcomeForAge(55, counters);
+  const expectWec = (100 + 3 * 20 + 5 * 5) / 1000; // (likes + 3*shares + 5*saves)/views
+  ok(mid.status === "day30_collected" && mid.day30.equiv === true && mid.day30.ageAtCollection === 55,
+    "own-video 30-100d: status='day30_collected', is_day30_equiv, age recorded");
+  ok(Math.abs(mid.day30.wec - expectWec) < 1e-12, "own-video 30-100d: wec matches collect_day30 formula");
+
+  // >100d -> row WITHOUT outcome; terminal status the collector never touches;
+  // NEVER grades (no day30_wec_rate).
+  const old = api.ownVideoOutcomeForAge(140, counters);
+  ok(old.status === "day30_unavailable" && old.day30.wec == null && old.day30.views == null,
+    "own-video >100d: status='day30_unavailable', NO outcome (never grades)");
+  ok(!["scored", "matched", "day30_collected"].includes(old.status),
+    "own-video >100d: status is OUTSIDE the collector's ('scored','matched') + grading ('day30_collected') sets");
+
+  // boundary: exactly 30 and exactly 100 are inside the equivalence window; 101 out.
+  ok(api.ownVideoOutcomeForAge(30, counters).status === "day30_collected", "own-video age 30 boundary: captured");
+  ok(api.ownVideoOutcomeForAge(100, counters).status === "day30_collected", "own-video age 100 boundary: captured");
+  ok(api.ownVideoOutcomeForAge(101, counters).status === "day30_unavailable", "own-video age 101: unavailable");
+  ok(api.ownVideoOutcomeForAge(29, counters).status === "matched", "own-video age 29: matched (pending)");
+
+  // WEC parity + zero-views guard.
+  ok(api.computeWecRate(0, 5, 5, 5) == null, "computeWecRate: null when views<=0 (matches Python)");
+  ok(api.computeWecRate(1000, 100, 20, 5) === (100 + 60 + 25) / 1000, "computeWecRate: exact weighted formula");
+
+  // posted_at from the TikTok Snowflake id (top 32 bits = unix seconds).
+  const knownSecs = 1704067200; // 2024-01-01T00:00:00Z
+  const id = (BigInt(knownSecs) << 32n).toString();
+  const derived = api.tiktokPostedAtFromId(id, {});
+  ok(Math.abs(derived.getTime() - knownSecs * 1000) < 1000, "tiktokPostedAtFromId: recovers the id's embedded timestamp");
+  // junk id -> metadata fallback (timestamp), else upload_date, else null.
+  ok(api.tiktokPostedAtFromId("notanumber", { timestamp: knownSecs }).getTime() === knownSecs * 1000,
+    "tiktokPostedAtFromId: falls back to meta.timestamp when the id is unusable");
+  ok(api.tiktokPostedAtFromId("notanumber", {}) === null, "tiktokPostedAtFromId: null when nothing is derivable");
+
+  // author handle: @segment in the URL path wins, else uploader metadata.
+  ok(api.tiktokAuthorFromUrlOrMeta({ pathname: "/@TheColorfulPantry/video/123" }, {}) === "TheColorfulPantry",
+    "author: extracted from the URL @segment");
+  ok(api.tiktokAuthorFromUrlOrMeta({ pathname: "/video/123" }, { uploader_id: "fallbackhandle" }) === "fallbackhandle",
+    "author: falls back to meta.uploader_id when the path has no @segment");
+
+  // CROSS-ERA DEDUP: a blind-sourced row that gains a link-run match_tier
+  // resolves to JOINED (precedence flip), so it leaves the blind board.
+  ok(api.rowEra({ source: "study_history", match_tier: 1 }) === "joined",
+    "cross-era dedup: blind-sourced row + match_tier=1 -> JOINED (user's own preview wins)");
+  ok(api.rowEra({ source: "prospect_report", match_tier: 2 }) === "joined",
+    "cross-era dedup: prospect-sourced row + match_tier=2 -> JOINED");
+  ok(api.rowEra({ source: "study_history", match_tier: null }) === "blind",
+    "cross-era dedup: blind-sourced row WITHOUT a match stays BLIND (unchanged)");
+  ok(api.rowEra({ source: "link_fetch", match_tier: 1 }) === "joined",
+    "own-video link_fetch row is JOINED, never BLIND (single-config blind board guaranteed)");
+  ok(api.rowEra({ source: null, match_tier: null }) === null,
+    "own post with no matching preview belongs to neither era");
+}
+
 if (failures.length) {
   console.log(`FAILED (${failures.length}):`);
   for (const f of failures) console.log("  - " + f);
   process.exit(1);
 }
-console.log("All Track Record v5 + v5.1 tests passed (era separation, prediction identity, call floor, hero handoff, retirement, null-config, rowEra, milestone ladder + backfill guard + one-per-session, badge neutral/unseen/zero-hiding, welcome-noprepop).");
+console.log("All Track Record v5 + v5.1 tests passed (era separation, prediction identity, call floor, hero handoff, retirement, null-config, rowEra, milestone ladder + backfill guard + one-per-session, badge neutral/unseen/zero-hiding, welcome-noprepop, own-video age branches incl. >100d, WEC parity, posted_at-from-id, author extraction, cross-era dedup).");
