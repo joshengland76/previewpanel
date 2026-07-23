@@ -943,11 +943,13 @@ function TrackRecordPanel({ userId, onConnectClick }) {
 // track_record_welcomed), not localStorage -- see the trigger logic
 // (showWelcomeModal) at its call site for why that's a real robustness
 // improvement over the banner it replaces.
-function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss }) {
+function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss, noPrepop }) {
   // Welcome copy v3.1. Both buttons are brown (filled B.action); button 1
   // ("Run a video") dismisses to the form, button 2 opens the tab. No
   // dynamic counts in the body so it renders the instant identity is
-  // confirmed (no track-record fetch to wait on).
+  // confirmed (no track-record fetch to wait on). v5.1 noPrepop variant (no
+  // blind-test data): drop "we brought receipts", drop the second button, and
+  // add a footer explaining the record will build.
   const cardBase = {
     width: "100%", borderRadius: "12px", padding: "13px 16px", textAlign: "left",
     cursor: "pointer", fontFamily: "Montserrat, sans-serif", display: "block",
@@ -975,21 +977,67 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss }) {
           PreviewPanel is a test screening for your feed. Our panel watches your video the way your audience
           will — hook, pacing, vibe — and tells you how it's likely to stack up against your usual numbers,
           plus what to fix while you still can. No “looks great!” fluff: when we call a video one of your
-          strongest, we're right more than 2 out of 3 times. We brought receipts.
+          strongest, we're right more than 2 out of 3 times.{noPrepop ? "" : " We brought receipts."}
         </div>
-        <button onClick={onDismiss} style={{ ...cardBase, marginBottom: "10px" }}>
+        <button onClick={onDismiss} style={{ ...cardBase, marginBottom: noPrepop ? "0" : "10px" }}>
           <div style={btnTitle}>Run a video</div>
           <div style={btnSub}>Upload a draft or paste a link — get your score and straight-up feedback.</div>
         </button>
-        <button onClick={onSeeTrackRecord} style={cardBase}>
-          <div style={btnTitle}>See how our predictions did on your videos</div>
-          <div style={btnSub}>We scored a batch of your videos and tracked their real 30-day results. See how our calls held up.</div>
-        </button>
+        {noPrepop ? (
+          <div style={{ fontSize: "12.5px", color: "#8A7A6B", lineHeight: "1.5", marginTop: "16px" }}>
+            Your track record will build under History as you preview and post.
+          </div>
+        ) : (
+          <button onClick={onSeeTrackRecord} style={cardBase}>
+            <div style={btnTitle}>See how our predictions did on your videos</div>
+            <div style={btnSub}>We scored a batch of your videos and tracked their real 30-day results. See how our calls held up.</div>
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
+
+// v5.1 milestone modals -- one-time, fire when the call-governing graded window
+// crosses a tier (server decides via milestoneModal). Same overlay/card as the
+// welcome modal; primary "See your calls" opens the TR segment, quiet "Later".
+const TR_MILESTONES = {
+  6: { title: "Your track record is live.", body: "You've got enough graded videos for us to start making calls — your top 2 and bottom 2 predictions are now on the board, checked against what actually happened." },
+  9: { title: "Your record just got sharper.", body: "With more graded videos, we now call your top 3 and bottom 3 — stronger stakes, same rule: every call gets checked against your real 30-day results." },
+  12: { title: "Full-strength track record.", body: "Your record now makes top-4 and bottom-4 calls — the same top-and-bottom-slice construction our study measured, where our strongest picks beat a creator's typical engagement more than 2 times in 3." },
+};
+function TrackRecordMilestoneModal({ milestone, onSeeCalls, onDismiss }) {
+  const m = TR_MILESTONES[milestone];
+  if (!m) return null;
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: B.bg, zIndex: 150,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: "20px", overflowY: "auto",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: "18px", padding: "32px 26px",
+        maxWidth: "380px", width: "100%", textAlign: "center",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.12)", border: `1px solid ${B.border}`,
+        animation: "pp-slide 0.25s ease",
+      }}>
+        <img src="/owl-logo.png?v=3" alt="PreviewPanel"
+          style={{ height: "92px", width: "auto", margin: "0 auto 18px", display: "block" }} />
+        <div style={{ fontWeight: "800", fontSize: "20px", color: B.black, marginBottom: "12px" }}>{m.title}</div>
+        <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>{m.body}</div>
+        <button onClick={onSeeCalls} style={{
+          width: "100%", height: "50px", background: B.action, border: "none", borderRadius: "10px",
+          color: "#fff", fontSize: "15px", fontWeight: "800", cursor: "pointer",
+          fontFamily: "Montserrat, sans-serif", marginBottom: "10px",
+        }}>See your calls</button>
+        <button onClick={onDismiss} style={{
+          width: "100%", height: "44px", background: "none", border: "none",
+          color: "#999", fontSize: "13.5px", fontWeight: "700", cursor: "pointer", fontFamily: "Montserrat, sans-serif",
+        }}>Later</button>
+      </div>
+    </div>
+  );
+}
 
 // ── Issue #5 & #6: Big waiting banner ────────────────────────
 function WaitingBanner({ elapsed, judgeResults, selectedJudges, jobStatus, uploadComplete, timeEstimate }) {
@@ -1110,18 +1158,76 @@ const OBJECTIVE_OPTIONS = [
 // v5 -- dev fixture viewer. ?trdemo=<name> renders JUST the Track Record panel
 // (fed by the endpoint's in-memory fixture, through the real components) in a
 // phone-width frame, past the beta gate. No links point here; it's a URL Josh
-// opens directly on his phone to review the states.
-function TrackRecordDemoFrame() {
+// opens directly on his phone to review the states. v5.1 adds badge/modal
+// states: badge-* mock the History button + segments from the fixture counts;
+// milestone-*/welcome-noprepop overlay the real modal component.
+function TrackRecordDemoFrame({ name }) {
+  const [p, setP] = useState(null);
+  const [modalDismissed, setModalDismissed] = useState(false);
+  useEffect(() => {
+    fetch(`${API_BASE}/api/track-record?fixture=${encodeURIComponent(name)}`)
+      .then((r) => (r.ok ? r.json() : null)).then(setP).catch(() => {});
+  }, [name]);
+  const isBadge = name && name.startsWith("badge-");
+  const isMilestone = name && name.startsWith("milestone-");
+  const isWelcome = name === "welcome-noprepop";
+  const redDot = (n) => (
+    <span style={{
+      position: "absolute", top: "-6px", right: "-6px", display: "inline-flex",
+      alignItems: "center", justifyContent: "center", background: "#E53935", color: "#fff",
+      borderRadius: "999px", fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+      padding: "0 3px", border: "1.5px solid #fff",
+    }}>{n}</span>
+  );
   return (
     <div style={{ maxWidth: "430px", margin: "0 auto", minHeight: "100vh", background: B.bg, fontFamily: "Montserrat, sans-serif", color: B.body }}>
+      {isBadge && p && (
+        <div style={{ padding: "16px 14px 0" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "10px" }}>
+            <div style={{
+              position: "relative", background: "#fff", border: `1.5px solid ${B.border}`,
+              borderRadius: "8px", padding: "6px 10px", fontSize: "11px", fontWeight: "700", color: B.brown,
+            }}>
+              📋 History{p.previewsCount > 0 ? ` (${p.previewsCount})` : ""}
+              {p.unseenGradedCount > 0 && redDot(p.unseenGradedCount)}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "6px", background: B.bg, borderRadius: "9px", padding: "3px", width: "fit-content" }}>
+            {[["previews", `Previews${p.previewsCount > 0 ? ` (${p.previewsCount})` : ""}`, false],
+              ["trackrecord", `Track Record${p.totalGradedCount >= 1 ? ` (${p.totalGradedCount})` : ""}`, true]].map(([id, label, on]) => (
+              <div key={id} style={{
+                position: "relative", borderRadius: "7px", padding: "7px 12px", fontSize: "12px", fontWeight: "700",
+                background: on ? "#fff" : "transparent", color: on ? B.black : "#999",
+                boxShadow: on ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+              }}>
+                {label}
+                {id === "trackrecord" && p.unseenGradedCount > 0 && (
+                  <span style={{
+                    position: "absolute", top: "-4px", right: "-4px", background: "#E53935", color: "#fff",
+                    borderRadius: "999px", fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
+                    display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px",
+                  }}>{p.unseenGradedCount}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <TrackRecordPanel userId={null} onConnectClick={() => {}} />
+      {isMilestone && p && p.milestoneModal && !modalDismissed && (
+        <TrackRecordMilestoneModal milestone={p.milestoneModal}
+          onSeeCalls={() => setModalDismissed(true)} onDismiss={() => setModalDismissed(true)} />
+      )}
+      {isWelcome && !modalDismissed && (
+        <TrackRecordWelcomeModal noPrepop onDismiss={() => setModalDismissed(true)} onSeeTrackRecord={() => setModalDismissed(true)} />
+      )}
     </div>
   );
 }
 
 export default function PreviewPanelRoot() {
   const trdemo = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("trdemo");
-  if (trdemo) return <TrackRecordDemoFrame />;
+  if (trdemo) return <TrackRecordDemoFrame name={trdemo} />;
   return <PreviewPanelApp />;
 }
 
@@ -1226,6 +1332,8 @@ function PreviewPanelApp() {
   // immediate-hide optimization so the modal doesn't flash back on
   // between clicking a button and the server confirming the write.
   const [welcomeModalDismissedLocally, setWelcomeModalDismissedLocally] = useState(false);
+  // v5.1 -- milestone modal shown this session, cleared optimistically on dismiss.
+  const [milestoneDismissedLocally, setMilestoneDismissedLocally] = useState(false);
   // Track Record v4, Task 2a -- welcome-modal TIMING. Set synchronously from
   // the redemption response's welcomeNeeded flag so the modal renders the
   // instant identity is confirmed, with no track-record fetch to wait on
@@ -1987,8 +2095,11 @@ function PreviewPanelApp() {
           reactive fallback fires (real content + server welcomeSeen===false,
           not just falsy/undefined). welcomeModalDismissedLocally hides it the
           moment a button is clicked, before the server write confirms. */}
-      {(welcomeForced || (trackRecordHasContent && trackRecordSummary?.welcomeSeen === false)) && !welcomeModalDismissedLocally && (
+      {/* v5.1 -- EVERY redeemer sees the welcome (no longer gated on having
+          content); the no-prepop variant is chosen when there's no blind data. */}
+      {(welcomeForced || trackRecordSummary?.welcomeSeen === false) && !welcomeModalDismissedLocally && (
         <TrackRecordWelcomeModal
+          noPrepop={(trackRecordSummary?.blindGradedCount ?? 0) === 0}
           onSeeTrackRecord={() => {
             setWelcomeModalDismissedLocally(true);
             fetch(`${API_BASE}/api/track-record/welcome-seen`, {
@@ -2003,6 +2114,32 @@ function PreviewPanelApp() {
             fetch(`${API_BASE}/api/track-record/welcome-seen`, {
               method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ userId }),
+            }).catch(() => {});
+          }}
+        />
+      )}
+
+      {/* v5.1 milestone modal -- server returns milestoneModal (6|9|12) only
+          once the welcome is already seen (welcome outranks), so these never
+          collide. Marked shown server-side on dismiss/see. */}
+      {trackRecordSummary?.milestoneModal && !milestoneDismissedLocally && !welcomeModalDismissedLocally
+        && !(welcomeForced || trackRecordSummary?.welcomeSeen === false) && (
+        <TrackRecordMilestoneModal
+          milestone={trackRecordSummary.milestoneModal}
+          onSeeCalls={() => {
+            setMilestoneDismissedLocally(true);
+            fetch(`${API_BASE}/api/track-record/milestone-seen`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId, milestone: trackRecordSummary.milestoneModal }),
+            }).catch(() => {});
+            setShowHistory(true);
+            setHistoryTab("trackrecord");
+          }}
+          onDismiss={() => {
+            setMilestoneDismissedLocally(true);
+            fetch(`${API_BASE}/api/track-record/milestone-seen`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId, milestone: trackRecordSummary.milestoneModal }),
             }).catch(() => {});
           }}
         />
@@ -2068,8 +2205,12 @@ function PreviewPanelApp() {
                   // (3b) is just as much "opening it" as clicking the inner
                   // segmented tab -- clear the badge the same way, so it
                   // doesn't show stale until the next full summary refresh.
-                  if (landingOnTrackRecord && trackRecordSummary) {
-                    setTrackRecordSummary({ ...trackRecordSummary, unseenGradedCount: 0 });
+                  if (landingOnTrackRecord) {
+                    if (trackRecordSummary) setTrackRecordSummary({ ...trackRecordSummary, unseenGradedCount: 0 });
+                    fetch(`${API_BASE}/api/track-record/seen`, {
+                      method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ userId }),
+                    }).catch(() => {});
                   }
                 }
                 setShowHistory(v => !v);
@@ -2081,37 +2222,13 @@ function PreviewPanelApp() {
                 cursor: "pointer", fontFamily: "Montserrat, sans-serif",
                 display: "inline-flex", alignItems: "center", gap: "5px",
               }}>
-                <span className="pp-header-btn-label">📋 History</span>
-                {/* Header symmetry, Task 5 (v3) -- BOTH count forms this
-                    button can show (local-preview "(N)" inline text, and
-                    the track-record unseen/graded count) used to sit
-                    INLINE as flex siblings of the label, widening the
-                    button's own layout box. Measuring actual rendered
-                    widths (not just reading the Header-collision Task 2
-                    media query) showed real overlap with the centered,
-                    never-shrunk logo at true 375/390px widths -- the TR
-                    badge case by ~5-13px, and the local-history "(24)"
-                    case by ~35px, since double-digit inline text runs
-                    wider still. Both are now the SAME absolute-positioned
-                    corner dot (matching the segmented Track-Record-tab
-                    badge below) instead of inline content: it overlays the
-                    button's own padding box rather than adding to its
-                    width, so the button measures identically whether any
-                    badge is showing or not -- no count, in either form,
-                    can ever push it wider again. Local-preview count still
-                    takes precedence over the track-record count when both
-                    are non-zero, same priority as before. */}
-                {history.length > 0 ? (
-                  <span style={{
-                    position: "absolute", top: "-6px", right: "-6px",
-                    display: "inline-flex", alignItems: "center", justifyContent: "center",
-                    background: B.lightBrown, color: B.brown, borderRadius: "999px",
-                    fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
-                    padding: "0 3px", border: "1.5px solid #fff",
-                  }}>
-                    {history.length}
-                  </span>
-                ) : trackRecordHasContent && trackRecordSummary.unseenGradedCount > 0 ? (
+                {/* v5.1 badge model: neutral preview inventory count lives
+                    INLINE in the label ("History (N)"), hidden at N=0; the ONLY
+                    corner badge is the RED unseen-graded attention count (clears
+                    on opening the TR segment). The old shape-shifting neutral
+                    graded-count corner badge is gone entirely. */}
+                <span className="pp-header-btn-label">📋 History{history.length > 0 ? ` (${history.length})` : ""}</span>
+                {trackRecordSummary?.unseenGradedCount > 0 && (
                   <span style={{
                     position: "absolute", top: "-6px", right: "-6px",
                     display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -2121,17 +2238,7 @@ function PreviewPanelApp() {
                   }}>
                     {trackRecordSummary.unseenGradedCount}
                   </span>
-                ) : trackRecordHasContent && trackRecordSummary.gradedCallCount > 0 ? (
-                  <span style={{
-                    position: "absolute", top: "-6px", right: "-6px",
-                    display: "inline-flex", alignItems: "center", justifyContent: "center",
-                    background: B.lightBrown, color: B.brown, borderRadius: "999px",
-                    fontSize: "9px", fontWeight: "800", minWidth: "15px", height: "15px",
-                    padding: "0 3px", border: "1.5px solid #fff",
-                  }}>
-                    {trackRecordSummary.gradedCallCount}
-                  </span>
-                ) : null}
+                )}
               </button>
               {/* Phase C, Task 1: Connect-accounts trigger */}
               <div style={{ position: "absolute", top: "10px", left: "0" }} className="pp-header-btn">
@@ -2164,15 +2271,25 @@ function PreviewPanelApp() {
                   display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px",
                 }}>
                   <div style={{ display: "flex", gap: "6px", background: B.bg, borderRadius: "9px", padding: "3px" }}>
-                    {[["previews", "Previews"], ["trackrecord", "Track Record"]].map(([id, label]) => (
+                    {/* v5.1: neutral inventory counts in the labels -- "Previews (N)"
+                        = localStorage previews; "Track Record (M)" = TOTAL graded
+                        across both eras, no number until M>=1. Persistent, never
+                        mutate on view. Only the red unseen dot on TR clears. */}
+                    {[
+                      ["previews", `Previews${history.length > 0 ? ` (${history.length})` : ""}`],
+                      ["trackrecord", `Track Record${(trackRecordSummary?.totalGradedCount || 0) >= 1 ? ` (${trackRecordSummary.totalGradedCount})` : ""}`],
+                    ].map(([id, label]) => (
                       <button key={id} onClick={() => {
                         setHistoryTab(id);
-                        // opened it -- TrackRecordPanel stamps last_seen_at itself; clear the
-                        // outer summary's count optimistically so this button/badge and the
-                        // always-on History button (3a) don't show a stale unseen count
-                        // until the next full refreshTrackRecordSummary() call.
-                        if (id === "trackrecord" && trackRecordSummary) {
-                          setTrackRecordSummary({ ...trackRecordSummary, unseenGradedCount: 0 });
+                        // Opening the TR segment stamps last_seen SERVER-SIDE (the
+                        // red unseen badge clears against it) and optimistically
+                        // zeroes the unseen count. Neutral counts are unaffected.
+                        if (id === "trackrecord") {
+                          if (trackRecordSummary) setTrackRecordSummary({ ...trackRecordSummary, unseenGradedCount: 0 });
+                          fetch(`${API_BASE}/api/track-record/seen`, {
+                            method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ userId }),
+                          }).catch(() => {});
                         }
                       }} style={{
                         border: "none", borderRadius: "7px", padding: "7px 12px",

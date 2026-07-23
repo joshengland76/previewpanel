@@ -1035,6 +1035,14 @@ async function initDb() {
     // load shows it instead -- there's no single "only chance" the way
     // the banner's one-shot onBound trigger had.
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS track_record_welcomed BOOLEAN DEFAULT false`);
+    // Track Record v5.1 -- server-side per-user badge/milestone state.
+    // track_record_last_seen: the "seen" stamp the red unseen-badge clears
+    // against (graded_at > this). milestone_{6,9,12}_shown: one-time flags for
+    // the call-tier milestone modals (like track_record_welcomed).
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS track_record_last_seen TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS milestone_6_shown BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS milestone_9_shown BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS milestone_12_shown BOOLEAN DEFAULT false`);
     await client.query(`
       CREATE TABLE IF NOT EXISTS beta_submission_events (
         id         BIGSERIAL PRIMARY KEY,
@@ -3968,9 +3976,14 @@ app.post("/api/invite/redeem", async (req, res) => {
     // that warrants the one-time welcome modal, so it can render the instant
     // identity is confirmed with NO track-record fetch to wait on (the async
     // fetch is exactly what let the form flash before the modal appeared).
-    // A fresh redemption's user is always track_record_welcomed=false, so
-    // "needed" reduces to "the claim gave them at least one posted video."
-    const welcomeNeeded = !!(isPreLinked && claimIdentity && claimResult && claimResult.claimedPostedVideos > 0);
+    // v5.1 -- EVERY fresh redeemer sees the welcome modal, prepopulated or not
+    // (a fresh redemption's user is always track_record_welcomed=false). The
+    // no-prepop variant (no blind data) is selected client-side from
+    // blindGradedCount=0. Ensure a users row exists so track_record_welcomed
+    // (and the milestone/last-seen flags) can persist for plain code redeemers
+    // who otherwise have no users row.
+    await queryRW(`INSERT INTO users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [userId]);
+    const welcomeNeeded = true;
     res.json({ ok: true, code, alreadyBound: false, claimed: !!(isPreLinked && claimIdentity), claim: claimResult, welcomeNeeded });
   } catch (err) {
     console.error(`[invite] redeem failed for user_id=${userId} code=${code}: ${err.message}`);
@@ -3981,6 +3994,22 @@ app.post("/api/invite/redeem", async (req, res) => {
 // assembleTrackRecordResponse -- shared by the live endpoint and the fixture
 // harness. Decides hero ownership + retirement from the two shaped eras and
 // asserts no posted video leaked across eras.
+// computeMilestone -- v5.1 pure milestone decision. heroWindowN = graded count
+// of the hero-owning era (the window that governs calls). Returns which modal to
+// show this load (6|9|12|null) and which tiers to BACKFILL (mark shown without
+// displaying). Rules: welcome outranks on first visit; a first-visit record that
+// already qualifies is backfilled (no modal); once welcome is seen, the highest
+// uncrossed tier surfaces. Shared by the endpoint and the fixture harness.
+function computeMilestone(heroWindowN, welcomeSeen, flags) {
+  if (!welcomeSeen && heroWindowN >= 6) {
+    return { milestoneModal: null, backfill: [6, 9, 12].filter((t) => heroWindowN >= t && !flags[t]) };
+  }
+  if (welcomeSeen) {
+    for (const t of [12, 9, 6]) if (heroWindowN >= t && !flags[t]) return { milestoneModal: t, backfill: [] };
+  }
+  return { milestoneModal: null, backfill: [] };
+}
+
 function assembleTrackRecordResponse({ handle, welcomeSeen, state, blind, joined, blindNullConfig }) {
   const heroOwner = joined.hasCalls ? "joined" : "blind";
   const retired = joined.gradedCount >= JOINED_RETIREMENT;
@@ -4113,15 +4142,61 @@ function buildTrackRecordFixture(name) {
         outcome: 2.4 - frac * 2.0 });
     }
     joinedRows = trFixtureRows(specs, { joined: true });
+  } else if (name === "badge-fresh" || name === "badge-seen" || name === "badge-mixed" ||
+             name === "milestone-6" || name === "milestone-9" || name === "milestone-12" ||
+             name === "welcome-noprepop") {
+    // v5.1 badge/modal fixtures -- real era shaping; badge counts + modal flags
+    // computed here to demo the outer button / segments / modals. A gradient of
+    // n rows with a clear top>bottom slope.
+    const grad = (n, joined) => {
+      const specs = [];
+      for (let i = 0; i < n; i++) {
+        const f = n > 1 ? i / (n - 1) : 0;
+        specs.push({ prediction: 0.95 - f * 1.2, percentile: Math.round(96 - f * 90), outcome: 2.3 - f * 1.9 });
+      }
+      return trFixtureEra(trFixtureRows(specs, { joined }));
+    };
+    if (name === "welcome-noprepop") {
+      return {
+        state: "no_handle", handle: "demo.creator", welcomeSeen: false, heroOwner: "blind", retired: false,
+        eras: { joined: { graded: [], aggregates: null, gradedCount: 0, hasCalls: false },
+                blind: { graded: [], aggregates: null, gradedCount: 0, hasCalls: false, nullConfig: false } },
+        blindGradedCount: 0, totalGradedCount: 0, unseenGradedCount: 0, milestoneModal: null, previewsCount: 0,
+      };
+    }
+    if (name.startsWith("milestone-")) {
+      const joined = grad(parseInt(name.split("-")[1], 10), true); // n = 6 | 9 | 12
+      const p = assembleTrackRecordResponse({ handle: "demo.creator", welcomeSeen: true, state: "active", blind: blank(), joined, blindNullConfig: false });
+      const heroWindowN = p.eras[p.heroOwner].gradedCount;
+      // Real logic decides the modal (welcome already seen, no flags set yet).
+      p.milestoneModal = computeMilestone(heroWindowN, true, {}).milestoneModal;
+      p.blindGradedCount = 0; p.totalGradedCount = heroWindowN; p.unseenGradedCount = heroWindowN; p.previewsCount = heroWindowN;
+      return p;
+    }
+    // badge-* : a 14-row blind board (like a day-one pre-linked user)
+    const blind = grad(14, false);
+    const p = assembleTrackRecordResponse({ handle: "demo.creator", welcomeSeen: true, state: "active", blind, joined: blank(), blindNullConfig: false });
+    p.blindGradedCount = blind.gradedCount; p.totalGradedCount = blind.gradedCount; p.milestoneModal = null;
+    if (name === "badge-fresh") { p.unseenGradedCount = blind.gradedCount; p.previewsCount = 0; }
+    else if (name === "badge-seen") { p.unseenGradedCount = 0; p.previewsCount = 0; }
+    else { p.unseenGradedCount = 3; p.previewsCount = 24; } // badge-mixed
+    return p;
   } else {
     return null;
   }
-  return assembleTrackRecordResponse({
+  const p = assembleTrackRecordResponse({
     handle: "demo.creator", welcomeSeen: true, state: "active",
     blind: blindRows.length ? trFixtureEra(blindRows) : blank(),
     joined: joinedRows.length ? trFixtureEra(joinedRows) : blank(),
     blindNullConfig,
   });
+  // v5.1 badge fields so the existing fixtures also carry a consistent shape.
+  p.totalGradedCount = p.eras.blind.gradedCount + p.eras.joined.gradedCount;
+  p.blindGradedCount = p.eras.blind.gradedCount;
+  p.unseenGradedCount = p.totalGradedCount;
+  p.milestoneModal = null;
+  p.previewsCount = 0;
+  return p;
 }
 
 // GET /api/track-record?userId=X&lastSeenAt=<ISO> -- Track Record tab
@@ -4144,17 +4219,22 @@ app.get("/api/track-record", async (req, res) => {
     const payload = buildTrackRecordFixture(fixture);
     if (payload) {
       console.log(`[track-record] fixture render: ${fixture} (in-memory, no DB, no writes)`);
-      payload.unseenGradedCount = payload.eras.blind.gradedCount + payload.eras.joined.gradedCount;
       return res.json(payload);
     }
   }
 
   if (!userId) return res.json({ state: "no_handle", handle: null });
   try {
-    const { rows: userRows } = await pgPool.query(`SELECT tiktok_handle, track_record_welcomed FROM users WHERE user_id = $1`, [userId]);
+    const { rows: userRows } = await pgPool.query(
+      `SELECT tiktok_handle, track_record_welcomed, track_record_last_seen,
+              milestone_6_shown, milestone_9_shown, milestone_12_shown
+       FROM users WHERE user_id = $1`, [userId]);
     const handle = userRows[0]?.tiktok_handle || null;
-    if (!handle) return res.json({ state: "no_handle", handle: null });
     const welcomeSeen = !!userRows[0]?.track_record_welcomed;
+    // v5.1 -- return welcomeSeen even with no handle/posts so a plain code
+    // redeemer (no prepopulated record) still gets the welcome modal
+    // (no-prepop variant); blindGradedCount=0 there selects the variant.
+    if (!handle) return res.json({ state: "no_handle", handle: null, welcomeSeen, blindGradedCount: 0, totalGradedCount: 0, unseenGradedCount: 0, milestoneModal: null });
 
     // Optional safety net (Task 2) -- idempotent, see claimHandleHistory.
     await claimHandleHistory(userId, handle);
@@ -4234,11 +4314,28 @@ app.get("/api/track-record", async (req, res) => {
 
     const payload = assembleTrackRecordResponse({ handle, welcomeSeen, state, blind, joined, blindNullConfig });
 
-    const lastSeenAt = (req.query.lastSeenAt || "").toString().trim() || null;
+    // v5.1 BADGES -- neutral inventory counts (persistent) + red unseen count.
+    // Track Record segment M = total graded across BOTH eras. Unseen (red) =
+    // graded rows newer than the server-side last-seen stamp; before any open
+    // (stamp NULL) every graded row is unseen.
+    payload.blindGradedCount = blind.gradedCount; // welcome-variant selector
+    payload.totalGradedCount = blind.gradedCount + joined.gradedCount;
+    const lastSeen = userRows[0]?.track_record_last_seen ? new Date(userRows[0].track_record_last_seen) : null;
     const allGraded = [...blind.graded, ...joined.graded];
-    payload.unseenGradedCount = lastSeenAt
-      ? allGraded.filter((g) => g.gradedAt && new Date(g.gradedAt) > new Date(lastSeenAt)).length
+    payload.unseenGradedCount = lastSeen
+      ? allGraded.filter((g) => g.gradedAt && new Date(g.gradedAt) > lastSeen).length
       : allGraded.length;
+
+    // v5.1 MILESTONE MODALS -- fire on the hero-owning era's graded window (the
+    // window governing the displayed calls). One-time server flags; the backfill
+    // guard (first-visit qualifying records) marks flags without a modal.
+    const heroWindowN = payload.eras[payload.heroOwner].gradedCount;
+    const flags = { 6: !!userRows[0]?.milestone_6_shown, 9: !!userRows[0]?.milestone_9_shown, 12: !!userRows[0]?.milestone_12_shown };
+    const { milestoneModal, backfill } = computeMilestone(heroWindowN, welcomeSeen, flags);
+    if (backfill.length) {
+      await queryRW(`UPDATE users SET ${backfill.map((t) => `milestone_${t}_shown = true`).join(", ")} WHERE user_id = $1`, [userId]);
+    }
+    payload.milestoneModal = milestoneModal;
 
     res.json(payload);
   } catch (err) {
@@ -4282,10 +4379,47 @@ app.post("/api/track-record/welcome-seen", async (req, res) => {
   const userId = (req.body.userId || "").toString().trim();
   if (!userId) return res.status(400).json({ error: "Missing userId" });
   try {
-    await queryRW(`UPDATE users SET track_record_welcomed = true WHERE user_id = $1`, [userId]);
+    // v5.1 -- upsert so a plain code redeemer (no prior users row) persists too.
+    await queryRW(`INSERT INTO users (user_id, track_record_welcomed) VALUES ($1, true)
+                   ON CONFLICT (user_id) DO UPDATE SET track_record_welcomed = true`, [userId]);
     res.json({ ok: true });
   } catch (err) {
     console.error(`[track-record] failed to mark welcome seen for user_id=${userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to update" });
+  }
+});
+
+// POST /api/track-record/seen { userId } -- v5.1. Stamps the server-side
+// last-seen (the red unseen badge clears against graded_at > this). Called
+// when the user OPENS the Track Record segment. Neutral counts unaffected.
+app.post("/api/track-record/seen", async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  const userId = (req.body.userId || "").toString().trim();
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+  try {
+    await queryRW(`INSERT INTO users (user_id, track_record_last_seen) VALUES ($1, now())
+                   ON CONFLICT (user_id) DO UPDATE SET track_record_last_seen = now()`, [userId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[track-record] failed to stamp last-seen for user_id=${userId}: ${err.message}`);
+    res.status(500).json({ error: "Failed to update" });
+  }
+});
+
+// POST /api/track-record/milestone-seen { userId, milestone } -- v5.1. Marks a
+// call-tier milestone modal (6|9|12) shown, one-time server-persisted.
+app.post("/api/track-record/milestone-seen", async (req, res) => {
+  if (!pgPool) return res.status(503).json({ error: "Database not available" });
+  const userId = (req.body.userId || "").toString().trim();
+  const milestone = parseInt(req.body.milestone, 10);
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+  if (![6, 9, 12].includes(milestone)) return res.status(400).json({ error: "Invalid milestone" });
+  try {
+    await queryRW(`INSERT INTO users (user_id, milestone_${milestone}_shown) VALUES ($1, true)
+                   ON CONFLICT (user_id) DO UPDATE SET milestone_${milestone}_shown = true`, [userId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(`[track-record] failed to mark milestone ${milestone} for user_id=${userId}: ${err.message}`);
     res.status(500).json({ error: "Failed to update" });
   }
 });

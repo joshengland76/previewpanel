@@ -61,13 +61,13 @@ const CALL_SIZE_TIERS = CS.sizeTiers, CALLS_TIER = CS.callsTier, AVERAGES_TIER =
 const GRADED_WINDOW = CS.gradedWindow, JOINED_RETIREMENT = CS.joinedRetirement, AGGREGATE_MIN = 4, BASELINE_MIN = 4;
 
 const fns = ["topBottomK", "callsTierFor", "averagesTierFor", "assignRankCalls",
-  "computeEraAggregates", "shapeEra", "assembleTrackRecordResponse", "rowEra",
+  "computeEraAggregates", "shapeEra", "computeMilestone", "assembleTrackRecordResponse", "rowEra",
   "trFixtureDate", "trFixtureEra", "trFixtureRows", "buildTrackRecordFixture"]
   .map(fnSource).join("\n\n");
 const consts = ["TR_FIXTURE_OBJS", "TR_FIXTURE_CAPS", "TR_BLIND_SPECS"].map(constSource).join("\n");
 const api = new Function(
   "CALL_SIZE_TIERS,CALLS_TIER,AVERAGES_TIER,GRADED_WINDOW,JOINED_RETIREMENT,AGGREGATE_MIN,BASELINE_MIN,console",
-  fns + "\n" + consts + "\nreturn { shapeEra, assembleTrackRecordResponse, buildTrackRecordFixture, trFixtureEra, trFixtureRows, rowEra, topBottomK };"
+  fns + "\n" + consts + "\nreturn { shapeEra, assembleTrackRecordResponse, buildTrackRecordFixture, trFixtureEra, trFixtureRows, rowEra, topBottomK, computeMilestone };"
 )(CALL_SIZE_TIERS, CALLS_TIER, AVERAGES_TIER, GRADED_WINDOW, JOINED_RETIREMENT, AGGREGATE_MIN, BASELINE_MIN, console);
 
 let failures = [];
@@ -146,9 +146,48 @@ const blindEra = (n) => gradientEra(n, false);
   ok(api.rowEra({ source: "app", match_tier: null }) === null, "rowEra: unmatched own post -> null (neither era)");
 }
 
+// 8. v5.1 MILESTONE flag logic (computeMilestone)
+{
+  const cm = api.computeMilestone;
+  ok(cm(5, true, {}).milestoneModal === null, "milestone: n=5 -> no modal");
+  ok(cm(6, true, {}).milestoneModal === 6, "milestone: n=6 welcome-seen -> 6");
+  ok(cm(9, true, {}).milestoneModal === 9, "milestone: n=9 -> 9");
+  ok(cm(12, true, {}).milestoneModal === 12, "milestone: n=12 -> 12");
+  // one-per-session: highest UNCROSSED tier only
+  ok(cm(12, true, { 6: true, 9: true }).milestoneModal === 12, "milestone: highest uncrossed = 12");
+  ok(cm(12, true, { 6: true, 9: true, 12: true }).milestoneModal === null, "milestone: all crossed -> none");
+  ok(cm(9, true, { 6: true }).milestoneModal === 9, "milestone: 6 crossed, n=9 -> 9");
+  // welcome outranks on first visit -> no modal, just backfill
+  ok(cm(9, false, {}).milestoneModal === null, "milestone: welcome-unseen -> no modal (welcome outranks)");
+  // BACKFILL GUARD: first-visit qualifying record marks all applicable tiers, no modal
+  const bf = cm(14, false, {});
+  ok(bf.milestoneModal === null && JSON.stringify(bf.backfill) === JSON.stringify([6, 9, 12]),
+    "backfill guard: first-visit n=14 marks [6,9,12], shows nothing (ballerinafarm day one)");
+  ok(JSON.stringify(cm(7, false, {}).backfill) === JSON.stringify([6]), "backfill guard: first-visit n=7 marks [6] only");
+}
+
+// 9. v5.1 BADGE fixtures -- neutral persistence + red unseen + zero-hiding
+{
+  const fresh = api.buildTrackRecordFixture("badge-fresh");
+  const seen = api.buildTrackRecordFixture("badge-seen");
+  const mixed = api.buildTrackRecordFixture("badge-mixed");
+  ok(fresh.totalGradedCount === 14 && seen.totalGradedCount === 14,
+    "badge: neutral M persists across fresh/seen (both 14)");
+  ok(fresh.unseenGradedCount === 14 && seen.unseenGradedCount === 0,
+    "badge: red unseen = 14 fresh, 0 after seen (clears on view)");
+  ok(mixed.previewsCount === 24 && mixed.unseenGradedCount === 3, "badge-mixed: 24 previews + red 3");
+  ok(fresh.previewsCount === 0, "badge: previews count 0 hides (zero-hiding)");
+  // milestone fixtures compute their modal via real logic
+  ok(api.buildTrackRecordFixture("milestone-6").milestoneModal === 6, "fixture milestone-6 -> modal 6");
+  ok(api.buildTrackRecordFixture("milestone-12").milestoneModal === 12, "fixture milestone-12 -> modal 12");
+  // welcome-noprepop: no blind data, welcome unseen
+  const wp = api.buildTrackRecordFixture("welcome-noprepop");
+  ok(wp.blindGradedCount === 0 && wp.welcomeSeen === false, "welcome-noprepop: no blind data + welcome unseen (no-prepop variant)");
+}
+
 if (failures.length) {
   console.log(`FAILED (${failures.length}):`);
   for (const f of failures) console.log("  - " + f);
   process.exit(1);
 }
-console.log("All Track Record v5 era tests passed (separation+leakage, prediction identity, call floor, hero handoff @ n=6, retirement @ n=20, null-config gating, rowEra).");
+console.log("All Track Record v5 + v5.1 tests passed (era separation, prediction identity, call floor, hero handoff, retirement, null-config, rowEra, milestone ladder + backfill guard + one-per-session, badge neutral/unseen/zero-hiding, welcome-noprepop).");
