@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Track Record v5 — two-era mockup (rev 2, matches live UI conventions)</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F6F1EA; --card:#FFFDF9; --ink:#3A2F26; --muted:#8A7A6B;
+    --line:#E5DBCD; --brown:#7A5C44; --tan:#F0E7DA;
+    --good:#2E7D32; --good-bg:#E7F1E9; --low:#9C4A2E; --low-bg:#F6E9DF;
+    --gold:#B07D2A; --gold-bg:#FBF3E2;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:#DDD5C8; font-family:'Nunito Sans',-apple-system,sans-serif; color:var(--ink);
+    display:flex; gap:28px; justify-content:center; padding:26px; flex-wrap:wrap;}
+  .frame{width:390px; background:var(--paper); border-radius:22px; padding:16px 14px 22px;
+    box-shadow:0 8px 30px rgba(58,47,38,.18);}
+  .frame-label{text-align:center; font-size:11px; font-weight:800; letter-spacing:.12em;
+    color:#6b6156; margin:-2px 0 10px; text-transform:uppercase;}
+  .seg{display:flex; gap:6px; background:#EDE6DB; border-radius:12px; padding:4px; margin-bottom:14px; align-items:center;}
+  .seg .t{flex:1; text-align:center; padding:7px 0; border-radius:9px; font-weight:700; font-size:14px; color:var(--muted); position:relative;}
+  .seg .on{background:#fff; color:var(--ink); box-shadow:0 1px 3px rgba(0,0,0,.08);}
+  .badge{position:absolute; top:-7px; right:6px; background:#D0342C; color:#fff; font-size:10px; font-weight:800;
+    border-radius:999px; padding:1px 6px;}
+
+  /* era headers */
+  .era{margin:14px 0 8px;}
+  .era .kicker{font-size:11px; letter-spacing:.16em; font-weight:800; text-transform:uppercase;}
+  .era.joined .kicker{color:var(--good);}
+  .era.blind .kicker{color:var(--gold);}
+  .era .sub{font-size:11.5px; color:var(--muted); margin-top:2px; line-height:1.4;}
+  .era .rule{border-top:1px solid var(--line); margin-top:6px;}
+
+  /* hero — matches live typography */
+  .hero{text-align:center; margin:12px 4px 10px;}
+  .hero .big{font-size:25px; font-weight:800; line-height:1.22;}
+  .hero .big .up{color:var(--good);}
+  .hero .body{font-size:14px; color:var(--ink); margin-top:8px; line-height:1.45;}
+  .hero .body b{font-weight:800;}
+  .pool{font-size:12.5px; color:#A99C8D; text-align:center; margin:8px 8px 2px; line-height:1.4;}
+
+  /* section headers with summary sublines — live convention */
+  .sec{font-size:19px; font-weight:800; margin:14px 0 1px;}
+  .sec.top{color:var(--good);} .sec.bot{color:var(--low);} .sec.oth{color:#6E655B;}
+  .secsum{font-size:13.5px; margin-bottom:8px;}
+  .secsum b.up{color:var(--good);} .secsum b.dn{color:var(--low);}
+  .secsum span{color:var(--ink); font-weight:600;}
+
+  .cardv{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px 13px; margin-bottom:10px; position:relative;}
+  .cap{font-size:14.5px; font-weight:600; line-height:1.4; padding-right:96px;}
+  .cap .dt{color:var(--muted); font-weight:600;}
+  .cardv.plain .cap{padding-right:0;}
+  .verdict{position:absolute; top:11px; right:11px; font-size:12px; font-weight:800;
+    padding:5px 11px; border-radius:999px; color:#fff;}
+  .verdict.hit{background:var(--good);} .verdict.miss{background:#7A4A32;}
+  .lab{font-size:9.5px; letter-spacing:.1em; font-weight:800; color:var(--muted); margin-top:9px; text-transform:uppercase;}
+  .pillrow{display:flex; gap:6px; align-items:center; margin-top:3px; flex-wrap:wrap;}
+  .big-pct{font-size:16px; font-weight:800;}
+  .obj{border:1.5px solid var(--line); color:var(--muted); font-weight:700; font-size:11px; padding:2px 9px; border-radius:999px; background:transparent;}
+  .call{font-size:11px; font-weight:800; padding:3px 9px; border-radius:7px;}
+  .call.s{background:var(--good-bg); color:var(--good);} .call.w{background:var(--low-bg); color:var(--low);}
+  .res{margin-top:2px; font-size:15px; font-weight:800;}
+  .res.up{color:var(--good);} .res.dn{color:var(--low);}
+
+  .mini{background:var(--gold-bg); border:1px solid var(--gold); border-radius:12px; padding:10px 12px;
+    font-size:12.5px; color:var(--ink); margin-top:8px; line-height:1.45;}
+  .mini b{color:var(--gold);}
+  .fade{opacity:.45;}
+  .more{text-align:center; color:var(--muted); font-size:11.5px; font-style:italic; margin:2px 0 6px;}
+</style>
+</head>
+<body>
+
+<!-- ============ STATE A ============ -->
+<div class="frame">
+  <div class="frame-label">State A — joined era building (no calls yet · no counter)</div>
+  <div class="seg"><div class="t">Previews</div><div class="t on">Track Record<span class="badge">11</span></div></div>
+
+  <div class="era joined" style="margin-top:2px;">
+    <span class="kicker">Since you joined</span>
+    <div class="sub">Your previews, graded against real 30-day results as they come in.</div>
+    <div class="rule"></div>
+  </div>
+
+  <div class="cardv plain">
+    <div class="cap">"POV: leg day but make it fun 🏋️" <span class="dt">· Jul 22</span></div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">74th percentile</span><span class="obj">Fitness/Wellness</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res up">1.6× your typical</div>
+  </div>
+
+  <div class="cardv plain">
+    <div class="cap">"what I eat before a 10k, honestly" <span class="dt">· Jul 25</span></div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">41st percentile</span><span class="obj">Food &amp; Drinks/Cooking</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res dn">0.9× your typical</div>
+  </div>
+
+  <div class="cardv plain">
+    <div class="cap">"gym fit check, zero budget edition" <span class="dt">· Jul 28</span></div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">63rd percentile</span><span class="obj">Fashion</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res up">1.2× your typical</div>
+  </div>
+
+  <div class="era blind">
+    <span class="kicker">Before you joined — our blind test</span>
+    <div class="sub">Predictions we made on your catalog without ever seeing results. These were scored without a content category — category choice can shift a video's score.</div>
+    <div class="rule"></div>
+  </div>
+
+  <div class="hero">
+    <div class="big">Our top picks outperformed our bottom picks by <span class="up">2.4×</span>.</div>
+    <div class="body"><b>Called it: 5 of 6.</b> We scored your Apr 12 – Jun 28 TikTok videos — from content alone, never seeing a single view count.</div>
+  </div>
+  <div class="pool">Prediction scores are percentiles among the last 1,000 videos we've scored.</div>
+
+  <div class="sec top">Top 3 Predictions</div>
+  <div class="secsum"><b class="up">1.9× your typical</b> <span>30-day engagement</span></div>
+  <div class="cardv">
+    <div class="cap">"when will it end #broke" <span class="dt">· Jun 9</span></div>
+    <div class="verdict hit">✓ Called it</div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">79th percentile</span><span class="call s">Top 3</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res up">2.0× your typical</div>
+  </div>
+  <div class="more">+ 2 more · Bottom 3 Predictions · Other Videos ↓</div>
+</div>
+
+<!-- ============ STATE B ============ -->
+<div class="frame">
+  <div class="frame-label">State B — joined era owns the hero (n ≥ 6 · blind test compressed; blind retires fully at joined n ≥ 20)</div>
+  <div class="seg"><div class="t">Previews</div><div class="t on">Track Record<span class="badge">2</span></div></div>
+
+  <div class="era joined" style="margin-top:2px;">
+    <span class="kicker">Since you joined</span>
+    <div class="sub">Your previews, graded against real 30-day results.</div>
+    <div class="rule"></div>
+  </div>
+
+  <div class="hero">
+    <div class="big">We called it on <span class="up">3 out of 4</span>.</div>
+    <div class="body">Top picks averaged <b style="color:var(--good)">1.5×</b> your typical 30-day engagement · bottom picks <b style="color:var(--low)">0.7×</b> · your previews since Jul 20.</div>
+  </div>
+  <div class="pool">Prediction scores are percentiles among the last 1,000 videos we've scored.</div>
+
+  <div class="sec top">Top 2 Predictions</div>
+  <div class="secsum"><b class="up">1.5× your typical</b> <span>30-day engagement</span></div>
+  <div class="cardv">
+    <div class="cap">"POV: leg day but make it fun 🏋️" <span class="dt">· Jul 22</span></div>
+    <div class="verdict hit">✓ Called it</div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">74th percentile</span><span class="obj">Fitness/Wellness</span><span class="call s">Top 2</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res up">1.6× your typical</div>
+  </div>
+  <div class="cardv">
+    <div class="cap">"5 stretches your hips are begging for" <span class="dt">· Aug 2</span></div>
+    <div class="verdict hit">✓ Called it</div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">68th percentile</span><span class="obj">Fitness/Wellness</span><span class="call s">Top 2</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res up">1.4× your typical</div>
+  </div>
+
+  <div class="sec bot">Bottom 2 Predictions</div>
+  <div class="secsum"><b class="dn">0.7× your typical</b> <span>30-day engagement</span></div>
+  <div class="cardv">
+    <div class="cap">"unboxing my new gym bag #ad" <span class="dt">· Jul 30</span></div>
+    <div class="verdict hit">✓ Called it</div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">12th percentile</span><span class="obj">Shopping</span><span class="call w">Bottom 2</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res dn">0.6× your typical</div>
+  </div>
+  <div class="cardv">
+    <div class="cap">"what I eat before a 10k, honestly" <span class="dt">· Jul 25</span></div>
+    <div class="verdict miss">✗ Missed</div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">29th percentile</span><span class="obj">Food &amp; Drinks/Cooking</span><span class="call w">Bottom 2</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res up">1.1× your typical</div>
+  </div>
+
+  <div class="sec oth">Other Videos In That Timeframe</div>
+  <div class="cardv plain">
+    <div class="cap">"gym fit check, zero budget edition" <span class="dt">· Jul 28</span></div>
+    <div class="lab">Our prediction score</div>
+    <div class="pillrow"><span class="big-pct">63rd percentile</span><span class="obj">Fashion</span></div>
+    <div class="lab">30-day result (likes/shares/saves per view)</div>
+    <div class="res up">1.2× your typical</div>
+  </div>
+  <div class="more">+ 1 more ↓</div>
+
+  <div class="era blind">
+    <span class="kicker">Before you joined — our blind test</span>
+    <div class="sub">Predictions we made on your catalog without ever seeing results.</div>
+    <div class="rule"></div>
+  </div>
+  <div class="mini"><b>Blind test: called it on 5 of 6</b> — top picks averaged 2.4× your typical, bottom picks 0.8×. Full board below.</div>
+  <div class="fade">
+    <div class="sec top" style="margin-top:10px;">Top 3 Predictions</div>
+    <div class="secsum"><b class="up">1.9× your typical</b> <span>30-day engagement</span></div>
+    <div class="cardv">
+      <div class="cap">"when will it end #broke" <span class="dt">· Jun 9</span></div>
+      <div class="verdict hit">✓ Called it</div>
+      <div class="lab">Our prediction score</div>
+      <div class="pillrow"><span class="big-pct">79th percentile</span><span class="call s">Top 3</span></div>
+    </div>
+  </div>
+  <div class="more">…continues as today ↓</div>
+</div>
+
+</body>
+</html>
