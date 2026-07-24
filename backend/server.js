@@ -2140,8 +2140,21 @@ async function resolveFingerprintGroup(job) {
        WHERE pf.user_id = $1 AND pf.id != $2 AND pf.submission_id IS NOT NULL
          AND pf.created_at >= now() - interval '30 days'
          AND ss.prediction IS NOT NULL
+         -- Objective-scoped grouping: only average repeat runs of the same
+         -- video that were scored under the SAME objective. The objective
+         -- conditions the judges (buildTLPrompt) AND the percentile calibration,
+         -- so a re-run under a different objective is a structurally different
+         -- score (cross-objective y_pred is non-comparable --
+         -- OBJECTIVE_CONDITIONING_DIAGNOSTIC.md); averaging across objectives
+         -- blended distinct scoring intents. This also correctly scopes the
+         -- pool-dedup (poolEligible = !fpGroup): the dedup targets NOISE re-runs
+         -- of the same video+objective, not legitimately-distinct cross-objective
+         -- scores, so each (video, objective) now contributes one pool entry.
+         -- NULL and '' both mean "no objective" and group together; a named
+         -- objective must match exactly.
+         AND COALESCE(NULLIF(TRIM(ss.objective), ''), '') = COALESCE(NULLIF(TRIM($3), ''), '')
        ORDER BY ss.created_at ASC`,
-      [job.userId, job.fingerprintId]
+      [job.userId, job.fingerprintId, job.objective ?? null]
     );
     if (candidates.length === 0) return null;
 
