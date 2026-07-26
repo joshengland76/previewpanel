@@ -50,11 +50,15 @@ export function MethodologyDropdown({ platform = null, poolInfoTooltip = null })
             </div>
           )}
           {poolInfoTooltip && <div style={{ marginTop: 10 }}>{poolInfoTooltip}</div>}
+          {/* Inline link, flush with the preceding sentence (normal word-spacing,
+              no orphan gap): a leading space + display:inline so it reads as the
+              last words of the body, not a detached block. */}
+          {" "}
           <button
             type="button"
             onClick={() => setShowDetail(true)}
             style={{
-              display: "inline-block", marginTop: 12, fontSize: 12.5, fontWeight: 700, color: B.action,
+              display: "inline", fontSize: 12.5, fontWeight: 700, color: B.action,
               background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit",
             }}
           >
@@ -117,7 +121,7 @@ function ValidationDetail({ onClose }) {
 
       <Section title="What we did">
         We recruited {STUDY_STATS.nCreators} creators across {STUDY_STATS.nNiches} content
-        niches and collected their TikTok videos. Before we ever looked at how those
+        niches and collected about 4,900 of their TikTok videos. Before we ever looked at how those
         videos actually performed, our AI judging panel scored each one on hook strength,
         emotional pull, pacing, clarity, and related factors. Only after scoring was
         locked in did we track each video's real {STUDY_STATS.outcomeWindowDays}-day
@@ -132,30 +136,43 @@ function ValidationDetail({ onClose }) {
         against its own creator's typical performance, not the whole platform's.
       </Section>
 
+      {/* Numbers here mirror STUDY_STATS (decile pairwise/pooled CV+lockbox,
+          rank correlations, niches); exact copy per VALIDATION_MODAL_READOUT. */}
       <Section title="What we found">
-        Held-out rank correlation was +{STUDY_STATS.crossValidatedRankCorrelation} cross-validated
-        across all 199 study creators, and +{STUDY_STATS.heldOutRankCorrelation} on a sealed
-        30-creator holdout opened exactly once. Videos the model ranked in its top decile beat
-        the creator's own typical engagement {STUDY_STATS.precisionAtDecileCasual}. That's true
-        in {STUDY_STATS.nNichesWithScores} of the {STUDY_STATS.nNiches} niches we studied —
-        {" "}{STUDY_STATS.nNichesWithCaveat} of those also carry a plain-language note that our
-        top-pick precision is still maturing. The remaining niche (dance) gets qualitative
-        feedback only, no numeric score, while we keep collecting data.
+        <p style={{ margin: "0 0 8px" }}>
+          Head-to-head, the videos our model ranked in a creator's top decile beat that same
+          creator's bottom-decile videos 3 times in 4 — 75.6% of all top-vs-bottom pairings,
+          cross-validated across 199 creators — and drew 1.6× their 30-day engagement. On the
+          30 sealed creators opened exactly once: 70% and 1.5×.
+        </p>
+        <p style={{ margin: "0 0 8px" }}>
+          Against each creator's own average video, top-decile picks beat typical engagement 68% of
+          the time — more than 2 in 3 (a coin flip would be 1 in 2) — averaging about 1.4× typical,
+          while bottom-decile picks averaged about 0.9×.
+        </p>
+        <p style={{ margin: 0 }}>
+          Overall held-out rank correlation: +0.28 cross-validated, +0.25 on the sealed holdout.
+          The scored experience holds in 18 of the 19 niches we studied — 2 of those carry a
+          plain-language note that top-pick precision is still maturing, and the remaining niche
+          (dance) gets qualitative feedback only while we keep collecting data.
+        </p>
       </Section>
 
       <Section title="What it can't do">
-        This is not a virality predictor and makes no promises about any single outcome.
-        The patterns it's built on are correlational, not causal instructions — it
-        doesn't tell you to make a video longer or shorter just because duration is one
-        of the things it accounts for.
+        This is not a virality predictor, and a score is never a promise about any single
+        video's outcome. The patterns behind the score are correlations measured across
+        thousands of real videos — a read on how your video is likely to stack up, not a
+        guarantee, and not a set of mechanical instructions.
       </Section>
 
       <div style={{
         display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10,
         background: B.bg, border: `1px solid ${B.border}`, borderRadius: 14, padding: 14, margin: "16px 0",
       }}>
+        <Stat value="3 in 4" label="head-to-head wins, top vs bottom decile" />
+        <Stat value="1.6×" label="top-decile engagement vs bottom" />
         <Stat value={`+${STUDY_STATS.crossValidatedRankCorrelation}`} label="Cross-validated correlation" />
-        <Stat value="~68%" label="top-decile precision" />
+        <Stat value="68%" label="top-decile precision" />
         <Stat value="~4,900" label="videos studied" />
         <Stat value={STUDY_STATS.nCreators} label="creators" />
         <Stat value={`${STUDY_STATS.outcomeWindowDays} days`} label="real engagement window" />

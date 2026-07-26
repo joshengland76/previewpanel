@@ -1009,7 +1009,7 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss, noPrepop }) {
 // welcome modal; primary "See your calls" opens the TR segment, quiet "Later".
 const TR_MILESTONES = {
   6: { title: "Your track record is live.", body: "It's a small sample so far, but you've got enough videos with 30-day results to see how our top 2 and bottom 2 predictions panned out. In our study, our top picks beat our bottom picks 7 times in 10." },
-  9: { title: "Your record just got sharper.", body: "With more 30-day results, you can now see how our top 3 and bottom 3 predictions performed. In our study, our top picks pulled 1.4× the 30-day engagement of our bottom picks — and the more videos you run, the more accurate your predictions become." },
+  9: { title: "Your record just got sharper.", body: "With more 30-day results, you can now see how our top 3 and bottom 3 predictions performed. At this sample size, our top picks pull 1.4× the 30-day engagement of our bottom picks — and the more videos you run, the more accurate your predictions become." },
   12: { title: "Your track record is maturing", body: "Twelve videos with 30-day results unlocks top and bottom 4 calls. In our study, top picks ran 1.3× typical 30-day engagement; bottom picks 0.9×. Full strength comes at 40 — you're well on your way." },
   40: { title: "Full-strength track record", body: "40 videos with 30-day performance is a strong record. Our top-4 and bottom-4 on that sample size is the same slice construction our study measured, where top-decile picks beat bottom-decile picks 76% of the time. From now on we'll keep your track record at your 40 most recent 30-day videos." },
 };

@@ -96,7 +96,7 @@ export const SCORE_DISPLAY_COPY = {
   // analyses of the same video; repeat runs are averaged (see
   // groupAverageNote below for the mechanism this refers to).
   poolInfoTooltip: (platform) => {
-    const base = "Includes PreviewPanel submissions and our 4,900-video research library; live submissions gradually replace the library.";
+    const base = "Your percentile compares this video to the last 1,000 videos we've scored — PreviewPanel submissions plus our 4,900-video research library, with live submissions gradually replacing the library.";
     const varianceNote = " Scores naturally vary a few points between analyses of the same video; repeat runs of the same video are averaged.";
     if (platform && platform !== "tiktok") {
       return `${base} This score is based on our TikTok engagement study — treat it as a strong proxy for other short-form platforms.${varianceNote}`;

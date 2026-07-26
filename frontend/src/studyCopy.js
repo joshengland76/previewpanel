@@ -64,17 +64,10 @@ export const METHODOLOGY_MODAL_TEXT =
   "engagement (likes, shares, and saves per view). The model reads the same " +
   "signals our judges do — hook, emotion, pacing, clarity — across 56 " +
   "correlated variables in total, and turns them into a single prediction. " +
-  "Cross-validated across all 199 study creators, videos the model ranked in " +
-  "a creator's top decile beat that creator's typical engagement 68% of the " +
-  "time — more than 2 in 3 (a coin flip would be 1 in 2). Compared head-to-head, " +
-  "across every top-vs-bottom pairing in that 199-creator cross-validation the " +
-  "higher-ranked video won 75.6% of the time, and top-decile picks pulled 1.59× " +
-  "the bottom decile's engagement; on 30 creators sealed away during all " +
-  "development and opened exactly once, 70.4% and 1.46×. The ranking held up on " +
-  "that sealed lockbox (+0.25 rank correlation, versus +0.28 cross-validated). " +
   "It's a ranking aid, not a crystal ball: it tells you which of your " +
-  "videos looks strongest, not whether a video will go viral. See how we " +
-  "validated it →";
+  "videos looks strongest, not whether a video will go viral. In our study, " +
+  "the videos we ranked highest beat the ones we ranked lowest 3 times in 4 — " +
+  "and pulled 1.6× the 30-day engagement. See how we validated it →";
 
 export const METHODOLOGY_LINK_TEXT = "See how we validated it";
 export const METHODOLOGY_URL = "/methodology";

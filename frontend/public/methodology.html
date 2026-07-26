@@ -46,7 +46,8 @@
 
   <h2>What we did</h2>
   <p>We recruited 259 creators across 19 content niches — cooking, fitness,
-  comedy, travel, and 15 others — and collected their TikTok videos. Before
+  comedy, travel, and 15 others — and collected about 4,900 of their TikTok
+  videos. Before
   we ever looked at how those videos actually performed, our AI judging panel
   scored each one on hook strength, emotional pull, pacing, clarity, and
   related factors. Only after scoring was locked in did we track each
@@ -67,26 +68,31 @@
   what "good" looks like for everyone else.</p>
 
   <h2>What we found</h2>
-  <p>Held-out rank correlation was +0.28 cross-validated across all 199
-  study creators, and +0.25 on a sealed 30-creator holdout opened exactly
-  once. Videos the model ranked in its top tier beat the creator's own
-  typical engagement 68% of the time — more than 2 in 3 (coin flip = 1 in
-  2). That's true in 18 of the 19 niches we studied — 2 of those also carry
-  a plain-language note that our top-pick precision is still maturing. The
-  remaining niche (dance) gets qualitative feedback only, no numeric score,
-  while we keep collecting data.</p>
+  <p>Head-to-head, the videos our model ranked in a creator's top decile beat
+  that same creator's bottom-decile videos 3 times in 4 — 75.6% of all
+  top-vs-bottom pairings, cross-validated across 199 creators — and drew 1.6×
+  their 30-day engagement. On the 30 sealed creators opened exactly once: 70%
+  and 1.5×.</p>
+  <p>Against each creator's own average video, top-decile picks beat typical
+  engagement 68% of the time — more than 2 in 3 (a coin flip would be 1 in 2) —
+  averaging about 1.4× typical, while bottom-decile picks averaged about 0.9×.</p>
+  <p>Overall held-out rank correlation: +0.28 cross-validated, +0.25 on the
+  sealed holdout. The scored experience holds in 18 of the 19 niches we studied
+  — 2 of those carry a plain-language note that top-pick precision is still
+  maturing, and the remaining niche (dance) gets qualitative feedback only while
+  we keep collecting data.</p>
 
   <h2>What it can't do</h2>
-  <p>This is not a virality predictor. It cannot tell you whether a specific
-  video will take off, and it makes no promises about any single outcome.
-  The patterns it's built on are correlational — things that tend to go
-  together with stronger performance — not causal instructions; it doesn't
-  tell you to make a video longer or shorter, for instance, just because
-  duration is one of the things it accounts for.</p>
+  <p>This is not a virality predictor, and a score is never a promise about any
+  single video's outcome. The patterns behind the score are correlations
+  measured across thousands of real videos — a read on how your video is likely
+  to stack up, not a guarantee, and not a set of mechanical instructions.</p>
 
   <div class="numbers">
+    <div class="stat"><div class="value">3 in 4</div><div class="label">head-to-head wins, top vs bottom decile</div></div>
+    <div class="stat"><div class="value">1.6×</div><div class="label">top-decile engagement vs bottom</div></div>
     <div class="stat"><div class="value">+0.28</div><div class="label">Cross-validated correlation</div></div>
-    <div class="stat"><div class="value">~68%</div><div class="label">top-tier precision (~2 of 3)</div></div>
+    <div class="stat"><div class="value">68%</div><div class="label">top-decile precision (~2 of 3)</div></div>
     <div class="stat"><div class="value">~4,900</div><div class="label">videos studied</div></div>
     <div class="stat"><div class="value">259</div><div class="label">creators</div></div>
     <div class="stat"><div class="value">30 days</div><div class="label">real engagement window</div></div>
