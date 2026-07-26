@@ -741,7 +741,7 @@ function TrHero({ agg, windowSentence }) {
         <>
           <div style={bigLine}>
             {agg.averagesSubForm === "ratio"
-              ? <>Our top picks outperformed our bottom picks by <span style={{ color: "#2E7D32" }}>{ratioLabel}</span>.</>
+              ? <>Our top picks outperformed our bottom picks by <span style={{ color: "#2E7D32" }}>{ratioLabel}</span></>
               : <>Top picks: {strongNum} · bottom picks: {weakNum}</>}
           </div>
           <div style={bodyLine}>
