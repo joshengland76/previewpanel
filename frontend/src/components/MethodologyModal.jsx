@@ -154,7 +154,7 @@ function ValidationDetail({ onClose }) {
           Overall held-out rank correlation: +0.28 cross-validated, +0.25 on the sealed holdout.
           The scored experience holds in 18 of the 19 niches we studied — 2 of those carry a
           plain-language note that top-pick precision is still maturing, and the remaining niche
-          (dance) gets qualitative feedback only while we keep collecting data.
+          (dancing) gets qualitative feedback only while we keep collecting data.
         </p>
       </Section>
 
