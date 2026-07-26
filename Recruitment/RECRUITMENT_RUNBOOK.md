@@ -71,6 +71,15 @@ either wastes an ingest (money) or renders an empty/redirected document.
   study-history rows; both are BLIND-era.)*
 - **A plain `--prospect` re-run IS the freshener** — the idempotent skip
   is the mechanism. Nothing special to invoke.
+- **Freshen timing — when do the new rows show up for a connected tester?**
+  On their **next Track Record load**, automatically. `/api/track-record`
+  re-runs `claimHandleHistory(userId, handle)` on *every* load
+  (`server.js` ~4307), not just at redemption — an idempotent safety net
+  that claims any unclaimed `posted_videos` rows matching the tester's
+  connected handle. So a freshen you run today attaches to the tester the
+  moment they next open the tab; there is no separate re-link step and no
+  need to time the ingest to their session. (The mint-time pre-link claim
+  and this per-load claim are the same function, run at two moments.)
 - **`--force-redraw` is NOT a freshener.** It re-*scores* videos already
   ingested (fresh draws over the SAME posts) — outlier insurance only
   (see below), ~$1.50 a handle. It adds no new videos. Don't reach for it
