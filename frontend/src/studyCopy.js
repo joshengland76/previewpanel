@@ -34,7 +34,17 @@ export const STUDY_STATS = {
   nNichesSuppressed: 1, // Dancing -- honest line only, no percentile
   outcomeWindowDays: 30,
   precisionAtDecile: 0.6844,
-  precisionAtDecileCasual: "68% of the time — more than 2 in 3 (coin flip = 1 in 2)",
+  precisionAtDecileCasual: "68% of the time — more than 2 in 3 (a coin flip would be 1 in 2)",
+  // Spread-matrix figures (VALIDATION_TALKING_POINTS.md v1.2; CV = 199-creator
+  // cross-validation, lockbox = sealed 30). Pairwise = head-to-head top-vs-bottom
+  // win rate (pooled); pooledMeanRatio = pooled-mean magnitude (public figure).
+  decilePairwiseWinRateCV: 0.756, // FLAGSHIP "3 in 4"
+  decilePairwiseWinRateLockbox: 0.704,
+  decilePooledMeanRatioCV: 1.588, // FLAGSHIP "1.6×"
+  decilePooledMeanRatioLockbox: 1.460,
+  ladderPairwiseWinRateCV: 0.723, // "7 times in 10"
+  ladderPooledMeanRatioCV: 1.448, // "1.4×"
+  ladderPooledMeanPairCV: [1.299, 0.897], // "1.3× / 0.9×"
   heldOutRankCorrelation: 0.25, // lockbox (generalization): sealed 30-creator holdout, opened once
   crossValidatedRankCorrelation: 0.28, // full-corpus CV (estimation): all 199 study creators
   lockboxCreators: 30,
@@ -53,10 +63,15 @@ export const METHODOLOGY_MODAL_TEXT =
   "TikTok videos from 259 creators across 19 niches, tracking real 30-day " +
   "engagement (likes, shares, and saves per view). The model reads the same " +
   "signals our judges do — hook, emotion, pacing, clarity — across 56 " +
-  "correlated variables in total, and turns them into a single prediction. In held-out " +
-  "testing on creators the model had never seen, videos it ranked in its " +
-  "top decile beat the creator's typical engagement 68% of the time — more " +
-  "than 2 in 3 (coin flip = 1 in 2). " +
+  "correlated variables in total, and turns them into a single prediction. " +
+  "Cross-validated across all 199 study creators, videos the model ranked in " +
+  "a creator's top decile beat that creator's typical engagement 68% of the " +
+  "time — more than 2 in 3 (a coin flip would be 1 in 2). Compared head-to-head, " +
+  "across every top-vs-bottom pairing in that 199-creator cross-validation the " +
+  "higher-ranked video won 75.6% of the time, and top-decile picks pulled 1.59× " +
+  "the bottom decile's engagement; on 30 creators sealed away during all " +
+  "development and opened exactly once, 70.4% and 1.46×. The ranking held up on " +
+  "that sealed lockbox (+0.25 rank correlation, versus +0.28 cross-validated). " +
   "It's a ranking aid, not a crystal ball: it tells you which of your " +
   "videos looks strongest, not whether a video will go viral. See how we " +
   "validated it →";

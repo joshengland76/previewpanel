@@ -974,10 +974,15 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss, noPrepop }) {
           Know before you post.
         </div>
         <div style={{ fontSize: "13.5px", color: "#666", lineHeight: "1.6", marginBottom: "22px", textAlign: "left" }}>
-          PreviewPanel is a test screening for your feed. Our panel watches your video the way your audience
-          will — hook, pacing, vibe — and tells you how it's likely to stack up against your usual numbers,
-          plus what to fix while you still can. No “looks great!” fluff: when we call a video one of your
-          strongest, we're right more than 2 out of 3 times.{noPrepop ? "" : " We brought receipts."}
+          <p style={{ margin: "0 0 12px" }}>
+            Think of PreviewPanel as a test screening for your feed. Before you post, our panel watches your
+            video the way your audience will — hook, pacing, vibe — and tells you how it's likely to stack up
+            against your usual numbers, plus what to fix while you still can.
+          </p>
+          <p style={{ margin: 0 }}>
+            And it's not guesswork. In our 4,900-video study, the videos we ranked highest beat the ones we
+            ranked lowest 3 times in 4 — and pulled 1.6× the 30-day engagement.{noPrepop ? "" : " We brought receipts."}
+          </p>
         </div>
         <button onClick={onDismiss} style={{ ...cardBase, marginBottom: noPrepop ? "0" : "10px" }}>
           <div style={btnTitle}>Run a video</div>
@@ -1003,10 +1008,10 @@ function TrackRecordWelcomeModal({ onSeeTrackRecord, onDismiss, noPrepop }) {
 // crosses a tier (server decides via milestoneModal). Same overlay/card as the
 // welcome modal; primary "See your calls" opens the TR segment, quiet "Later".
 const TR_MILESTONES = {
-  6: { title: "Your track record is live.", body: "It's still a small sample, but you've got enough videos with 30-day results to see how our top 2 and bottom 2 predictions panned out." },
-  9: { title: "Your record just got sharper.", body: "With more 30-day videos, you can now see how our top 3 and bottom 3 predictions performed. The more videos you run, the more accurate our predictions become." },
-  12: { title: "Your track record is maturing", body: "With a track record of 12 videos with 30-day results, you can now see how our top and bottom 4 predictions are looking. Your track record will be fully mature when you get to 40 videos - you're well on your way!" },
-  40: { title: "Full-strength track record", body: "40 videos with 30-day performance is a strong record. Our top-4 and bottom-4 on that sample size is the same slice construction our study measured, where our strongest picks beat a creator's typical engagement more than 2 out of 3 times. From now on we'll keep your track record at your 40 most recent 30-day videos." },
+  6: { title: "Your track record is live.", body: "It's a small sample so far, but you've got enough videos with 30-day results to see how our top 2 and bottom 2 predictions panned out. In our study, our top picks beat our bottom picks 7 times in 10." },
+  9: { title: "Your record just got sharper.", body: "With more 30-day results, you can now see how our top 3 and bottom 3 predictions performed. In our study, our top picks pulled 1.4× the 30-day engagement of our bottom picks — and the more videos you run, the more accurate your predictions become." },
+  12: { title: "Your track record is maturing", body: "Twelve videos with 30-day results unlocks top and bottom 4 calls. In our study, top picks ran 1.3× typical 30-day engagement; bottom picks 0.9×. Full strength comes at 40 — you're well on your way." },
+  40: { title: "Full-strength track record", body: "40 videos with 30-day performance is a strong record. Our top-4 and bottom-4 on that sample size is the same slice construction our study measured, where top-decile picks beat bottom-decile picks 76% of the time. From now on we'll keep your track record at your 40 most recent 30-day videos." },
 };
 function TrackRecordMilestoneModal({ milestone, onSeeCalls, onDismiss }) {
   const m = TR_MILESTONES[milestone];
