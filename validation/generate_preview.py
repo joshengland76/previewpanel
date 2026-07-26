@@ -567,7 +567,7 @@ def coverage_note(label, attempted, succeeded):
     return f"{label}: {succeeded} of {attempted} fetchable"
 
 
-def hero_opening_sentence(section_a_start, full_coverage):
+def hero_opening_sentence(section_a_start, section_a_end, full_coverage):
     """Transport hotfix, Task 2 -- sentence 1 of the hero, coverage-honest.
     full_coverage = every attempted video succeeded, across BOTH sections
     (a --study Section-A OOF gap counts the same as a Section-B fetch
@@ -576,9 +576,14 @@ def hero_opening_sentence(section_a_start, full_coverage):
     drops "every" for the honest plural instead. NEVER "every" over
     partial data -- this is the one place that claim is made, so it's the
     one place that must never overstate coverage the document doesn't
-    have."""
-    lead = "We rated every public video you've posted" if full_coverage else "We rated your public videos posted"
-    return f"{lead} since {section_a_start} — from content alone, never seeing a single view count."
+    have.
+
+    States the CLOSED date range (start – end), not "since {start}": the
+    document covers a fixed window (the graded-window min/max posted dates,
+    same as the meta line), and "since" wrongly implied coverage all the way
+    up to today. end = render_date (the latest Section-A posted date)."""
+    lead = "We rated every public video you posted" if full_coverage else "We rated your public videos posted"
+    return f"{lead} {section_a_start} – {section_a_end} — from content alone, never seeing a single view count."
 
 
 # ── Transport hotfix, Task 3: --study eligibility gate ──────────────────────
@@ -1274,7 +1279,7 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
     # "since Section A's oldest video," whatever span that really is.
     # Transport hotfix, Task 2: that completeness claim is now conditional
     # on full_coverage -- see hero_opening_sentence's own docstring.
-    opening = hero_opening_sentence(section_a_start, full_coverage)
+    opening = hero_opening_sentence(section_a_start, render_date, full_coverage)
     # Polish v5, Task 3: sentence 1 (the opening clause above) is unchanged
     # in every form. Sentence 2 is now adaptive -- pick_hero_form is the
     # single source deciding which of the 5 forms below renders (also
