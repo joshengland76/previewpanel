@@ -140,19 +140,44 @@ baseline (0 throwaway rows, 24h opens = 2).
 
 ---
 
-## ⚠ Open finding for Josh's decision — pre-flag pool rows (NOT changed)
+## Pre-flag pool correction — RESOLVED (addendum, authorized)
 
-The internal sanity column reads `2YQ6FMCT` **pool_elig=false 20/41**. That
-means **21 of Josh's 41 founder-test `shadow_scores` rows are still
-`pool_eligible=true`** — they entered the comparison pool **before**
+The internal sanity column originally read `2YQ6FMCT` **pool_elig=false
+20/41** — meaning **21 of Josh's 41 founder-test `shadow_scores` rows were
+still `pool_eligible=true`**. They entered the comparison pools **before**
 `is_internal` was set, and the flag only forces `pool_eligible=false` on rows
-written *from then on* (it's a write-time gate, not a retroactive sweep). So
-21 founder test runs are currently polluting the live comparison pool.
+written *from then on* (a write-time gate, not a retroactive sweep). Josh
+authorized flipping them.
 
-I did **not** touch the pool. On your go-ahead I'll retire those 21 rows
-(`pool_eligible=false` for user `b878ba6e-…`), which removes them from the
-pools cleanly — same mechanism the internal flag uses going forward. Say the
-word and I'll run it.
+**Correction executed** (one committed transaction): the **21** pre-flag rows
+for user `b878ba6e-…` were set `pool_eligible=false`. **Only pool membership
+changed** — `prediction`, `calibrated_percentile`, scores, and history were
+untouched. All 41 of the identity's rows are now pool-ineligible; the funnel
+now reads `pool_elig=false 41/41`. Affected row ids (on the record):
+`578, 580, 581, 582, 583, 585, 589, 590, 593, 595, 617, 618, 619, 620, 621,
+632, 633, 664, 671, 683, 759`.
+
+**Pool sizes before → after** (shadow-side `pool_eligible` contribution;
+criteria `pool_eligible AND is_posted_video IS NOT TRUE AND prediction IS NOT
+NULL`; unified across platforms — 20 tiktok + 1 instagram):
+
+| pool | before | after | Δ |
+|---|---|---|---|
+| **Overall** score-percentile pool | 578 | 557 | −21 |
+| Axis (radar-decile) pool | 578 | 557 | −21 |
+| Niche · **Life Hacks** | 10 | 1 | −9 |
+| Niche · Travel | 12 | 9 | −3 |
+| Niche · Food & Drinks/Cooking | 19 | 17 | −2 |
+| Niche · Shopping | 3 | 1 | −2 |
+| Niche · Makeup/Beauty | 5 | 4 | −1 |
+| Niche · Funny Videos/Comedy | 16 | 15 | −1 |
+| Niche · Educational/How-To | 120 | 119 | −1 |
+| Niche · Fitness/Wellness | 6 | 5 | −1 |
+| Niche · Aesthetic/Vibes | 16 | 15 | −1 |
+
+(Counts are the live shadow contribution; the frozen research corpus adds its
+fixed baseline on top of each niche/overall pool. The **Life Hacks** niche was
+the standout — 9 of its 10 live rows were founder-test runs, now removed.)
 
 ---
 
