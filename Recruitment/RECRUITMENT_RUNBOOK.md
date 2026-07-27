@@ -216,6 +216,31 @@ Founder/team access: `mint --internal` (Track Record v2, Task 0) — their
 submissions never enter the comparison pools and their activity is
 excluded from tester engagement stats (`pipeline_status.py`).
 
+## Seeing tester status — the one-command truth
+
+To see the tester funnel (every invite code, who's redeemed vs. still
+"— awaiting", and opens/runs/TR-views at 24h/7d/all), run **the same
+habitual morning command** — it now ends with the funnel via delegation:
+
+```bash
+cd ~/correlation-research && source venv/bin/activate && python pipeline_status.py
+```
+
+That one command shows research pipeline health first, then the app-side
+tester funnel as its final "TESTER FUNNEL (app-side)" section — no second
+command needed. If the app funnel can't be reached it prints a one-line
+`TESTER FUNNEL unavailable: <reason>` and the research report is unaffected
+(fail-soft but visible).
+
+**Standalone alternative** (app DB only, no research report — same funnel):
+
+```bash
+cd ~/PreviewPanel/validation && ./_venv/bin/python3 pipeline_status.py
+```
+
+Both read the live app DB; freshly-minted codes show as "— awaiting"
+rows immediately (see the mint step above).
+
 ## `--study` workflow (already-enrolled research creator)
 
 > **Track Record v4.1 — Section B removed, `--study` now renders for $0.**

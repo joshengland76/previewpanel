@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ROLE: PreviewPanel tester funnel (app DB) — invoked by research pipeline_status + run_morning.
 """
 pipeline_status.py — Tester Funnel + day-30 status. Read-only report against the
 live app tables (Neon Postgres, backend/.env DATABASE_URL) — writes nothing,
@@ -153,7 +154,7 @@ def print_day30(rows):
 def main():
     conn = db_connect()
     print("=" * 100)
-    print("PreviewPanel Real-User Validation — Pipeline Status")
+    print("PreviewPanel tester funnel (app DB) — invoked by research pipeline_status + run_morning")
     print("=" * 100)
     epoch = telemetry_epoch(conn)
     print_funnel(code_funnel(conn), internal_pool_sanity(conn), epoch)
