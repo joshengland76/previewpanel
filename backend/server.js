@@ -87,13 +87,43 @@ const VALID_OBJECTIVES = new Set([
 const VALID_PLATFORMS = new Set(["tiktok", "instagram", "youtube"]);
 const VALID_VIDEO_EXTS = new Set([".mp4", ".mov", ".webm"]);
 
+// ── Crash forensics ──────────────────────────────────────────────────────
+// Most-recent request context (method/path/user-id), set by the middleware
+// below, so a crash log can name what was in flight. Best-effort: user-id is
+// only captured where it's in the query or an already-parsed JSON body.
+let __lastRequest = null;
+const __rssMB = () => Math.round(process.memoryUsage().rss / 1048576);
+const logRss = (tag) => console.log(`[mem] ${tag} rss=${__rssMB()}MB`);
+
+// Boot line — makes every restart visible in the logs (commit + timestamp +
+// RSS). First thing we log, so a crash-restart loop is unmistakable.
+console.log(
+  `[boot] PreviewPanel backend starting — commit=${process.env.RENDER_GIT_COMMIT || "unknown"}` +
+  ` node=${process.version} at ${new Date().toISOString()} rss=${__rssMB()}MB`
+);
+
+function __crashLog(kind, err) {
+  const c = __lastRequest;
+  const ctx = c
+    ? `${c.method} ${c.path}${c.userId ? ` user=${c.userId}` : ""} @${c.at}`
+    : "(no request context)";
+  console.error(`[${kind}] server will exit — rss=${__rssMB()}MB | last request: ${ctx}`);
+  // Full error + stack (Error#stack; fall back to the raw value for non-Errors).
+  console.error(err && err.stack ? err.stack : err);
+}
+
 process.on("uncaughtException", (err) => {
-  console.error("[uncaughtException] Unhandled exception — server will exit:", err);
+  __crashLog("uncaughtException", err);
   process.exit(1);
 });
 
+// Fail-fast on unhandled rejections too — never swallow-and-continue: log the
+// full context, then exit nonzero so Render restarts a clean process. All async
+// routes wrap their awaits in try/catch (audited 2026-07-28), so this fires
+// only on a genuine leaked rejection, which we want loud, not silent.
 process.on("unhandledRejection", (reason) => {
-  console.error("[unhandledRejection] Unhandled promise rejection:", reason);
+  __crashLog("unhandledRejection", reason);
+  process.exit(1);
 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -128,6 +158,18 @@ const upload = multer({
 
 app.use(cors());
 app.use(express.json());
+
+// Crash-forensics: record the most-recent request so uncaughtException /
+// unhandledRejection logs can name what was in flight. Cheap, per-request.
+app.use((req, _res, next) => {
+  __lastRequest = {
+    method: req.method,
+    path: req.path,
+    userId: (req.body && req.body.userId) || req.query.userId || null,
+    at: new Date().toISOString(),
+  };
+  next();
+});
 
 // Bearer-token gate for the /api/research/* surface. Token is compared against
 // RESEARCH_API_KEY (set on Render). Missing key in env → endpoint is disabled.
@@ -612,6 +654,17 @@ async function initDb() {
   let client = null;
   try {
     pgPool = new Pool({ connectionString: directDbUrl, ssl: { rejectUnauthorized: false } });
+    // CRASH FIX (2026-07-28): node-postgres emits 'error' on the POOL when a
+    // backend/network error hits an IDLE client (e.g. Neon suspends compute or
+    // the TLS socket is reset → `read ECONNABORTED` at TLSWrap.onStreamRead).
+    // Without this listener that event is unhandled → EventEmitter throws →
+    // uncaughtException → the process exits → Render restart loop. This was the
+    // 2026-07-28 crash. The idle client is discarded by the pool; the next
+    // query transparently opens a fresh connection, so logging is all we need —
+    // never rethrow here.
+    pgPool.on("error", (err) => {
+      console.error("[db] idle pool client error (non-fatal, pool will recover):", err && err.message ? err.message : err);
+    });
     console.log("[db] Pool created — testing connection…");
     await pgPool.query("SELECT 1");
     const { rows } = await pgPool.query("SHOW default_transaction_read_only");
@@ -4720,6 +4773,7 @@ async function ensureOwnVideoPostedRow(jobId, ov, submissionId, userId) {
 app.post("/api/fetch-video", async (req, res) => {
   const { url: rawUrl, platform: _ignoredPlatform, objective = "", judges: judgesParam, userId = null } = req.body;
   const ip = (() => { const xff = req.headers["x-forwarded-for"] || ""; const fromXff = xff.split(",").map((s) => s.trim()).find(Boolean); return fromXff || req.socket?.remoteAddress || "unknown"; })();
+  logRss("fetch-video:start");
 
   let parsed;
   try {
@@ -4877,6 +4931,7 @@ app.post("/api/fetch-video", async (req, res) => {
   };
 
   console.log(`[${jobId}] Link-fetch job created — platform=${platform} url=${parsed.href} queue position: ${queuePosition}`);
+  logRss("fetch-video:end"); // video is on disk; download span complete
   await recordBetaSubmissionEvent(userId); // counts toward the rolling-30-day allowance + daily cap
   logUserEvent(userId, "preview_run", { platform }); // fire-and-forget, Track Record v2 Task 4
   res.json({ jobId, queuePosition });
@@ -4892,6 +4947,7 @@ app.post("/api/fetch-video", async (req, res) => {
 app.post("/api/analyze", (req, res, next) => {
   const t_request = Date.now();
   console.log(`[upload] Request received — starting multer file parse`);
+  logRss("upload:start");
   upload.single("video")(req, res, (err) => {
     if (err) {
       console.error(`[upload] Multer error:`, err.message);
@@ -4907,6 +4963,7 @@ app.post("/api/analyze", (req, res, next) => {
     } else {
       console.log(`[upload] Multer done — file: ${req.file?.originalname ?? "none"}, browser upload: ${req.browserUploadMs}ms`);
     }
+    logRss("upload:end");
     next();
   });
 }, async (req, res) => {
