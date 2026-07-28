@@ -65,9 +65,9 @@ export const METHODOLOGY_MODAL_TEXT =
   "signals our judges do — hook, emotion, pacing, clarity — across 56 " +
   "correlated variables in total, and turns them into a single prediction. " +
   "It's a ranking aid, not a crystal ball: it tells you which of your " +
-  "videos looks strongest, not whether a video will go viral. In our study, " +
-  "the videos we ranked highest beat the ones we ranked lowest 3 times in 4 — " +
-  "and pulled 1.6× the 30-day engagement. See how we validated it →";
+  "videos looks strongest, not whether a video will go viral. In a study of " +
+  "thousands of real videos, the ones we ranked highest beat the ones we ranked " +
+  "lowest 3 times in 4 — and pulled 1.6× the 30-day engagement. See how we validated it →";
 
 export const METHODOLOGY_LINK_TEXT = "See how we validated it";
 export const METHODOLOGY_URL = "/methodology";
