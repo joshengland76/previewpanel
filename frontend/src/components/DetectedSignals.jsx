@@ -39,7 +39,7 @@ import { B, VALENCE } from "../brand.js";
 const CHIP_INFO = {
   // Pre-existing (Spider v3) -- tooltip unchanged.
   inspiration: `A content read (not a judge score): this video leans on aspiration, transformation, or "you can do this too" framing. In our data, inspiration is one of the more consistently positive signals across niches.`,
-  combo: `Curiosity and Inspiration both detected in the same video — the strongest positive pattern in our study data.`,
+  combo: `Curiosity and Inspiration both detected in the same video — the strongest positive pattern in our research.`,
   // Chips v2, Task 3 note: save/follow CTA chips are structurally caption-
   // dependent -- the model has no reliable way to see "save this" or "follow
   // me" language from video/audio alone, so these only fire when a caption

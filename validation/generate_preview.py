@@ -1331,11 +1331,11 @@ def render_html(*, handle, niche_line, prepared_date, render_date, section_a_sta
         )
     html = re.sub(r'<h1>.*?</h1>', f'<h1>{thesis_h1}</h1>', html, count=1, flags=re.S)
     hero_sub = (
-        f'Each score is the video’s percentile among recent {objective} videos rated by our '
-        f'engagement-prediction model — built on a 259-creator, 4,900-video study of real 30-day TikTok outcomes.'
+        f'Each score is the video’s percentile among recent {objective} videos, rated by our '
+        f'engagement-prediction model — tested against real 30-day TikTok outcomes.'
         if mode == "objective" else
-        'Each score is the video’s percentile among the last 1,000 videos rated by our '
-        'engagement-prediction model — built on a 259-creator, 4,900-video study of real 30-day TikTok outcomes.'
+        'Each score is the video’s percentile among the last 1,000 videos we’ve scored, rated by our '
+        'engagement-prediction model — tested against real 30-day TikTok outcomes.'
     )
     html = re.sub(r'<div class="sub">.*?</div>', f'<div class="sub">{hero_sub}</div>', html, count=1, flags=re.S)
 
