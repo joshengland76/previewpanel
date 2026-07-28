@@ -69,8 +69,9 @@ export const METHODOLOGY_MODAL_TEXT =
   "The score comes from a study of about 4,900 TikTok videos from 259 " +
   "creators across 19 niches, tracking real 30-day engagement (likes, " +
   "shares, and saves per view). The model reads the same signals our judges " +
-  "do — hook, emotion, pacing, clarity — and turns them into a single " +
-  "prediction. It's a ranking aid, not a crystal ball: it tells you which " +
+  "do — hook, emotion, pacing, clarity — across 56 correlated variables in " +
+  "total, and turns them into a single prediction. It's a ranking aid, not a " +
+  "crystal ball: it tells you which " +
   "of your videos looks strongest, not whether a video will go viral." +
   " See how we validated it →";
 
