@@ -57,17 +57,22 @@ export const STUDY_STATS = {
 // is one of many inputs, not a distinguishing one worth naming on its own --
 // in favor of stating the model's actual scale.)
 export const METHODOLOGY_MODAL_TEXT =
+  // P1 — what the score is + the flagship hook (now sentence 2).
   "PreviewPanel's scoring is a prediction of relative performance: how " +
   "this video is likely to do compared with your own typical video, based " +
-  "on what's in the video itself. It comes from a study of about 4,900 " +
-  "TikTok videos from 259 creators across 19 niches, tracking real 30-day " +
-  "engagement (likes, shares, and saves per view). The model reads the same " +
-  "signals our judges do — hook, emotion, pacing, clarity — across 56 " +
-  "correlated variables in total, and turns them into a single prediction. " +
-  "It's a ranking aid, not a crystal ball: it tells you which of your " +
-  "videos looks strongest, not whether a video will go viral. In a study of " +
-  "thousands of real videos, the ones we ranked highest beat the ones we ranked " +
-  "lowest 3 times in 4 — and pulled 1.6× the 30-day engagement. See how we validated it →";
+  "on what's in the video itself. In a study of thousands of real videos, " +
+  "the ones we ranked highest beat the ones we ranked lowest 3 times in 4 — " +
+  "and pulled 1.6× the 30-day engagement." +
+  "\n\n" +
+  // P2 — where the score comes from + what the model reads (56-variables
+  // clause deliberately removed; rigor detail lives in the Report).
+  "The score comes from a study of about 4,900 TikTok videos from 259 " +
+  "creators across 19 niches, tracking real 30-day engagement (likes, " +
+  "shares, and saves per view). The model reads the same signals our judges " +
+  "do — hook, emotion, pacing, clarity — and turns them into a single " +
+  "prediction. It's a ranking aid, not a crystal ball: it tells you which " +
+  "of your videos looks strongest, not whether a video will go viral." +
+  " See how we validated it →";
 
 export const METHODOLOGY_LINK_TEXT = "See how we validated it";
 export const METHODOLOGY_URL = "/methodology";

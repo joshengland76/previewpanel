@@ -583,7 +583,7 @@ def hero_opening_sentence(section_a_start, section_a_end, full_coverage):
     same as the meta line), and "since" wrongly implied coverage all the way
     up to today. end = render_date (the latest Section-A posted date)."""
     lead = "We rated every public video you posted" if full_coverage else "We rated your public videos posted"
-    return f"{lead} {section_a_start} – {section_a_end} — from content alone, never seeing a single view count."
+    return f"{lead} {section_a_start} – {section_a_end} from content alone, never seeing a single view count."
 
 
 # ── Transport hotfix, Task 3: --study eligibility gate ──────────────────────

@@ -129,7 +129,7 @@ function ValidationDetail({ onClose }) {
       </Section>
 
       <Section title="How we kept ourselves honest">
-        The model was tested only on creators it had never seen during training. Before
+        The model was evaluated only on creators it had never seen during training. Before
         testing began, we set aside a sealed group of {STUDY_STATS.lockboxCreators}{" "}
         creators — a "lockbox" — and opened it exactly once. Every analysis choice was
         written down and dated before we saw its result, not after. Every video is scored
