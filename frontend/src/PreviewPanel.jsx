@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import TikTokLogo from "./components/TikTokLogo";
 import InstagramLogo from "./components/InstagramLogo";
 import YouTubeLogo from "./components/YouTubeLogo";
-import { B, JUDGES, VALENCE } from "./brand.js";
+import { B, JUDGES, VALENCE, ACTION } from "./brand.js";
 import { VerdictPanel } from "./components/VerdictHero.jsx";
 import { WhatsWorkingFixes } from "./components/WhatsWorkingFixes.jsx";
 import { DisagreementCard } from "./components/DisagreementCard.jsx";
@@ -427,14 +427,19 @@ function HistoryPanel({ history, onRestore, onClose, hasTrackRecord, onSwitchToT
                 {entry.fileName}
               </div>
               {(() => {
-                const validScores = (entry.scores || []).filter(s => s.score != null);
-                if (!validScores.length) return null;
-                const avg = validScores.reduce((sum, s) => sum + s.score, 0) / validScores.length;
-                const avgRounded = Math.round(avg * 10) / 10;
-                const scoreColor = avg >= 7 ? "#43A047" : avg >= 5 ? "#FB8C00" : "#E53935";
+                // Headline overall-app percentile, FROZEN at score-in time:
+                // read straight from the history entry's stored scoreDisplay
+                // snapshot (localStorage), never recomputed against the live
+                // last-1,000 pool. Replaces the obsolete "X/10 avg" judge
+                // average. Color matches the hero gauge's percentileColor()
+                // exactly (>=50 green, >=25 amber, <25 red — ACTION.*.color).
+                const sd = entry.scoreDisplay;
+                const p = sd && sd.showPercentile ? sd.overallAppPercentile : null;
+                if (p == null) return null;
+                const color = p >= 50 ? ACTION.post.color : p >= 25 ? ACTION.polish.color : ACTION.rework.color;
                 return (
-                  <span style={{ fontSize: "12px", fontWeight: "700", color: scoreColor }}>
-                    {avgRounded}/10 avg
+                  <span style={{ fontSize: "12px", fontWeight: "700", color }}>
+                    {Math.round(p)} percentile
                   </span>
                 );
               })()}
